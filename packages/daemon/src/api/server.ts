@@ -2,15 +2,34 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import http from 'node:http';
-import type { HubState, StartSessionRequest } from '@cc-hub/shared';
+import type { HubState, RegisterRepoRequest, ReleaseMode, StartSessionRequest } from '@cc-hub/shared';
 import type { Auth } from './auth';
 import type { SessionManager } from '../session/manager';
+import type { RepoManager } from '../repo/manager';
+import { generateSlug } from '../repo/slug';
 import { listProjects, scanSessions } from '../history';
 import { handleGame } from '../game/capture';
 import { HttpError, json, readBody } from '../util';
 
-// dist/main.js から見て packages/web/dist
-const WEB_DIST = path.join(__dirname, '..', '..', 'web', 'dist');
+// packages/web/dist。バンドルの出力先(dist / dist-test など)に依らないよう、daemon パッケージのルートを探してから辿る
+// 検証時は環境変数 CC_HUB_WEB_DIST で別のビルド(dist-test など)を配信できる
+function findWebDist(): string {
+  if (process.env.CC_HUB_WEB_DIST) return path.resolve(process.env.CC_HUB_WEB_DIST);
+  let dir = __dirname;
+  for (let i = 0; i < 6; i++) {
+    try {
+      const pkg = JSON.parse(fs.readFileSync(path.join(dir, 'package.json'), 'utf8'));
+      if (pkg.name === '@cc-hub/daemon') return path.join(dir, '..', 'web', 'dist');
+    } catch {
+      /* 上へ */
+    }
+    const up = path.dirname(dir);
+    if (up === dir) break;
+    dir = up;
+  }
+  return path.join(__dirname, '..', '..', 'web', 'dist');
+}
+const WEB_DIST = findWebDist();
 
 const MIME: Record<string, string> = {
   '.html': 'text/html; charset=utf-8',
@@ -38,6 +57,8 @@ const PLACEHOLDER = `<!doctype html><html lang="ja"><head><meta charset="utf-8">
 export interface ServerDeps {
   auth: Auth;
   sessions: SessionManager;
+  repos: RepoManager;
+  claudePath: string;
   getState: () => HubState;
   onIngestHook: (body: any, hubHeader: string | undefined) => void;
   onIngestStatusline: (body: any) => void;
@@ -165,8 +186,56 @@ async function handle(d: ServerDeps, req: http.IncomingMessage, res: http.Server
 
   if (p === '/api/sessions' && method === 'POST') {
     const body = (await readBody(req)) as StartSessionRequest;
-    const session = d.sessions.start(body);
+    // フェーズ 2: repoId 指定ならプールの worktree で起動(準備は非同期。状態 starting で返る)
+    const session = body && body.repoId ? d.repos.startSession(body) : d.sessions.start(body);
     return json(res, 200, { ok: true, session });
+  }
+
+  // ------------------------------------------------ フェーズ 2: リポジトリ / worktree
+  if (p === '/api/slug' && method === 'POST') {
+    const body = await readBody(req);
+    const g = await generateSlug(String(body.instruction ?? ''), d.claudePath);
+    return json(res, 200, { ok: true, slug: g.slug, source: g.source });
+  }
+
+  if (p === '/api/repos' && method === 'GET') return json(res, 200, { ok: true, ...d.repos.list() });
+
+  if (p === '/api/repos' && method === 'POST') {
+    const body = (await readBody(req)) as RegisterRepoRequest;
+    const repo = await d.repos.register(body);
+    return json(res, 200, { ok: true, repo });
+  }
+
+  const rm = /^\/api\/repos\/([^/]+)(\/refill)?$/.exec(p);
+  if (rm) {
+    const id = decodeURIComponent(rm[1]);
+    if (rm[2] && method === 'POST') return json(res, 200, { ok: true, repo: d.repos.refill(id) });
+    if (!rm[2] && method === 'PATCH') return json(res, 200, { ok: true, repo: d.repos.patch(id, await readBody(req)) });
+    if (!rm[2] && method === 'DELETE') {
+      const purge = /^(1|true)$/i.test(url.searchParams.get('purge') || '');
+      await d.repos.remove(id, purge);
+      return json(res, 200, { ok: true });
+    }
+  }
+
+  const wm = /^\/api\/worktrees\/([^/]+)(\/rebuild)?$/.exec(p);
+  if (wm) {
+    const id = decodeURIComponent(wm[1]);
+    if (wm[2] && method === 'POST') {
+      d.repos.rebuildWorktree(id);
+      return json(res, 200, { ok: true });
+    }
+    if (!wm[2] && method === 'DELETE') {
+      await d.repos.removeWorktree(id);
+      return json(res, 200, { ok: true });
+    }
+  }
+
+  const rel = /^\/api\/sessions\/([^/]+)\/release$/.exec(p);
+  if (rel && method === 'POST') {
+    const body = await readBody(req);
+    const worktree = await d.repos.release(decodeURIComponent(rel[1]), body.mode as ReleaseMode);
+    return json(res, 200, { ok: true, worktree });
   }
 
   const m = /^\/api\/sessions\/([^/]+)\/(input|resize|control|approve|rename)$/.exec(p);

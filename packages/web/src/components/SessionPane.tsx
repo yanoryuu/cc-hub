@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from 'react';
 import type { SessionInfo } from '@cc-hub/shared';
 import { TerminalView, type TerminalHandle } from './TerminalView';
 import { ApprovalBanner } from './Approval';
+import { ReleaseBanner } from './ReleaseBanner';
 import { StatusBadge, toolText } from './common';
 import { sessionApi } from '../api';
 import { fmtElapsed, readLocal, useNow, writeLocal } from '../util';
@@ -188,6 +189,7 @@ export function SessionPane({
     <div className="session-pane">
       {header(fontCtl)}
       <ApprovalBanner session={session} />
+      <ReleaseBanner session={session} />
       {session.managed ? (
         <>
           <TerminalView

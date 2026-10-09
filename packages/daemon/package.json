@@ -6,7 +6,8 @@
   "scripts": {
     "build": "esbuild src/main.ts --bundle --platform=node --target=node20 --format=cjs --outfile=dist/main.js --external:@lydell/node-pty --external:better-sqlite3 --external:@xterm/headless --external:@xterm/addon-serialize --external:ws --sourcemap",
     "start": "npm run build && node dist/main.js",
-    "typecheck": "tsc -p tsconfig.json"
+    "typecheck": "tsc -p tsconfig.json",
+    "build:test": "esbuild src/main.ts --bundle --platform=node --target=node20 --format=cjs --outfile=dist-test/main.js --external:@lydell/node-pty --external:better-sqlite3 --external:@xterm/headless --external:@xterm/addon-serialize --external:ws --sourcemap"
   },
   "dependencies": {
     "@cc-hub/shared": "0.1.0",

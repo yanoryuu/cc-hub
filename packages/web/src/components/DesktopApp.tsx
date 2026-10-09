@@ -1,4 +1,5 @@
 // デスクトップレイアウト(幅 900px 以上): 上部バー / 左サイドバー / 中央ターミナル / 右パネル
+// 中央はセッション / ゲーム / リポジトリ(リポジトリ表示中は右パネルを畳んで中央を広げる)
 import { useEffect } from 'react';
 import { orderedSessions, useHub } from '../store';
 import { TopBar } from './TopBar';
@@ -9,12 +10,12 @@ import { SessionDetails } from './SessionDetails';
 import { ApprovalList } from './Approval';
 import { StatusBadge } from './common';
 import { GameView } from './GameView';
-import { useState } from 'react';
+import { RegisterRepoForm, RepoListPage, RepoPage, SidebarRepos } from './Repos';
 
 function ApprovalDrawer() {
   const open = useHub((s) => s.approvalDrawer);
   const setOpen = useHub((s) => s.setApprovalDrawer);
-  const select = useHub((s) => s.select);
+  const openSession = useHub((s) => s.open);
   if (!open) return null;
   return (
     <>
@@ -29,7 +30,7 @@ function ApprovalDrawer() {
         <div className="drawer-body">
           <ApprovalList
             onOpen={(id) => {
-              select(id);
+              openSession(id);
               setOpen(false);
             }}
           />
@@ -42,22 +43,24 @@ function ApprovalDrawer() {
 export function DesktopApp() {
   const selectedId = useHub((s) => s.selectedId);
   const session = useHub((s) => (s.selectedId ? s.sessions[s.selectedId] : undefined));
+  const repo = useHub((s) => (session?.repoId ? s.repos[session.repoId] : undefined));
   const loaded = useHub((s) => s.loaded);
-  const select = useHub((s) => s.select);
-  const [view, setView] = useState<'session' | 'game'>('session');
+  const openSession = useHub((s) => s.open);
+  const view = useHub((s) => s.deskView);
+  const setView = useHub((s) => s.setDeskView);
+  const repoRoute = useHub((s) => s.repoRoute);
 
   // Ctrl+1..9: セッション切替 / Ctrl+Shift+A: 承認キュー
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (!e.ctrlKey || e.altKey || e.metaKey) return;
       if (/^[1-9]$/.test(e.key) && !e.shiftKey) {
-        const list = orderedSessions(useHub.getState().sessions);
-        const s = list[parseInt(e.key, 10) - 1];
+        const st = useHub.getState();
+        const s = orderedSessions(st.sessions, st.repos)[parseInt(e.key, 10) - 1];
         if (s) {
           e.preventDefault();
           e.stopPropagation();
-          useHub.getState().select(s.id);
-          setView('session');
+          st.open(s.id);
         }
       } else if (e.shiftKey && (e.key === 'A' || e.key === 'a')) {
         e.preventDefault();
@@ -70,17 +73,15 @@ export function DesktopApp() {
     return () => window.removeEventListener('keydown', onKey, true);
   }, []);
 
+  const wide = view === 'repos';
+
   return (
     <div className="desk">
       <TopBar />
-      <div className="desk-body">
+      <div className={`desk-body ${wide ? 'wide' : ''}`}>
         <aside className="sidebar">
-          <SessionList
-            onPick={(id) => {
-              select(id);
-              setView('session');
-            }}
-          />
+          <SessionList onPick={openSession} activeOnlyInSessionView={view !== 'session'} />
+          <SidebarRepos />
           <div className="sidebar-foot">
             <button className={`btn ghost ${view === 'game' ? 'on' : ''}`} onClick={() => setView(view === 'game' ? 'session' : 'game')}>
               ゲームキャプチャ
@@ -90,6 +91,16 @@ export function DesktopApp() {
         <main className="center">
           {view === 'game' ? (
             <GameView />
+          ) : view === 'repos' ? (
+            <div className="repo-scroll">
+              {repoRoute.page === 'register' ? (
+                <RegisterRepoForm />
+              ) : repoRoute.page === 'repo' ? (
+                <RepoPage key={repoRoute.id} id={repoRoute.id} />
+              ) : (
+                <RepoListPage />
+              )}
+            </div>
           ) : session ? (
             <SessionPane
               key={session.id}
@@ -100,6 +111,12 @@ export function DesktopApp() {
                   <span className="pane-name">{session.name}</span>
                   <StatusBadge status={session.status} />
                   {!session.managed && <span className="ro-tag">読み取り専用</span>}
+                  {session.branch && (
+                    <span className="pane-branch mono" title={repo ? `${repo.id} / ${session.branch}` : session.branch}>
+                      {repo && <span className="pane-repo">{repo.name}</span>}
+                      {session.branch}
+                    </span>
+                  )}
                   <span className="pane-cwd mono" title={session.cwd}>
                     {session.cwd}
                   </span>
@@ -114,14 +131,16 @@ export function DesktopApp() {
             </div>
           )}
         </main>
-        <aside className="rightpanel">
-          {session && view === 'session' ? (
-            <>
-              <AgentTree session={session} />
-              <SessionDetails session={session} />
-            </>
-          ) : null}
-        </aside>
+        {!wide && (
+          <aside className="rightpanel">
+            {session && view === 'session' ? (
+              <>
+                <AgentTree session={session} />
+                <SessionDetails session={session} />
+              </>
+            ) : null}
+          </aside>
+        )}
       </div>
       <ApprovalDrawer />
     </div>

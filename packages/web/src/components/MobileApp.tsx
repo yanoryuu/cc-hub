@@ -1,4 +1,4 @@
-// モバイルレイアウト(幅 900px 未満): 下タブ セッション / 承認 / ゲーム
+// モバイルレイアウト(幅 900px 未満): 下タブ セッション / 承認 / リポジトリ / ゲーム
 import { useState } from 'react';
 import { useHub } from '../store';
 import { SessionList } from './SessionList';
@@ -10,6 +10,61 @@ import { SessionDetails } from './SessionDetails';
 import { StatusDot } from './common';
 import { ConnDot, UsageMeters } from './TopBar';
 import { STATUS_LABEL } from '../util';
+import { RegisterRepoForm, RepoListPage, RepoPage } from './Repos';
+
+/** リポジトリタブ: 一覧 → 詳細 / 登録 */
+function RepoScreen() {
+  const route = useHub((s) => s.repoRoute);
+  const repo = useHub((s) => (route.page === 'repo' ? s.repos[route.id] : undefined));
+  const openRepos = useHub((s) => s.openRepos);
+  const back = (
+    <button className="icon-btn back" onClick={() => openRepos({ page: 'list' })} aria-label="一覧へ戻る">
+      ‹
+    </button>
+  );
+  if (route.page === 'register') {
+    return (
+      <div className="m-screen">
+        <div className="m-head">
+          {back}
+          <span className="m-title">リポジトリを登録</span>
+        </div>
+        <div className="m-scroll">
+          <RegisterRepoForm mobile />
+        </div>
+      </div>
+    );
+  }
+  if (route.page === 'repo') {
+    return (
+      <div className="m-screen">
+        <div className="m-head">
+          {back}
+          <span className="m-title">
+            {repo?.name ?? route.id}
+            {repo && <span className="m-sub muted">{repo.owner}</span>}
+          </span>
+        </div>
+        <div className="m-scroll">
+          <RepoPage key={route.id} id={route.id} mobile />
+        </div>
+      </div>
+    );
+  }
+  return (
+    <div className="m-screen">
+      <div className="m-head">
+        <span className="m-title">リポジトリ</span>
+        <button className="btn primary sm" onClick={() => openRepos({ page: 'register' })}>
+          + 登録
+        </button>
+      </div>
+      <div className="m-scroll">
+        <RepoListPage mobile />
+      </div>
+    </div>
+  );
+}
 
 function SessionDetailView() {
   const session = useHub((s) => (s.selectedId ? s.sessions[s.selectedId] : undefined));
@@ -108,6 +163,8 @@ export function MobileApp() {
         </div>
       </div>
     );
+  } else if (tab === 'repos') {
+    body = <RepoScreen />;
   } else {
     body = (
       <div className="m-screen">
@@ -126,6 +183,9 @@ export function MobileApp() {
         <button className={tab === 'approvals' ? 'active' : ''} onClick={() => setTab('approvals')}>
           承認
           {approvals.length > 0 && <span className="tab-badge">{approvals.length}</span>}
+        </button>
+        <button className={tab === 'repos' ? 'active' : ''} onClick={() => setTab('repos')}>
+          リポジトリ
         </button>
         <button className={tab === 'game' ? 'active' : ''} onClick={() => setTab('game')}>
           ゲーム

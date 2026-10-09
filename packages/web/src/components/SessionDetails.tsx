@@ -1,9 +1,12 @@
 // セッション詳細と操作(停止 / 再起動 / 削除 / 名前変更)
 import { useState } from 'react';
 import type { SessionInfo } from '@cc-hub/shared';
-import { sessionApi } from '../api';
+import { errText, isConflict, sessionApi } from '../api';
 import { fmtCost, fmtDate } from '../util';
+import { useHub } from '../store';
+import { WT_STATE_LABEL, useSessionWorktree } from '../repo';
 import { StatusBadge } from './common';
+import { ReleaseBanner } from './ReleaseBanner';
 
 export function SessionControls({ session, onDone }: { session: SessionInfo; onDone?: () => void }) {
   const [busy, setBusy] = useState(false);
@@ -18,7 +21,12 @@ export function SessionControls({ session, onDone }: { session: SessionInfo; onD
       await fn();
       onDone?.();
     } catch (e) {
-      setErr(e instanceof Error ? e.message : '失敗しました');
+      // 409: worktree が割り当て中のセッションは、先に解放しないと削除できない
+      setErr(
+        isConflict(e) && session.worktreeId
+          ? `${errText(e)} — 作業ツリーがまだこのセッションに割り当てられています。先に「作業ツリーを解放」してから削除してください。`
+          : errText(e),
+      );
     } finally {
       setBusy(false);
     }
@@ -101,6 +109,10 @@ export function SessionControls({ session, onDone }: { session: SessionInfo; onD
 }
 
 export function SessionDetails({ session }: { session: SessionInfo }) {
+  const repo = useHub((s) => (session.repoId ? s.repos[session.repoId] : undefined));
+  const wtAny = useHub((s) => (session.worktreeId ? s.worktrees[session.worktreeId] : undefined));
+  const wt = useSessionWorktree(session);
+  const openRepos = useHub((s) => s.openRepos);
   return (
     <section className="panel-sec">
       <h3 className="sec-title">セッション</h3>
@@ -124,10 +136,37 @@ export function SessionDetails({ session }: { session: SessionInfo }) {
         <dd>{session.contextPct == null ? '—' : `${Math.round(session.contextPct)}%`}</dd>
         <dt>コスト</dt>
         <dd>{fmtCost(session.costUsd)}</dd>
+        {session.repoId && (
+          <>
+            <dt>リポジトリ</dt>
+            <dd>
+              {repo ? (
+                <button className="link" onClick={() => openRepos({ page: 'repo', id: repo.id })} title="リポジトリを開く">
+                  {repo.id}
+                </button>
+              ) : (
+                session.repoId
+              )}
+            </dd>
+          </>
+        )}
+        {session.worktreeId && (
+          <>
+            <dt>worktree</dt>
+            <dd>
+              <span className="mono">{wtAny?.name ?? session.worktreeId.split('#').pop()}</span>
+              {wt ? (
+                <span className="muted small"> {WT_STATE_LABEL[wt.state]}</span>
+              ) : wtAny ? (
+                <span className="muted small"> 解放済み</span>
+              ) : null}
+            </dd>
+          </>
+        )}
         {session.branch && (
           <>
             <dt>ブランチ</dt>
-            <dd className="mono">{session.branch}</dd>
+            <dd className="mono break">{session.branch}</dd>
           </>
         )}
         <dt>開始</dt>
@@ -135,6 +174,7 @@ export function SessionDetails({ session }: { session: SessionInfo }) {
         <dt>ID</dt>
         <dd className="mono small break">{session.id}</dd>
       </dl>
+      <ReleaseBanner session={session} compact />
       <SessionControls session={session} />
     </section>
   );

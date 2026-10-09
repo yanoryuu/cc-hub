@@ -48,11 +48,17 @@ const sessions = {};
 const agents = {};
 const termBuf = {};
 
+const REPO_WEB = 'coly-dev/shop-web';
+const REPO_UNITY = 'coly-dev/TomsLands';
+const REPO_CLONING = 'ryuichi-yano/cc-remote';
+
 const s1 = mkSession({
   name: 'login-fix',
-  cwd: 'C:\\wt\\TomsLands\\wt-01',
+  cwd: 'C:\\wt\\shop-web\\wt-01',
   status: 'awaiting_approval',
   branch: 'feat/login-fix',
+  repoId: REPO_WEB,
+  worktreeId: `${REPO_WEB}#wt-01`,
   contextPct: 48,
   costUsd: 1.23,
   approval: {
@@ -67,9 +73,11 @@ const s1 = mkSession({
 });
 const s2 = mkSession({
   name: 'shop-refactor',
-  cwd: 'C:\\wt\\TomsLands\\wt-02',
+  cwd: 'C:\\wt\\shop-web\\wt-02',
   status: 'running',
   branch: 'feat/shop-refactor',
+  repoId: REPO_WEB,
+  worktreeId: `${REPO_WEB}#wt-02`,
   contextPct: 72,
   costUsd: 3.87,
   currentTool: { name: 'Task', target: '並列で 3 エージェントを起動', since: now - 95_000 },
@@ -89,7 +97,153 @@ const s3 = mkSession({
   cols: 0,
   rows: 0,
 });
-for (const s of [s1, s2, s3]) sessions[s.id] = s;
+// 停止済み・worktree が割り当てられたまま(解放待ち)
+const s4 = mkSession({
+  name: 'cart-badge',
+  cwd: 'C:\\wt\\shop-web\\wt-03',
+  status: 'stopped',
+  exitCode: 0,
+  branch: 'feat/cart-badge-count',
+  repoId: REPO_WEB,
+  worktreeId: `${REPO_WEB}#wt-03`,
+  contextPct: 35,
+  costUsd: 0.88,
+  createdAt: now - 90 * MIN,
+  lastMessage: 'カートのバッジに件数を表示するようにしました。テストも追加済みです。',
+});
+for (const s of [s1, s2, s3, s4]) sessions[s.id] = s;
+
+// ---------------------------------------------------------------- リポジトリ / worktree プール
+const repos = {};
+const worktrees = {};
+function mkRepo(id, p) {
+  const [owner, name] = id.split('/');
+  return {
+    id,
+    url: `https://github.com/${id}`,
+    owner,
+    name,
+    baseDir: `C:\\wt\\${name}`,
+    defaultBranch: 'main',
+    kind: 'node',
+    installCmd: null,
+    keepDirs: ['node_modules'],
+    seedLibraryFrom: null,
+    poolMin: 3,
+    poolMax: 10,
+    trusted: true,
+    status: 'ready',
+    error: null,
+    createdAt: now - 3 * 24 * 60 * MIN,
+    ...p,
+  };
+}
+function mkWt(repo, n, p) {
+  const name = `wt-${String(n).padStart(2, '0')}`;
+  return {
+    id: `${repo.id}#${name}`,
+    repoId: repo.id,
+    name,
+    path: `${repo.baseDir}\\${name}`,
+    state: 'idle',
+    branch: null,
+    sessionId: null,
+    lastUsedAt: now - 40 * MIN,
+    progress: null,
+    error: null,
+    ...p,
+  };
+}
+const rWeb = mkRepo(REPO_WEB, {});
+const rUnity = mkRepo(REPO_UNITY, {
+  baseDir: 'D:\\wt\\TomsLands',
+  kind: 'unity',
+  keepDirs: ['Library'],
+  seedLibraryFrom: 'D:\\Unity\\TomsLands\\Library',
+  poolMin: 2,
+  poolMax: 5,
+  error: 'D: の空き容量が残り 48GB です。50GB を下回ると補充を停止します',
+});
+const rClone = mkRepo(REPO_CLONING, { status: 'cloning', defaultBranch: '', createdAt: Date.now() });
+for (const r of [rWeb, rUnity, rClone]) repos[r.id] = r;
+for (const w of [
+  mkWt(rWeb, 1, { state: 'assigned', branch: s1.branch, sessionId: s1.id, lastUsedAt: now - 30 * MIN }),
+  mkWt(rWeb, 2, { state: 'assigned', branch: s2.branch, sessionId: s2.id, lastUsedAt: now - 30 * MIN }),
+  mkWt(rWeb, 3, { state: 'assigned', branch: s4.branch, sessionId: s4.id, lastUsedAt: now - 90 * MIN }),
+  mkWt(rWeb, 4, { state: 'idle', lastUsedAt: now - 300 * MIN }),
+  mkWt(rWeb, 5, { state: 'warming', progress: 'npm ci 実行中(312/840 パッケージ)', lastUsedAt: now - 2 * MIN }),
+  mkWt(rWeb, 6, { state: 'broken', error: 'git worktree remove に失敗: ファイルがロックされています (node_modules\\.bin\\esbuild.exe)', lastUsedAt: now - 600 * MIN }),
+  mkWt(rUnity, 1, { state: 'warming', progress: 'Library をコピー中 (3.1 / 7.4 GB)', lastUsedAt: now - 5 * MIN }),
+  mkWt(rUnity, 2, { state: 'creating', progress: 'git worktree add', lastUsedAt: now - 1 * MIN }),
+])
+  worktrees[w.id] = w;
+
+function upsertRepo(r) {
+  broadcast('state', { t: 'repo.upsert', repo: r });
+}
+function upsertWt(w) {
+  broadcast('state', { t: 'worktree.upsert', worktree: w });
+}
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+function repoWts(id) {
+  return Object.values(worktrees).filter((w) => w.repoId === id);
+}
+function nextWtNo(repo) {
+  const used = new Set(repoWts(repo.id).map((w) => parseInt(w.name.slice(3), 10)));
+  let n = 1;
+  while (used.has(n)) n++;
+  return n;
+}
+/** creating → warming → idle(onDone があれば idle にせず呼ぶ) */
+async function warm(w, onDone) {
+  const repo = repos[w.repoId];
+  w.state = 'creating';
+  w.progress = 'git worktree add';
+  w.error = null;
+  upsertWt(w);
+  await sleep(1500);
+  if (!worktrees[w.id]) return;
+  w.state = 'warming';
+  w.progress = repo?.kind === 'unity' ? 'Library をコピー中' : 'npm ci 実行中';
+  upsertWt(w);
+  await sleep(3000);
+  if (!worktrees[w.id]) return;
+  w.progress = null;
+  w.lastUsedAt = Date.now();
+  if (onDone) return onDone();
+  w.state = 'idle';
+  upsertWt(w);
+}
+function refill(repo) {
+  if (repo.status !== 'ready') return 0;
+  const wts = repoWts(repo.id);
+  const ready = wts.filter((w) => ['idle', 'creating', 'warming'].includes(w.state)).length;
+  let made = 0;
+  for (let i = ready; i < repo.poolMin && wts.length + made < repo.poolMax; i++) {
+    const w = mkWt(repo, nextWtNo(repo), { state: 'creating' });
+    worktrees[w.id] = w;
+    made++;
+    void warm(w);
+  }
+  return made;
+}
+async function cloneRepo(repo, ms) {
+  await sleep(ms);
+  if (!repos[repo.id]) return;
+  repo.status = 'ready';
+  repo.defaultBranch = 'main';
+  upsertRepo(repo);
+  refill(repo);
+}
+void cloneRepo(rClone, 5000);
+function slugOf(text) {
+  const words = String(text).toLowerCase().match(/[a-z0-9]+/g);
+  if (words && words.length) return words.slice(0, 5).join('-').slice(0, 40);
+  const fake = ['fix-login-redirect', 'add-cart-badge', 'refactor-shop-service', 'update-inventory-ui', 'improve-error-toast'];
+  let h = 0;
+  for (const ch of String(text)) h = (h * 31 + ch.charCodeAt(0)) >>> 0;
+  return fake[h % fake.length];
+}
 
 function mkAgent(p) {
   return {
@@ -122,7 +276,7 @@ let usage = {
 
 // 疑似ターミナルの初期内容
 const C = { reset: '\x1b[0m', dim: '\x1b[2m', blue: '\x1b[34m', green: '\x1b[32m', yellow: '\x1b[33m', bold: '\x1b[1m', cyan: '\x1b[36m', mag: '\x1b[35m' };
-for (const s of [s1, s2]) {
+for (const s of [s1, s2, s4]) {
   termBuf[s.id] =
     `${C.mag}╭───────────────────────────────────────────╮${C.reset}\r\n` +
     `${C.mag}│${C.reset} ${C.bold}✻ Claude Code${C.reset} (mock)                        ${C.mag}│${C.reset}\r\n` +
@@ -142,7 +296,7 @@ function broadcast(topic, msg) {
   for (const c of clients) if (c.topics.has(topic)) send(c, msg);
 }
 function fullState() {
-  return { sessions, agents, usage, daemon: { version: '0.0.0-mock', startedAt: now, port: PORT } };
+  return { sessions, agents, repos, worktrees, usage, daemon: { version: '0.0.0-mock', startedAt: now, port: PORT } };
 }
 function upsertSession(s) {
   s.lastEventAt = Date.now();
@@ -223,8 +377,97 @@ const server = http.createServer(async (req, res) => {
         { id: crypto.randomUUID(), cwd: 'C:\\wt\\TomsLands\\wt-03', title: 'インベントリ UI の不具合修正', mtime: now - 300 * MIN },
       ],
     });
-  if (p === '/api/sessions' && req.method === 'POST') {
+  // ---------------- フェーズ 2: リポジトリ / worktree
+  if (p === '/api/slug' && req.method === 'POST') {
     const b = await readBody(req).catch(() => ({}));
+    await sleep(600);
+    return json(res, 200, { ok: true, slug: slugOf(b.instruction || '') });
+  }
+  if (p === '/api/repos' && req.method === 'GET') {
+    return json(res, 200, { ok: true, repos: Object.values(repos), worktrees: Object.values(worktrees) });
+  }
+  if (p === '/api/repos' && req.method === 'POST') {
+    const b = await readBody(req).catch(() => ({}));
+    if (!b.trusted) return json(res, 400, { ok: false, error: '信頼の確認が必要です' });
+    const u = String(b.url || '').trim();
+    const m2 =
+      u.match(/github\.com[/:]([\w.-]+)\/([\w.-]+?)(?:\.git)?\/?$/i) || u.match(/^([\w.-]+)\/([\w.-]+?)(?:\.git)?$/);
+    if (!m2) return json(res, 400, { ok: false, error: `URL を解釈できません: ${u}` });
+    const id = `${m2[1]}/${m2[2]}`;
+    if (repos[id]) return json(res, 409, { ok: false, error: `${id} は登録済みです` });
+    if (/fail/i.test(id)) {
+      // 失敗例: "owner/fail" でクローン失敗を再現
+      const r = mkRepo(id, { status: 'cloning', defaultBranch: '', createdAt: Date.now(), poolMin: b.poolMin ?? 3 });
+      repos[id] = r;
+      upsertRepo(r);
+      setTimeout(() => {
+        r.status = 'error';
+        r.error = 'gh repo clone に失敗しました: Could not resolve to a Repository';
+        upsertRepo(r);
+      }, 3000);
+      return json(res, 200, { ok: true, repo: r });
+    }
+    const r = mkRepo(id, { status: 'cloning', defaultBranch: '', createdAt: Date.now(), poolMin: b.poolMin ?? 3, trusted: true });
+    repos[id] = r;
+    upsertRepo(r);
+    void cloneRepo(r, 5000);
+    return json(res, 200, { ok: true, repo: r });
+  }
+  const rm = p.match(/^\/api\/repos\/([^/]+)(\/refill)?$/);
+  if (rm) {
+    const r = repos[decodeURIComponent(rm[1])];
+    if (!r) return json(res, 404, { ok: false, error: 'repo not found' });
+    if (rm[2] && req.method === 'POST') {
+      if (r.status !== 'ready') return json(res, 409, { ok: false, error: 'クローンが完了していません' });
+      const n = refill(r);
+      return json(res, 200, { ok: true, created: n });
+    }
+    if (req.method === 'PATCH') {
+      const b = await readBody(req).catch(() => ({}));
+      for (const k of ['poolMin', 'poolMax', 'installCmd', 'keepDirs', 'seedLibraryFrom', 'trusted']) if (k in b) r[k] = b[k];
+      upsertRepo(r);
+      refill(r);
+      return json(res, 200, { ok: true, repo: r });
+    }
+    if (req.method === 'DELETE') {
+      const wts = repoWts(r.id);
+      if (wts.some((w) => w.state === 'assigned' || w.state === 'releasing'))
+        return json(res, 409, { ok: false, error: '使用中の worktree があります' });
+      for (const w of wts) {
+        delete worktrees[w.id];
+        broadcast('state', { t: 'worktree.remove', id: w.id });
+      }
+      delete repos[r.id];
+      broadcast('state', { t: 'repo.remove', id: r.id });
+      console.log('[repo delete]', r.id, 'purge=', url.searchParams.get('purge'));
+      return json(res, 200, { ok: true });
+    }
+  }
+  const wm = p.match(/^\/api\/worktrees\/([^/]+)(\/rebuild)?$/);
+  if (wm) {
+    const w = worktrees[decodeURIComponent(wm[1])];
+    if (!w) return json(res, 404, { ok: false, error: 'worktree not found' });
+    if (wm[2] && req.method === 'POST') {
+      void warm(w);
+      return json(res, 200, { ok: true });
+    }
+    if (req.method === 'DELETE') {
+      if (w.state !== 'idle' && w.state !== 'broken')
+        return json(res, 409, { ok: false, error: `${w.name} は ${w.state} のため削除できません` });
+      w.state = 'deleting';
+      w.progress = 'git worktree remove';
+      upsertWt(w);
+      setTimeout(() => {
+        delete worktrees[w.id];
+        broadcast('state', { t: 'worktree.remove', id: w.id });
+      }, 1500);
+      return json(res, 200, { ok: true });
+    }
+  }
+
+  if (p === '/api/sessions' && req.method === 'POST' && (await peekRepoStart(req, res))) return;
+  if (p === '/api/sessions' && req.method === 'POST') {
+    const b = req._body ?? (await readBody(req).catch(() => ({})));
     if (!b.cwd) return json(res, 400, { ok: false, error: 'cwd が必要です' });
     const s = mkSession({
       name: b.name || path.win32.basename(b.cwd),
@@ -245,7 +488,7 @@ const server = http.createServer(async (req, res) => {
     }, 1500);
     return json(res, 200, { ok: true, session: s });
   }
-  const m = p.match(/^\/api\/sessions\/([^/]+)\/(input|resize|control|approve|rename)$/);
+  const m = p.match(/^\/api\/sessions\/([^/]+)\/(input|resize|control|approve|rename|release)$/);
   if (m && req.method === 'POST') {
     const s = sessions[m[1]];
     if (!s) return json(res, 404, { ok: false, error: 'session not found' });
@@ -300,6 +543,9 @@ const server = http.createServer(async (req, res) => {
           upsertSession(s);
         }, 1000);
       } else if (b.action === 'remove') {
+        const w = s.worktreeId && worktrees[s.worktreeId];
+        if (w && w.sessionId === s.id && (w.state === 'assigned' || w.state === 'releasing'))
+          return json(res, 409, { ok: false, error: `${w.name} がまだ割り当てられています。先に解放してください` });
         delete sessions[s.id];
         for (const a of Object.values(agents)) if (a.sessionId === s.id) delete agents[a.agentId];
         broadcast('state', { t: 'session.remove', id: s.id });
@@ -326,6 +572,25 @@ const server = http.createServer(async (req, res) => {
         upsertSession(s);
         notify('approval', s, `${s.name}: 承認待ち`, s.approval.question);
       }, 15000);
+      return json(res, 200, { ok: true });
+    }
+    if (act === 'release') {
+      const w = s.worktreeId && worktrees[s.worktreeId];
+      if (!w || w.sessionId !== s.id || w.state !== 'assigned')
+        return json(res, 409, { ok: false, error: 'このセッションに割り当てられた worktree はありません' });
+      if (s.status !== 'stopped' && s.status !== 'error')
+        return json(res, 409, { ok: false, error: 'セッションが実行中です' });
+      w.state = 'releasing';
+      w.progress = b.mode === 'discard' ? `git branch -D ${w.branch} / reset / clean` : 'git reset / clean';
+      upsertWt(w);
+      setTimeout(() => {
+        w.state = 'idle';
+        w.branch = null;
+        w.sessionId = null;
+        w.progress = null;
+        w.lastUsedAt = Date.now();
+        upsertWt(w);
+      }, 2500);
       return json(res, 200, { ok: true });
     }
     if (act === 'rename') {
@@ -451,3 +716,65 @@ setInterval(() => {
 server.listen(PORT, '127.0.0.1', () => {
   console.log(`CC Hub mock: http://127.0.0.1:${PORT}  (PIN: ${PIN})`);
 });
+
+/** POST /api/sessions で repoId があればプールから割り当てて起動する。処理したら true */
+async function peekRepoStart(req, res) {
+  const b = await readBody(req).catch(() => ({}));
+  req._body = b;
+  if (!b.repoId) return false;
+  const repo = repos[b.repoId];
+  if (!repo) {
+    json(res, 404, { ok: false, error: `リポジトリ ${b.repoId} は登録されていません` });
+    return true;
+  }
+  if (repo.status !== 'ready') {
+    json(res, 409, { ok: false, error: `${repo.name} はまだ利用できません(${repo.status})` });
+    return true;
+  }
+  const slug = String(b.branchSlug || slugOf(b.instruction || 'work'));
+  const branch = `feat/${slug}`;
+  let w = repoWts(repo.id).find((x) => x.state === 'idle');
+  const fresh = !w;
+  if (!w) {
+    if (repoWts(repo.id).length >= repo.poolMax) {
+      json(res, 409, { ok: false, error: `worktree が上限(${repo.poolMax})に達しています` });
+      return true;
+    }
+    w = mkWt(repo, nextWtNo(repo), { state: 'creating' });
+    worktrees[w.id] = w;
+  }
+  const s = mkSession({
+    name: b.name || slug,
+    cwd: w.path,
+    mode: b.mode || 'commander',
+    status: 'starting',
+    createdAt: Date.now(),
+    contextPct: 0,
+    costUsd: 0,
+    repoId: repo.id,
+    worktreeId: w.id,
+    branch,
+  });
+  sessions[s.id] = s;
+  termBuf[s.id] = `${C.dim}(mock) ${w.name} に ${branch} を作成して起動: ${b.mode} ${b.instruction ?? ''}${C.reset}\r\n`;
+  upsertSession(s);
+  const assign = () => {
+    w.state = 'assigned';
+    w.branch = branch;
+    w.sessionId = s.id;
+    w.lastUsedAt = Date.now();
+    w.progress = null;
+    upsertWt(w);
+    setTimeout(() => {
+      s.status = 'awaiting_input';
+      upsertSession(s);
+      termWrite(s.id, `${C.green}●${C.reset} ${branch} で準備できました。\r\n> `);
+    }, 1500);
+    // 待機が減ったので補充
+    setTimeout(() => refill(repo), 500);
+  };
+  if (fresh) void warm(w, assign);
+  else assign();
+  json(res, 200, { ok: true, session: s });
+  return true;
+}

@@ -1504,6 +1504,905 @@ kbd {
   right: 16px;
 }
 
+/* ---------- フェーズ 2: リポジトリ / worktree プール ---------- */
+:root {
+  --wt-creating: #7aa7e6;
+  --wt-warming: #a78bfa;
+  --wt-idle: #4cc38a;
+  --wt-assigned: #4c9aff;
+  --wt-releasing: #3fb8c9;
+  --wt-deleting: #8b93a3;
+  --wt-broken: #f0717d;
+  --warn-bg: #2a2210;
+  --warn-border: #6b5420;
+  --warn-fg: #f5d48a;
+}
+.dim {
+  color: var(--dim);
+}
+.strong {
+  font-weight: 600;
+}
+.nowrap {
+  white-space: nowrap;
+}
+.hint {
+  font-size: 11.5px;
+  color: var(--muted);
+  line-height: 1.5;
+}
+.hint.right {
+  text-align: right;
+}
+.warn-text {
+  color: var(--st-approval);
+}
+.ok-text {
+  color: var(--st-input);
+  font-size: 12px;
+}
+.warn-box {
+  padding: 8px 10px;
+  border-radius: var(--radius);
+  background: #2a1a1e;
+  border: 1px solid #5a2a31;
+  color: #ffc9cf;
+  font-size: 12px;
+  line-height: 1.55;
+}
+.btn.danger.solid {
+  background: #8a2f3a;
+  border-color: #a63d49;
+  color: #fff;
+}
+.btn.danger.solid:hover:not(:disabled) {
+  background: #a63d49;
+}
+.modal.narrow {
+  width: min(460px, 100%);
+}
+.modal p {
+  line-height: 1.6;
+}
+.spinner {
+  display: inline-block;
+  flex: none;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  border: 2px solid currentColor;
+  border-right-color: transparent;
+  animation: spin 0.8s linear infinite;
+  vertical-align: -1px;
+}
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* worktree の状態バッジ(状態ごとに色を分ける) */
+.wt-creating {
+  --wt: var(--wt-creating);
+}
+.wt-warming {
+  --wt: var(--wt-warming);
+}
+.wt-idle {
+  --wt: var(--wt-idle);
+}
+.wt-assigned {
+  --wt: var(--wt-assigned);
+}
+.wt-releasing {
+  --wt: var(--wt-releasing);
+}
+.wt-deleting {
+  --wt: var(--wt-deleting);
+}
+.wt-broken {
+  --wt: var(--wt-broken);
+}
+.rs-cloning {
+  --wt: var(--wt-creating);
+}
+.rs-ready {
+  --wt: var(--wt-idle);
+}
+.rs-error {
+  --wt: var(--wt-broken);
+}
+.wtbadge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 1px 8px 1px 6px;
+  border-radius: 999px;
+  font-size: 11px;
+  color: var(--wt);
+  background: color-mix(in srgb, var(--wt) 14%, transparent);
+  white-space: nowrap;
+}
+.wtdot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--wt);
+  flex: none;
+}
+.wtbadge .spinner {
+  width: 9px;
+  height: 9px;
+  border-width: 1.5px;
+}
+
+/* プールのチップ */
+.pool-chips {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  min-width: 0;
+}
+.pchip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0 6px;
+  border-radius: 4px;
+  font-size: 10.5px;
+  line-height: 17px;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+  color: var(--fg-2);
+  background: var(--panel-3);
+}
+.pchip.idle {
+  color: var(--wt-idle);
+  background: color-mix(in srgb, var(--wt-idle) 13%, transparent);
+}
+.pchip.idle.short {
+  color: var(--st-approval);
+  background: color-mix(in srgb, var(--st-approval) 13%, transparent);
+}
+.pchip.idle.zero {
+  color: var(--st-error);
+  background: color-mix(in srgb, var(--st-error) 13%, transparent);
+}
+.pchip.preparing,
+.pchip.cloning {
+  color: var(--wt-warming);
+  background: color-mix(in srgb, var(--wt-warming) 13%, transparent);
+}
+.pchip.cloning .spinner {
+  width: 8px;
+  height: 8px;
+  border-width: 1.5px;
+}
+.pchip.assigned {
+  color: var(--wt-assigned);
+  background: color-mix(in srgb, var(--wt-assigned) 13%, transparent);
+}
+.pchip.cleaning {
+  color: var(--wt-releasing);
+  background: color-mix(in srgb, var(--wt-releasing) 13%, transparent);
+}
+.pchip.broken {
+  color: var(--wt-broken);
+  background: color-mix(in srgb, var(--wt-broken) 15%, transparent);
+}
+.kind-tag {
+  display: inline-block;
+  padding: 0 6px;
+  border-radius: 3px;
+  font-size: 10.5px;
+  color: var(--fg-2);
+  border: 1px solid var(--border-2);
+  white-space: nowrap;
+}
+.need-release {
+  flex: none;
+  display: inline-block;
+  margin-left: 6px;
+  padding: 0 5px;
+  border-radius: 3px;
+  font-size: 10px;
+  line-height: 15px;
+  color: #1a1405;
+  background: var(--st-approval);
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+/* サイドバーのリポジトリ欄 */
+.side-repos {
+  flex: none;
+  max-height: 42%;
+  display: flex;
+  flex-direction: column;
+  border-top: 1px solid var(--border);
+  min-height: 0;
+}
+.side-repos-head {
+  display: flex;
+  align-items: center;
+  padding: 4px 6px 2px 4px;
+}
+.side-repos-title {
+  flex: 1;
+  text-align: left;
+  padding: 3px 8px;
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--muted);
+  letter-spacing: 0.04em;
+}
+.side-repos-title:hover,
+.side-repos-title.on {
+  color: var(--fg);
+  background: var(--panel-2);
+}
+.side-repos-list {
+  overflow-y: auto;
+  padding-bottom: 6px;
+}
+.side-repo {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  width: 100%;
+  padding: 5px 10px 6px 12px;
+  text-align: left;
+  border-left: 2px solid transparent;
+}
+.side-repo:hover {
+  background: var(--panel-2);
+}
+.side-repo.active {
+  background: var(--panel-3);
+  border-left-color: var(--accent);
+}
+.side-repo-name {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.side-repo.empty-row {
+  color: var(--muted);
+  font-size: 12px;
+}
+.warn-ico,
+.rp-alert-ico {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--st-approval);
+  color: #1a1405;
+  font-size: 10px;
+  font-weight: 800;
+}
+
+/* セッション一覧: リポジトリ見出しとブランチ */
+.sgroup-repo-ico {
+  color: var(--accent);
+  font-weight: 400;
+}
+.srow-branch {
+  font-size: 10.5px;
+  color: var(--accent);
+  opacity: 0.85;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+.pane-branch {
+  flex: none;
+  max-width: 34%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11.5px;
+  color: var(--accent);
+}
+.pane-repo {
+  color: var(--fg-2);
+  font-family: var(--sans);
+  margin-right: 6px;
+}
+.pane-repo::after {
+  content: ' /';
+  color: var(--dim);
+}
+
+/* デスクトップ: リポジトリ表示中は右パネルなし */
+.desk-body.wide {
+  grid-template-columns: 260px minmax(0, 1fr);
+}
+.repo-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  background: var(--bg);
+}
+
+/* リポジトリ画面 */
+.repo-page {
+  max-width: 1080px;
+  margin: 0 auto;
+  padding: 16px 20px 32px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.rp-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+.rp-head.wrap {
+  flex-wrap: wrap;
+}
+.rp-head .btn.ghost {
+  margin-left: -8px;
+}
+.rp-title {
+  font-size: 17px;
+  font-weight: 650;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+.rp-owner {
+  margin-left: 8px;
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--muted);
+}
+.rp-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.rp-note {
+  font-size: 12px;
+  color: var(--fg-2);
+  margin-top: -6px;
+}
+.rp-alert {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  line-height: 1.55;
+}
+.rp-alert.info {
+  align-items: center;
+  background: color-mix(in srgb, var(--wt-creating) 10%, var(--panel));
+  border: 1px solid color-mix(in srgb, var(--wt-creating) 35%, transparent);
+  color: var(--fg);
+}
+.rp-alert.info .spinner {
+  color: var(--wt-creating);
+}
+.rp-alert.warn {
+  background: var(--warn-bg);
+  border: 1px solid var(--warn-border);
+  border-left: 4px solid var(--st-approval);
+  color: var(--warn-fg);
+}
+.rp-alert.error {
+  background: #2a1a1e;
+  border: 1px solid #5a2a31;
+  border-left: 4px solid var(--st-error);
+  color: #ffc9cf;
+}
+.rp-alert.error .rp-alert-ico {
+  background: var(--st-error);
+}
+.rp-alert .rp-alert-ico {
+  margin-top: 3px;
+}
+.rp-card {
+  padding: 12px 14px;
+  border-radius: 8px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+}
+.rp-kv {
+  margin: 0;
+  align-items: center;
+}
+.rp-sec .sec-title {
+  margin-bottom: 6px;
+}
+.rp-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  padding: 48px 16px;
+  color: var(--fg-2);
+  text-align: center;
+}
+.rp-empty.in-modal {
+  padding: 20px 8px;
+}
+.repo-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  gap: 10px;
+}
+.repo-card {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  padding: 12px 14px;
+  border-radius: 8px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  text-align: left;
+  min-width: 0;
+}
+.repo-card:hover {
+  border-color: var(--border-2);
+  background: var(--panel-2);
+}
+.repo-card.has-error {
+  border-left: 3px solid var(--st-approval);
+}
+.repo-card-top {
+  width: 100%;
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+}
+.repo-card-name {
+  font-weight: 600;
+  font-size: 14px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+.repo-card-owner {
+  color: var(--muted);
+  font-size: 11.5px;
+  white-space: nowrap;
+}
+.repo-card-err {
+  font-size: 12px;
+  color: var(--warn-fg);
+  line-height: 1.5;
+}
+.repo-card-path {
+  font-size: 10.5px;
+  color: var(--dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 登録 / 設定フォーム */
+.register-form {
+  max-width: 640px;
+}
+.num-input {
+  width: 96px;
+}
+.check-field {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  padding: 9px 11px;
+  border-radius: var(--radius);
+  border: 1px solid var(--border-2);
+  background: var(--bg);
+  cursor: pointer;
+  line-height: 1.5;
+}
+.check-field > span {
+  display: block;
+}
+.check-field .hint {
+  display: block;
+  margin-top: 3px;
+}
+.check-field input,
+.check-inline input {
+  margin-top: 3px;
+  width: 15px;
+  height: 15px;
+  flex: none;
+  accent-color: var(--accent);
+}
+.check-field.trust {
+  border-color: var(--warn-border);
+  background: var(--warn-bg);
+}
+.check-field.trust.on {
+  border-color: #2b6b47;
+  background: #14271d;
+}
+.check-field.danger-on {
+  border-color: #5a2a31;
+  background: #2a1a1e;
+}
+.check-inline {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--fg-2);
+}
+.check-inline input {
+  margin-top: 0;
+}
+.settings-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px 16px;
+}
+.settings-grid .span2 {
+  grid-column: span 2;
+}
+.settings-form .modal-foot {
+  align-items: center;
+}
+input:disabled {
+  opacity: 0.55;
+}
+
+/* worktree テーブル */
+.wt-table-wrap {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow-x: auto;
+  background: var(--panel);
+}
+.wt-table {
+  width: 100%;
+  border-collapse: collapse;
+}
+.wt-table th {
+  text-align: left;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--muted);
+  padding: 7px 10px;
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+}
+.wt-table td {
+  padding: 7px 10px;
+  border-bottom: 1px solid var(--border);
+  vertical-align: middle;
+}
+.wt-table tr:last-child td {
+  border-bottom: none;
+}
+.wt-table tr.wt-broken td {
+  background: color-mix(in srgb, var(--wt-broken) 5%, transparent);
+}
+.wt-branch {
+  color: var(--accent);
+  font-size: 11.5px;
+  word-break: break-all;
+}
+.wt-progress {
+  font-size: 12px;
+  max-width: 280px;
+}
+.wt-error {
+  color: var(--st-error);
+  font-size: 12px;
+  word-break: break-word;
+}
+.wt-actions {
+  text-align: right;
+  white-space: nowrap;
+}
+.wt-act {
+  display: inline-flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 5px;
+  align-items: center;
+}
+.wt-act .form-error {
+  flex-basis: 100%;
+  white-space: normal;
+  text-align: left;
+}
+.wt-session {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+  padding: 2px 6px;
+  margin-left: -6px;
+  border-radius: 4px;
+  text-align: left;
+}
+.wt-session:hover {
+  background: var(--panel-3);
+}
+.wt-session-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-decoration: underline;
+  text-decoration-color: var(--border-2);
+  text-underline-offset: 3px;
+}
+.wt-session .need-release {
+  margin-left: 0;
+}
+.wt-cards {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.wt-card {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--wt);
+  min-width: 0;
+}
+.wt-card-top,
+.wt-card-line {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  min-width: 0;
+}
+.wt-card .wt-act {
+  justify-content: flex-start;
+}
+.wt-card .wt-act .btn {
+  padding: 6px 12px;
+}
+
+/* 新規セッション: リポジトリから */
+.repo-pick {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 6px;
+}
+.repo-opt {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 7px 10px;
+  border-radius: var(--radius);
+  border: 1px solid var(--border-2);
+  background: var(--bg);
+  text-align: left;
+  min-width: 0;
+}
+.repo-opt:hover {
+  border-color: #3a4357;
+}
+.repo-opt.on {
+  border-color: var(--accent);
+  background: var(--accent-bg);
+}
+.repo-opt-name {
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.repo-opt-sub {
+  font-size: 11px;
+  color: var(--muted);
+}
+.repo-opt-sub b {
+  color: var(--wt-idle);
+}
+.repo-opt-sub b.zero {
+  color: var(--st-error);
+}
+.pool-warn {
+  font-size: 12px;
+  color: var(--warn-fg);
+  background: var(--warn-bg);
+  border: 1px solid var(--warn-border);
+  border-radius: var(--radius);
+  padding: 5px 9px;
+  line-height: 1.5;
+}
+.branch-input {
+  display: flex;
+  align-items: center;
+  border: 1px solid var(--border-2);
+  border-radius: var(--radius);
+  background: var(--bg);
+  padding-right: 8px;
+  min-width: 0;
+}
+.branch-input:focus-within {
+  border-color: var(--accent);
+}
+.branch-prefix {
+  padding: 0 0 0 9px;
+  color: var(--muted);
+}
+.branch-input input {
+  flex: 1;
+  border: none;
+  background: transparent;
+  padding-left: 1px;
+}
+.branch-input .spinner {
+  color: var(--accent);
+}
+
+/* 作業ツリーの解放バナー */
+.release-banner {
+  flex: none;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px 14px;
+  padding: 10px 12px;
+  background: #13222f;
+  border-bottom: 1px solid #24506e;
+  border-left: 3px solid var(--wt-releasing);
+}
+.release-banner.busy {
+  color: var(--fg-2);
+  gap: 8px;
+}
+.release-banner.busy {
+  flex-wrap: nowrap;
+  align-items: flex-start;
+}
+.release-banner.busy .spinner {
+  margin-top: 4px;
+}
+.release-busy-text {
+  flex: 1;
+  min-width: 0;
+  font-size: 12.5px;
+  word-break: break-word;
+}
+.release-banner.busy .spinner {
+  color: var(--wt-releasing);
+}
+.release-text {
+  flex: 1 1 320px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  line-height: 1.5;
+}
+.release-text strong {
+  color: #9fe3ee;
+}
+.release-text > span {
+  font-size: 12px;
+  color: var(--fg-2);
+  word-break: break-word;
+}
+.release-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.release-banner .form-error {
+  flex-basis: 100%;
+  margin: 0;
+}
+.release-banner.compact {
+  margin: 0 0 12px;
+  border: 1px solid #24506e;
+  border-left: 3px solid var(--wt-releasing);
+  border-radius: 8px;
+}
+.release-banner.compact .release-text {
+  flex-basis: 100%;
+}
+
+/* モバイル */
+.mobile .repo-page {
+  padding: 12px 16px 24px;
+  gap: 12px;
+}
+.mobile .repo-cards {
+  grid-template-columns: minmax(0, 1fr);
+}
+.mobile .rp-head .rp-title {
+  display: none; /* m-head に名前があるので重複を避ける */
+}
+.mobile .rp-head {
+  gap: 8px;
+}
+.mobile .rp-actions {
+  width: 100%;
+}
+.mobile .rp-actions .btn {
+  flex: 1;
+  justify-content: center;
+  padding: 8px 10px;
+}
+.mobile .rp-kv {
+  grid-template-columns: minmax(0, 1fr);
+  gap: 2px;
+}
+.mobile .rp-kv dd {
+  margin-bottom: 6px;
+}
+.mobile .settings-grid {
+  grid-template-columns: minmax(0, 1fr);
+}
+.mobile .settings-grid .span2 {
+  grid-column: auto;
+}
+.mobile .register-form input,
+.mobile .settings-form input {
+  font-size: 16px; /* iOS のズーム防止 */
+}
+.mobile .num-input {
+  width: 110px;
+}
+.mobile .release-banner {
+  padding: 10px 16px;
+}
+.mobile .release-text {
+  flex-basis: 100%;
+}
+.mobile .release-buttons {
+  width: 100%;
+}
+.mobile .release-buttons .btn {
+  flex: 1 1 auto;
+  justify-content: center;
+  padding: 9px 10px;
+  white-space: normal;
+}
+.mobile .tabbar button {
+  font-size: 12.5px;
+}
+@media (max-width: 899px) {
+  .modal input,
+  .modal textarea {
+    font-size: 16px; /* iOS のズーム防止 */
+  }
+  .modal-backdrop {
+    padding: 12px 8px;
+  }
+  .modal {
+    max-height: none;
+  }
+  .seg {
+    max-width: calc(100% - 28px);
+  }
+  .seg button {
+    padding: 5px 9px;
+    font-size: 12px;
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,

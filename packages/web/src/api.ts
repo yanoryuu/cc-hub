@@ -1,9 +1,19 @@
 // REST ヘルパー。401 を受けたら PIN 画面を出し、ログイン成功後に同じリクエストを再試行する。
-import type { HubState } from '@cc-hub/shared';
+import type { HubState, RegisterRepoRequest, ReleaseMode, RepoInfo } from '@cc-hub/shared';
 
 export class AuthError extends Error {
   constructor() {
     super('unauthorized');
+  }
+}
+
+/** API エラー(HTTP ステータス付き。409 = 状態の競合 など) */
+export class ApiError extends Error {
+  constructor(
+    message: string,
+    public status: number,
+  ) {
+    super(message);
   }
 }
 
@@ -30,12 +40,14 @@ function waitForAuth(): Promise<void> {
 export interface ApiOptions {
   /** true なら 401 時に再ログインを待たずに AuthError を投げる */
   noRetry?: boolean;
+  /** 省略時は body があれば POST、なければ GET */
+  method?: 'GET' | 'POST' | 'PATCH' | 'DELETE';
 }
 
 export async function api<T = any>(path: string, body?: unknown, opts: ApiOptions = {}): Promise<T> {
   for (;;) {
     const res = await fetch(path, {
-      method: body !== undefined ? 'POST' : 'GET',
+      method: opts.method ?? (body !== undefined ? 'POST' : 'GET'),
       headers: body !== undefined ? { 'Content-Type': 'application/json' } : undefined,
       body: body !== undefined ? JSON.stringify(body) : undefined,
       credentials: 'same-origin',
@@ -48,7 +60,7 @@ export async function api<T = any>(path: string, body?: unknown, opts: ApiOption
     }
     const j = (await res.json().catch(() => ({ ok: false, error: `HTTP ${res.status}` }))) as any;
     if (!res.ok && j && j.ok !== false) j.ok = false;
-    if (j && j.ok === false) throw new Error(j.error || `HTTP ${res.status}`);
+    if (j && j.ok === false) throw new ApiError(j.error || `HTTP ${res.status}`, res.status);
     return j as T;
   }
 }
@@ -67,6 +79,7 @@ export async function login(pin: string): Promise<{ ok: boolean; error?: string 
 /** GET /api/state のレスポンスは HubState 直 / {ok, state} / {ok, data} のどれでも受ける */
 export function pickState(r: any): HubState | null {
   if (!r || typeof r !== 'object') return null;
+  // repos / worktrees はフェーズ 2 以降のデーモンのみ。無ければ store 側で {} 扱い
   if (r.sessions && r.agents) return r as HubState;
   if (r.state?.sessions) return r.state as HubState;
   if (r.data?.sessions) return r.data as HubState;
@@ -93,3 +106,34 @@ export const sessionApi = {
   approve: (id: string, option: string) => api(`/api/sessions/${encodeURIComponent(id)}/approve`, { option }),
   rename: (id: string, name: string) => api(`/api/sessions/${encodeURIComponent(id)}/rename`, { name }),
 };
+
+// ---------------------------------------------------------------- フェーズ 2: リポジトリ / worktree プール
+
+/** :id の "/" と "#" をエスケープ */
+const enc = encodeURIComponent;
+
+export type RepoPatch = Partial<
+  Pick<RepoInfo, 'poolMin' | 'poolMax' | 'installCmd' | 'keepDirs' | 'seedLibraryFrom' | 'trusted'>
+>;
+
+export const repoApi = {
+  register: (req: RegisterRepoRequest) => api('/api/repos', req),
+  patch: (id: string, patch: RepoPatch) => api(`/api/repos/${enc(id)}`, patch, { method: 'PATCH' }),
+  remove: (id: string, purge: boolean) =>
+    api(`/api/repos/${enc(id)}${purge ? '?purge=1' : ''}`, undefined, { method: 'DELETE' }),
+  refill: (id: string) => api(`/api/repos/${enc(id)}/refill`, {}),
+  rebuildWorktree: (id: string) => api(`/api/worktrees/${enc(id)}/rebuild`, {}),
+  deleteWorktree: (id: string) => api(`/api/worktrees/${enc(id)}`, undefined, { method: 'DELETE' }),
+  release: (sessionId: string, mode: ReleaseMode) => api(`/api/sessions/${enc(sessionId)}/release`, { mode }),
+  slug: (instruction: string) => api('/api/slug', { instruction }),
+};
+
+/** エラーを表示用の文字列にする */
+export function errText(e: unknown, fallback = '失敗しました'): string {
+  return e instanceof Error && e.message ? e.message : fallback;
+}
+
+/** 409(状態の競合: 実行中 / 使用中 など)か */
+export function isConflict(e: unknown): boolean {
+  return e instanceof ApiError && e.status === 409;
+}

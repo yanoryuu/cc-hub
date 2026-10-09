@@ -15,6 +15,24 @@ export interface HubConfig {
   claudeArgs: string[];
   permissionMode: string;
   autoResume: boolean;
+  // ---- フェーズ 2: リポジトリ / worktree プール
+  /** worktree のルート。Unity は unity、それ以外は default(リポジトリごとに <root>\<name>) */
+  worktreeRoots: { default: string; unity: string };
+  /** 新規登録リポジトリの既定プール数 */
+  defaultPoolMin: number;
+  defaultPoolMax: number;
+  /** poolMin を超えた待機 worktree を、この分数使われなければ削除する */
+  idleTtlMinutes: number;
+  /** ルートのドライブの空きがこれ未満なら補充を止める(GB) */
+  minFreeDiskGB: number;
+}
+
+export const DEFAULT_WORKTREE_ROOTS = { default: 'C:\\wt', unity: 'D:\\wt' };
+
+function numOr(v: unknown, def: number, min: number, max: number): number {
+  const n = Number(v);
+  if (v == null || v === '' || !Number.isFinite(n)) return def;
+  return Math.max(min, Math.min(max, n));
 }
 
 export const HOME = process.env.USERPROFILE || os.homedir();
@@ -52,6 +70,11 @@ function createConfig(file: string): HubConfig {
     claudeArgs: [],
     permissionMode: 'auto',
     autoResume: true,
+    worktreeRoots: { ...DEFAULT_WORKTREE_ROOTS },
+    defaultPoolMin: 3,
+    defaultPoolMax: 10,
+    idleTtlMinutes: 30,
+    minFreeDiskGB: 20,
   };
   fs.writeFileSync(file, JSON.stringify(cfg, null, 2));
   console.log(`[config] ${file} を作成しました(PIN は config.json を参照)`);
@@ -95,6 +118,15 @@ export function loadConfig(): LoadedConfig {
     claudeArgs: Array.isArray(raw.claudeArgs) ? raw.claudeArgs.map(String) : [],
     permissionMode: raw.permissionMode || 'auto',
     autoResume: raw.autoResume !== false,
+    // フェーズ 1 で作った config.json には無いので既定値で補う
+    worktreeRoots: {
+      default: String(raw.worktreeRoots?.default || DEFAULT_WORKTREE_ROOTS.default),
+      unity: String(raw.worktreeRoots?.unity || DEFAULT_WORKTREE_ROOTS.unity),
+    },
+    defaultPoolMin: numOr(raw.defaultPoolMin, 3, 0, 50),
+    defaultPoolMax: numOr(raw.defaultPoolMax, 10, 1, 50),
+    idleTtlMinutes: numOr(raw.idleTtlMinutes, 30, 0, 1e6),
+    minFreeDiskGB: numOr(raw.minFreeDiskGB, 20, 0, 1e6),
   };
   return {
     dir,

@@ -5,7 +5,9 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import type {
   NotifyKind,
+  ReleaseMode,
   SessionInfo,
+  SessionMode,
   SessionStatus,
   StartSessionRequest,
 } from '@cc-hub/shared';
@@ -35,11 +37,36 @@ interface Entry {
   restartPending: boolean;
   detectTimer: NodeJS.Timeout | null;
   lastNotify: Map<NotifyKind, number>;
+  /** /clear・compact などで変わった claude 側の session_id(--resume に使う)。null = info.id と同じ */
+  claudeId: string | null;
+  /** フェーズ 2: worktree の割当・ブランチ作成中(まだ PTY を起動していない) */
+  preparing: boolean;
+  /** 信頼ダイアログに自動で答えた(起動ごとに 1 回だけ) */
+  trustAnswered: boolean;
+}
+
+/** リポジトリ / worktree プール側への問い合わせ(RepoManager が実装する) */
+export interface RepoHooks {
+  /** cwd が「信頼済みリポジトリ」のプール worktree か(信頼ダイアログの自動応答に使う) */
+  isTrustedPath(cwd: string): boolean;
+  /** そのセッションがまだ worktree を確保しているか(解放済みなら false) */
+  holdsWorktree(info: SessionInfo): boolean;
+}
+
+export interface PendingStart {
+  name: string;
+  mode: SessionMode;
+  repoId: string;
+  /** 仮の cwd(worktree が決まるまではリポジトリの baseDir) */
+  cwd: string;
 }
 
 export class SessionManager {
   private readonly sessions = new Map<string, Entry>();
+  /** claude 側の session_id → ハブのセッション ID(/clear 後の新しい session_id の hooks を同じセッションに紐付ける) */
+  private readonly aliases = new Map<string, string>();
   private shuttingDown = false;
+  private repoHooks: RepoHooks | null = null;
 
   constructor(
     private readonly cfg: HubConfig,
@@ -47,6 +74,10 @@ export class SessionManager {
     private readonly agents: AgentTree,
     private readonly usage: UsageTracker,
   ) {}
+
+  setRepoHooks(h: RepoHooks): void {
+    this.repoHooks = h;
+  }
 
   // ================================================================ 状態
   all(): Record<string, SessionInfo> {
@@ -57,6 +88,33 @@ export class SessionManager {
 
   get(id: string): Entry | undefined {
     return this.sessions.get(id);
+  }
+
+  info(id: string): SessionInfo | undefined {
+    const e = this.sessions.get(id);
+    return e ? { ...e.info } : undefined;
+  }
+
+  /** ハブ ID か claude 側の session_id からセッションを引く */
+  private lookup(id: string): Entry | undefined {
+    if (!id) return undefined;
+    const e = this.sessions.get(id);
+    if (e) return e;
+    const hub = this.aliases.get(id);
+    return hub ? this.sessions.get(hub) : undefined;
+  }
+
+  /** PTY が動いている、または起動準備中か(worktree の解放可否の判定に使う) */
+  isRunning(id: string): boolean {
+    const e = this.sessions.get(id);
+    return !!e && (e.preparing || !!e.host?.alive);
+  }
+
+  /** --resume に使う claude 側の session_id */
+  private resumeId(e: Entry): string {
+    // /clear 直後で新しい会話に何も送っていない場合は transcript が無いので、元の ID で再開する
+    if (e.claudeId && (findTranscript(e.claudeId) || !findTranscript(e.info.id))) return e.claudeId;
+    return e.info.id;
   }
 
   private require(id: string): Entry {
@@ -73,7 +131,7 @@ export class SessionManager {
 
   /** 変更を配信して保存する */
   private touch(e: Entry, persist = true): void {
-    if (persist) this.store.saveSession(e.info, e.endedAt);
+    if (persist) this.store.saveSession(e.info, e.endedAt, e.claudeId);
     bus.state({ t: 'session.upsert', session: { ...e.info } });
   }
 
@@ -88,6 +146,9 @@ export class SessionManager {
       restartPending: false,
       detectTimer: null,
       lastNotify: new Map(),
+      claudeId: null,
+      preparing: false,
+      trustAnswered: false,
     };
   }
 
@@ -126,11 +187,15 @@ export class SessionManager {
       const info = this.rowToInfo(r);
       const e = this.newEntry(info);
       e.endedAt = r.ended_at;
+      if (r.claude_session_id && r.claude_session_id !== info.id) {
+        e.claudeId = r.claude_session_id;
+        this.aliases.set(e.claudeId, info.id);
+      }
       this.sessions.set(info.id, e);
       if (info.managed) {
         if (r.ended_at == null) {
           // デーモン停止で PTY ごと落ちたセッション
-          if (this.cfg.autoResume && findTranscript(info.id) && fs.existsSync(info.cwd)) {
+          if (this.cfg.autoResume && findTranscript(this.resumeId(e)) && fs.existsSync(info.cwd)) {
             info.status = 'starting';
             info.approval = null;
             info.currentTool = null;
@@ -150,7 +215,7 @@ export class SessionManager {
         // 長時間イベントの無い外部セッションは終わったものとみなす
         info.status = 'stopped';
         e.endedAt = now;
-        this.store.saveSession(info, e.endedAt);
+        this.store.saveSession(info, e.endedAt, e.claudeId);
       }
       // 実行中のまま残ったエージェントは閉じる(PTY が落ちているため)
       if (info.managed || info.status === 'stopped') this.agents.finishSession(info.id);
@@ -170,6 +235,9 @@ export class SessionManager {
       permissionMode: r.permission_mode,
       lastMessage: r.last_message,
       exitCode: r.exit_code,
+      repoId: r.repo_id ?? null,
+      worktreeId: r.worktree_id ?? null,
+      branch: r.branch ?? null,
     });
     return info;
   }
@@ -184,11 +252,16 @@ export class SessionManager {
     const name = String(req.name || '').trim() || path.basename(cwd) || cwd;
     if (req.resume) {
       if (!UUID_RE.test(req.resume)) throw new HttpError(400, 'resume には session_id(UUID)を指定してください');
-      const existing = this.sessions.get(req.resume);
-      if (existing?.host?.alive) throw new HttpError(409, 'そのセッションは既に実行中です');
+      const existing = this.lookup(req.resume);
+      if (existing && this.isRunning(existing.info.id)) throw new HttpError(409, 'そのセッションは既に実行中です');
+      if (existing && existing.info.worktreeId && this.repoHooks && !this.repoHooks.holdsWorktree(existing.info)) {
+        throw new HttpError(409, 'このセッションの worktree は解放済みです');
+      }
       const info = existing?.info ?? this.blankInfo(req.resume, name, cwd, true);
       const e = existing ?? this.newEntry(info);
-      Object.assign(info, { managed: true, cwd, mode, status: 'starting', exitCode: null, approval: null, currentTool: null });
+      // worktree のセッションは cwd を変えない
+      const keepCwd = !!existing?.info.worktreeId;
+      Object.assign(info, { managed: true, cwd: keepCwd ? info.cwd : cwd, mode, status: 'starting', exitCode: null, approval: null, currentTool: null });
       if (req.name) info.name = name;
       e.endedAt = null;
       e.userStopped = false;
@@ -213,6 +286,86 @@ export class SessionManager {
     return { ...info };
   }
 
+  // ================================================================ フェーズ 2: worktree での起動
+  /** worktree の割当前にセッションだけ作る(状態 starting。ターミナルには準備の進捗を出す) */
+  createPending(o: PendingStart): SessionInfo {
+    const id = crypto.randomUUID();
+    const info = this.blankInfo(id, o.name, o.cwd, true);
+    info.mode = o.mode;
+    info.repoId = o.repoId;
+    info.permissionMode = this.cfg.permissionMode;
+    const e = this.newEntry(info);
+    e.preparing = true;
+    e.host = new PtyHost(DEFAULT_COLS, DEFAULT_ROWS);
+    this.sessions.set(id, e);
+    this.touch(e);
+    return { ...info };
+  }
+
+  /** 準備中の進捗をターミナルに出す */
+  progress(id: string, text: string): void {
+    const e = this.sessions.get(id);
+    if (!e?.host) return;
+    const msg = `\x1b[36m[CC Hub] ${text}\x1b[0m\r\n`;
+    e.host.writeLocal(msg);
+    bus.term(id, { t: 'term.data', sid: id, data: msg });
+  }
+
+  /** 準備中のセッション名を変える(slug が決まったとき) */
+  setPendingName(id: string, name: string): void {
+    const e = this.sessions.get(id);
+    if (!e || !name) return;
+    e.info.name = name.slice(0, 100);
+    this.touch(e);
+  }
+
+  /** worktree が決まったので claude を起動する */
+  launchPending(id: string, o: { cwd: string; worktreeId: string; branch: string | null; instruction?: string }): void {
+    const e = this.sessions.get(id);
+    if (!e) throw new Error('セッションが見つかりません');
+    const info = e.info;
+    info.cwd = o.cwd;
+    info.worktreeId = o.worktreeId;
+    info.branch = o.branch;
+    e.preparing = false;
+    this.progress(id, `${o.cwd} で claude を起動します(${o.branch ?? 'detached'})`);
+    try {
+      this.spawn(e, { resume: false, prompt: this.buildPrompt(info.mode, o.cwd, o.instruction) });
+    } catch (err) {
+      info.lastMessage = `claude の起動に失敗しました: ${(err as Error).message}`.slice(0, 200);
+      this.markEnded(e, 'error', null);
+      return;
+    }
+    this.touch(e);
+  }
+
+  /** worktree が決まった(起動前)ことを記録する。起動に失敗しても解放できるように */
+  bindWorktree(id: string, worktreeId: string, cwd: string, branch: string | null): void {
+    const e = this.sessions.get(id);
+    if (!e) return;
+    Object.assign(e.info, { worktreeId, cwd, branch });
+    this.touch(e);
+  }
+
+  /** 準備に失敗した */
+  failPending(id: string, message: string): void {
+    const e = this.sessions.get(id);
+    if (!e) return;
+    e.preparing = false;
+    this.progress(id, `\x1b[31m準備に失敗しました: ${message}`);
+    e.info.lastMessage = message.slice(0, 200);
+    this.markEnded(e, 'error', null);
+    this.notify(e, 'error', 'エラー', message);
+  }
+
+  /** worktree を解放した後の SessionInfo 更新(worktreeId は履歴として残す) */
+  markReleased(id: string, mode: ReleaseMode): void {
+    const e = this.sessions.get(id);
+    if (!e) return;
+    if (mode === 'discard') e.info.branch = null;
+    this.touch(e);
+  }
+
   /** commander: リポジトリに .claude/skills/commander があれば /commander、無ければ /hub-commander */
   private buildPrompt(mode: string, cwd: string, instruction?: string): string | undefined {
     const text = String(instruction ?? '').trim();
@@ -226,7 +379,7 @@ export class SessionManager {
   /** claude を PTY で起動する。CLAUDE* 環境変数は全部取り除く(検証 X2) */
   private spawn(e: Entry, o: { resume: boolean; prompt?: string }): void {
     const info = e.info;
-    const args = o.resume ? ['--resume', info.id] : ['--session-id', info.id];
+    const args = o.resume ? ['--resume', this.resumeId(e)] : ['--session-id', info.id];
     args.push('--permission-mode', this.cfg.permissionMode, '-n', info.name, ...this.cfg.claudeArgs);
     if (o.prompt) args.push(o.prompt);
     const env: Record<string, string> = {};
@@ -247,6 +400,7 @@ export class SessionManager {
     info.rows = host.rows;
     info.exitCode = null;
     e.endedAt = null;
+    e.trustAnswered = false;
   }
 
   private onExit(e: Entry, code: number): void {
@@ -261,7 +415,7 @@ export class SessionManager {
       setTimeout(() => {
         try {
           info.status = 'starting';
-          this.spawn(e, { resume: !!findTranscript(info.id) });
+          this.spawn(e, { resume: !!findTranscript(this.resumeId(e)) });
           this.touch(e);
         } catch (err) {
           this.markEnded(e, 'error', null);
@@ -323,7 +477,11 @@ export class SessionManager {
 
   control(id: string, action: string): void {
     const e = this.require(id);
+    if (e.preparing) throw new HttpError(409, 'worktree を準備中です。完了してから操作してください');
     if (action === 'remove') {
+      if (e.info.managed && e.info.worktreeId && this.repoHooks?.holdsWorktree(e.info)) {
+        throw new HttpError(409, 'worktree を使用中のセッションです。先に停止して解放(release)してください');
+      }
       if (e.host?.alive) {
         e.userStopped = true;
         e.host.kill();
@@ -345,6 +503,9 @@ export class SessionManager {
     }
     if (action === 'restart' || action === 'resume') {
       e.userStopped = false;
+      if (e.info.worktreeId && this.repoHooks && !this.repoHooks.holdsWorktree(e.info)) {
+        throw new HttpError(409, 'このセッションの worktree は解放済みです');
+      }
       if (e.host?.alive) {
         e.restartPending = true;
         e.host.kill();
@@ -355,7 +516,7 @@ export class SessionManager {
       const msg = '\r\n\x1b[36m[再開します]\x1b[0m\r\n';
       e.host?.writeLocal(msg);
       bus.term(id, { t: 'term.data', sid: id, data: msg });
-      this.spawn(e, { resume: !!findTranscript(id) });
+      this.spawn(e, { resume: !!findTranscript(this.resumeId(e)) });
       this.touch(e);
       return;
     }
@@ -413,6 +574,7 @@ export class SessionManager {
   private runDetect(e: Entry): void {
     if (!e.host?.alive) return;
     const next = detectApproval(e.host.tailLines(25), e.info.cwd);
+    if (next && this.autoTrust(e, next)) return;
     const prevJson = JSON.stringify(e.detected);
     if (JSON.stringify(next) === prevJson) return;
     e.detected = next;
@@ -426,6 +588,24 @@ export class SessionManager {
       this.setStatus(e, back);
     }
     this.touch(e, false);
+  }
+
+  /**
+   * 信頼ダイアログ(検証 X1)の自動応答: 信頼済みリポジトリの worktree なら「Yes」を選ぶ(起動ごとに 1 回)。
+   * それ以外のセッションは従来どおり承認キューに出す。
+   */
+  private autoTrust(e: Entry, a: DetectedApproval): boolean {
+    if (e.trustAnswered || !e.host?.alive) return false;
+    const isTrust = /信頼/.test(a.question) && a.options.some((o) => /trust|^yes/i.test(o.label));
+    if (!isTrust || !this.repoHooks?.isTrustedPath(e.info.cwd)) return false;
+    const keys = approvalKeys(a, 'y');
+    if (!keys) return false;
+    e.trustAnswered = true;
+    const host = e.host;
+    console.log(`[session] 信頼ダイアログに自動で「Yes」と答えます: ${e.info.name} (${e.info.cwd})`);
+    keys.forEach((k, i) => setTimeout(() => host.alive && host.write(k), 150 + i * 40));
+    this.scheduleDetect(e, 150 + keys.length * 40 + 500);
+    return true;
   }
 
   // ================================================================ 状態遷移
@@ -461,7 +641,8 @@ export class SessionManager {
     const h = hubHeader && !hubHeader.startsWith('$') ? hubHeader.trim() : '';
     if (h && this.sessions.has(h)) return this.sessions.get(h)!;
     const sid = typeof b.session_id === 'string' ? b.session_id : '';
-    if (sid && this.sessions.has(sid)) return this.sessions.get(sid)!;
+    const known = this.lookup(sid);
+    if (known) return known;
     if (!sid || b.hook_event_name === 'SessionEnd') return null;
     const cwd = typeof b.cwd === 'string' ? b.cwd : '';
     const info = this.blankInfo(sid, path.basename(cwd) || sid.slice(0, 8), cwd, false);
@@ -493,6 +674,7 @@ export class SessionManager {
       switch (ev) {
         case 'SessionStart':
           // ※ SessionStart は http hook では発火しないので、integrations/hooks/relay.js(command 型)経由で届く
+          this.trackClaudeId(e, b);
           if (['starting', 'stopped', 'error', 'idle'].includes(info.status)) this.setStatus(e, 'awaiting_input', true);
           if (typeof b.model === 'string') info.model = b.model;
           break;
@@ -553,12 +735,27 @@ export class SessionManager {
     this.touch(e);
   }
 
+  /**
+   * /clear・compact・resume で claude 側の session_id が変わったら記録する(以後の --resume に使う)。
+   * SessionInfo.id(ハブの ID)は変えない。
+   */
+  private trackClaudeId(e: Entry, b: any): void {
+    const sid = typeof b.session_id === 'string' ? b.session_id : '';
+    if (!e.info.managed || !UUID_RE.test(sid)) return;
+    const cur = e.claudeId || e.info.id;
+    if (sid === cur) return;
+    if (e.claudeId) this.aliases.delete(e.claudeId);
+    e.claudeId = sid === e.info.id ? null : sid;
+    if (e.claudeId) this.aliases.set(e.claudeId, e.info.id);
+    console.log(`[session] claude の session_id が変わりました (${String(b.source || '?')}): ${e.info.name} ${cur} → ${sid}`);
+  }
+
   /** statusLine: セッションごとのコンテキスト使用率・コスト・モデル + 全体の使用率 */
   handleStatusline(hubSession: unknown, data: any): void {
     if (!data || typeof data !== 'object') return;
     this.usage.update(data);
     const h = typeof hubSession === 'string' ? hubSession : '';
-    const e = (h && this.sessions.get(h)) || (typeof data.session_id === 'string' ? this.sessions.get(data.session_id) : undefined);
+    const e = (h && this.sessions.get(h)) || (typeof data.session_id === 'string' ? this.lookup(data.session_id) : undefined);
     if (!e) return;
     const info = e.info;
     const before = JSON.stringify([info.status, info.contextPct, info.costUsd, info.model]);
@@ -591,7 +788,7 @@ export class SessionManager {
     this.shuttingDown = true;
     for (const e of this.sessions.values()) {
       if (e.host?.alive) {
-        this.store.saveSession(e.info, null);
+        this.store.saveSession(e.info, null, e.claudeId);
         e.host.kill();
       }
     }

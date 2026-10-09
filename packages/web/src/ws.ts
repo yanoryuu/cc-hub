@@ -54,6 +54,18 @@ function handle(msg: ServerMessage): void {
     case 'usage':
       st.setUsage(msg.usage);
       break;
+    case 'repo.upsert':
+      st.upsertRepo(msg.repo);
+      break;
+    case 'repo.remove':
+      st.removeRepo(msg.id);
+      break;
+    case 'worktree.upsert':
+      st.upsertWorktree(msg.worktree);
+      break;
+    case 'worktree.remove':
+      st.removeWorktree(msg.id);
+      break;
     case 'term.snapshot':
       emitTerm(msg.sid, { t: 'snapshot', data: msg.data, cols: msg.cols, rows: msg.rows });
       break;

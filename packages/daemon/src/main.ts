@@ -7,6 +7,7 @@ import { Auth } from './api/auth';
 import { AgentTree } from './agents/tree';
 import { UsageTracker } from './usage';
 import { SessionManager } from './session/manager';
+import { RepoManager } from './repo/manager';
 import { createServer } from './api/server';
 import { WsHub } from './api/ws';
 import { stopCapture } from './game/capture';
@@ -20,11 +21,14 @@ function main(): void {
   const agents = new AgentTree(store);
   const usage = new UsageTracker(store);
   const sessions = new SessionManager(config, store, agents, usage);
+  const repos = new RepoManager(config, store, dir, sessions);
   const startedAt = Date.now();
 
   const getState = (): HubState => ({
     sessions: sessions.all(),
     agents: agents.all(),
+    repos: repos.all(),
+    worktrees: repos.pool.all(),
     usage: usage.usage,
     daemon: { version: VERSION, startedAt, port: config.port },
   });
@@ -32,6 +36,8 @@ function main(): void {
   const server = createServer({
     auth,
     sessions,
+    repos,
+    claudePath: config.claudePath,
     getState,
     onIngestHook: (body, hubHeader) => sessions.handleHook(body, hubHeader),
     onIngestStatusline: (body) => {
@@ -54,6 +60,8 @@ function main(): void {
     console.log(`claude: ${config.claudePath}`);
     // サーバーが立ってから自動再開する(hooks を受けられるように)
     sessions.restore();
+    // セッションの復元後に worktree プールを復旧する(割当中の worktree の持ち主を確認するため)
+    repos.init();
   });
 
   setInterval(() => agents.gc(), 600_000).unref();
@@ -64,6 +72,7 @@ function main(): void {
     exiting = true;
     console.log(`[daemon] ${sig} を受けたので終了します`);
     sessions.shutdown();
+    repos.stop();
     stopCapture();
     ws.closeAll();
     server.close();
