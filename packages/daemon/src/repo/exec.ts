@@ -17,6 +17,8 @@ export interface RunOptions {
   shell?: boolean;
   /** 出力を追記するログファイル */
   logFile?: string;
+  /** 追加の環境変数 */
+  env?: Record<string, string>;
 }
 
 /** claude / git / インストールに渡す環境変数。CLAUDE* と CLAUDECODE は取り除く(検証 X2) */
@@ -64,7 +66,7 @@ export function run(cmd: string, args: string[], o: RunOptions = {}): Promise<Ru
     try {
       child = spawn(cmd, args, {
         cwd: o.cwd,
-        env: cleanEnv(),
+        env: cleanEnv(o.env),
         windowsHide: true,
         shell: !!o.shell,
         stdio: ['ignore', 'pipe', 'pipe'],

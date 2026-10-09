@@ -25,6 +25,11 @@ export interface HubConfig {
   idleTtlMinutes: number;
   /** ルートのドライブの空きがこれ未満なら補充を止める(GB) */
   minFreeDiskGB: number;
+  // ---- フェーズ 3: ブランチ / PR
+  /** gh コマンドのパス。.js / .cjs を指定すると node で実行する(検証用の偽 gh) */
+  ghPath: string;
+  /** PR 一覧の取得間隔(秒) */
+  prPollSeconds: number;
 }
 
 // プロジェクトごとに D:\WorkTree\<name>\(.base + wt-NN)を作る。C ドライブの空きが少ないため D に統一
@@ -76,6 +81,8 @@ function createConfig(file: string): HubConfig {
     defaultPoolMax: 10,
     idleTtlMinutes: 30,
     minFreeDiskGB: 20,
+    ghPath: 'gh',
+    prPollSeconds: 90,
   };
   fs.writeFileSync(file, JSON.stringify(cfg, null, 2));
   console.log(`[config] ${file} を作成しました(PIN は config.json を参照)`);
@@ -128,6 +135,8 @@ export function loadConfig(): LoadedConfig {
     defaultPoolMax: numOr(raw.defaultPoolMax, 10, 1, 50),
     idleTtlMinutes: numOr(raw.idleTtlMinutes, 30, 0, 1e6),
     minFreeDiskGB: numOr(raw.minFreeDiskGB, 20, 0, 1e6),
+    ghPath: String(raw.ghPath || 'gh'),
+    prPollSeconds: numOr(raw.prPollSeconds, 90, 10, 3600),
   };
   return {
     dir,

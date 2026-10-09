@@ -11,6 +11,8 @@ import { ApprovalList } from './Approval';
 import { StatusBadge } from './common';
 import { GameView } from './GameView';
 import { RegisterRepoForm, RepoListPage, RepoPage, SidebarRepos } from './Repos';
+import { PrScreen, SidebarPrs } from './Prs';
+import { SessionGit } from './SessionGit';
 
 function ApprovalDrawer() {
   const open = useHub((s) => s.approvalDrawer);
@@ -87,7 +89,8 @@ export function DesktopApp() {
     return () => window.removeEventListener('keydown', onKey, true);
   }, []);
 
-  const wide = view === 'repos';
+  // リポジトリ / PR 表示中は右パネルを畳んで中央を広げる
+  const wide = view === 'repos' || view === 'prs';
 
   return (
     <div className="desk">
@@ -95,6 +98,7 @@ export function DesktopApp() {
       <div className={`desk-body ${wide ? 'wide' : ''}`}>
         <aside className="sidebar">
           <SessionList onPick={openSession} activeOnlyInSessionView={view !== 'session'} />
+          <SidebarPrs />
           <SidebarRepos />
           <div className="sidebar-foot">
             <button className={`btn ghost ${view === 'game' ? 'on' : ''}`} onClick={() => setView(view === 'game' ? 'session' : 'game')}>
@@ -105,6 +109,10 @@ export function DesktopApp() {
         <main className="center">
           {view === 'game' ? (
             <GameView />
+          ) : view === 'prs' ? (
+            <div className="repo-scroll">
+              <PrScreen />
+            </div>
           ) : view === 'repos' ? (
             <div className="repo-scroll">
               {repoRoute.page === 'register' ? (
@@ -150,6 +158,7 @@ export function DesktopApp() {
             {session && view === 'session' ? (
               <>
                 <AgentTree session={session} />
+                <SessionGit session={session} />
                 <SessionDetails session={session} />
               </>
             ) : null}

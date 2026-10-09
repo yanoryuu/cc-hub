@@ -71,6 +71,8 @@ export function ConfirmModal({
   confirmLabel,
   danger,
   busy,
+  confirmDisabled,
+  wide,
   error,
   onConfirm,
   onClose,
@@ -80,6 +82,10 @@ export function ConfirmModal({
   confirmLabel: string;
   danger?: boolean;
   busy?: boolean;
+  /** true = 確認ボタンを押せない(チェックの同意待ちなど) */
+  confirmDisabled?: boolean;
+  /** true = 入力欄があるダイアログ用に少し広く */
+  wide?: boolean;
   error?: string | null;
   onConfirm: () => void;
   onClose: () => void;
@@ -93,7 +99,7 @@ export function ConfirmModal({
   }, [onClose]);
   return (
     <div className="modal-backdrop" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
-      <div className="modal narrow" role="alertdialog" aria-modal="true" aria-labelledby="cf-title">
+      <div className={`modal ${wide ? '' : 'narrow'}`} role="alertdialog" aria-modal="true" aria-labelledby="cf-title">
         <div className="modal-head">
           <h2 id="cf-title">{title}</h2>
           <button className="icon-btn" onClick={onClose} aria-label="閉じる">
@@ -107,7 +113,7 @@ export function ConfirmModal({
             <button type="button" className="btn" onClick={onClose}>
               キャンセル
             </button>
-            <button type="button" className={`btn ${danger ? 'danger solid' : 'primary'}`} disabled={busy} onClick={onConfirm}>
+            <button type="button" className={`btn ${danger ? 'danger solid' : 'primary'}`} disabled={busy || confirmDisabled} onClick={onConfirm}>
               {busy ? '処理中…' : confirmLabel}
             </button>
           </div>

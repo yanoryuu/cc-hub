@@ -296,10 +296,13 @@ export type NotifyKind = 'approval' | 'input' | 'done' | 'error' | 'pr';
 
 export interface NotifyEvent {
   kind: NotifyKind;
+  /** kind 'pr' で紐付くセッションが無い場合は '' */
   sessionId: string;
   title: string;
   body: string;
   ts: number;
+  /** kind 'pr' のとき対象の PR(PrInfo.id = "<repoId>#<number>")。クリックで PR を開くのに使う */
+  prId?: string;
 }
 
 // ---------------------------------------------------------------- WebSocket プロトコル(/ws)

@@ -7,6 +7,7 @@ import { KIND_INSTALL_HINT, KIND_LABEL, needsRelease, useRepoList, useWorktreesB
 import { fmtDate } from '../util';
 import { ConfirmModal, PoolChips, RepoStatusBadge, Spinner, WtBadge } from './RepoCommon';
 import { StatusDot } from './common';
+import { BranchSection } from './Branches';
 
 // ---------------------------------------------------------------- URL の正規化(表示用プレビュー)
 
@@ -359,6 +360,8 @@ export function RepoPage({ id, mobile = false }: { id: string; mobile?: boolean 
         </h3>
         <WorktreeTable worktrees={worktrees} mobile={mobile} />
       </section>
+
+      <BranchSection repo={repo} mobile={mobile} />
 
       <section className="rp-sec">
         <h3 className="sec-title">設定</h3>

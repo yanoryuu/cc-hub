@@ -1,13 +1,16 @@
 // アプリ全体の状態(zustand)。デーモンが唯一の正なので、ここはその写し + UI 状態だけ。
 import { create } from 'zustand';
-import type { AgentNode, HubState, NotifyEvent, RepoInfo, SessionInfo, Usage, WorktreeInfo } from '@cc-hub/shared';
+import type { AgentNode, HubState, NotifyEvent, PrInfo, RepoInfo, SessionInfo, Usage, WorktreeInfo } from '@cc-hub/shared';
+import { resolveNotifyPr } from './pr';
 
 export type AuthState = 'checking' | 'need_pin' | 'ok';
-export type MobileTab = 'sessions' | 'approvals' | 'repos' | 'game';
+export type MobileTab = 'sessions' | 'approvals' | 'prs' | 'repos' | 'game';
 /** デスクトップ中央の表示 */
-export type DeskView = 'session' | 'game' | 'repos';
+export type DeskView = 'session' | 'game' | 'repos' | 'prs';
 /** リポジトリ画面の表示(一覧 / 登録フォーム / リポジトリ詳細) */
 export type RepoRoute = { page: 'list' } | { page: 'register' } | { page: 'repo'; id: string };
+/** PR 画面の表示(一覧 / 詳細)。id = PrInfo.id("<repoId>#<number>") */
+export type PrRoute = { page: 'list' } | { page: 'pr'; id: string };
 
 export interface Toast {
   id: number;
@@ -21,6 +24,8 @@ interface Store {
   agents: Record<string, AgentNode>;
   repos: Record<string, RepoInfo>;
   worktrees: Record<string, WorktreeInfo>;
+  /** フェーズ 3。古いデーモンは返さないので {} */
+  prs: Record<string, PrInfo>;
   usage: Usage | null;
   daemon: HubState['daemon'] | null;
   /** 初回の状態を受け取ったか */
@@ -29,6 +34,7 @@ interface Store {
   selectedId: string | null;
   deskView: DeskView;
   repoRoute: RepoRoute;
+  prRoute: PrRoute;
   mobileTab: MobileTab;
   /** モバイルでセッション詳細を開いているか */
   mobileDetail: boolean;
@@ -49,6 +55,8 @@ interface Store {
   removeRepo(id: string): void;
   upsertWorktree(w: WorktreeInfo): void;
   removeWorktree(id: string): void;
+  upsertPr(p: PrInfo): void;
+  removePr(id: string): void;
   setUsage(u: Usage): void;
   select(id: string | null): void;
   /** セッションを開く(モバイルでは詳細画面へ遷移、デスクトップではセッション表示へ) */
@@ -56,6 +64,8 @@ interface Store {
   setDeskView(v: DeskView): void;
   /** リポジトリ画面を開く(デスクトップ / モバイル共通) */
   openRepos(r: RepoRoute): void;
+  /** PR 画面を開く(id を渡すと詳細) */
+  openPr(id?: string | null): void;
   setMobileTab(t: MobileTab): void;
   setMobileDetail(v: boolean): void;
   setApprovalDrawer(v: boolean): void;
@@ -73,6 +83,7 @@ export const useHub = create<Store>((set, get) => ({
   agents: {},
   repos: {},
   worktrees: {},
+  prs: {},
   usage: null,
   daemon: null,
   loaded: false,
@@ -80,6 +91,7 @@ export const useHub = create<Store>((set, get) => ({
   selectedId: null,
   deskView: 'session',
   repoRoute: { page: 'list' },
+  prRoute: { page: 'list' },
   mobileTab: 'sessions',
   mobileDetail: false,
   approvalDrawer: false,
@@ -102,6 +114,7 @@ export const useHub = create<Store>((set, get) => ({
         agents: s.agents,
         repos,
         worktrees: s.worktrees ?? {},
+        prs: s.prs ?? {},
         usage: s.usage,
         daemon: s.daemon,
         loaded: true,
@@ -156,11 +169,20 @@ export const useHub = create<Store>((set, get) => ({
       delete worktrees[id];
       return { worktrees };
     }),
+  upsertPr: (p) => set((st) => ({ prs: { ...st.prs, [p.id]: p } })),
+  removePr: (id) =>
+    set((st) => {
+      if (!st.prs[id]) return {};
+      const prs = { ...st.prs };
+      delete prs[id];
+      return { prs };
+    }),
   setUsage: (usage) => set({ usage }),
   select: (selectedId) => set({ selectedId }),
   open: (id) => set({ selectedId: id, deskView: 'session', mobileTab: 'sessions', mobileDetail: true }),
   setDeskView: (deskView) => set({ deskView }),
   openRepos: (repoRoute) => set({ repoRoute, deskView: 'repos', mobileTab: 'repos' }),
+  openPr: (id) => set({ prRoute: id ? { page: 'pr', id } : { page: 'list' }, deskView: 'prs', mobileTab: 'prs' }),
   setMobileTab: (mobileTab) => set({ mobileTab }),
   setMobileDetail: (mobileDetail) => set({ mobileDetail }),
   setApprovalDrawer: (approvalDrawer) => set({ approvalDrawer }),
@@ -169,14 +191,26 @@ export const useHub = create<Store>((set, get) => ({
     const st = get();
     // いま見ているセッションの通知は画面に出ているので出さない(スマホでは承認バナーを隠してしまうため)
     const mobile = typeof window !== 'undefined' && window.innerWidth < 900;
+    const visible = typeof document === 'undefined' || document.visibilityState === 'visible';
     const viewing =
       st.selectedId === event.sessionId &&
       (mobile ? st.mobileTab === 'sessions' && st.mobileDetail : st.deskView === 'session') &&
-      (typeof document === 'undefined' || document.visibilityState === 'visible');
+      visible;
     if (viewing) return;
+    // PR の通知は、その PR の詳細を表示中なら出さない
+    if (event.kind === 'pr' && visible && st.prRoute.page === 'pr' && (mobile ? st.mobileTab === 'prs' : st.deskView === 'prs')) {
+      if (resolveNotifyPr(event, st.prs, st.sessions) === st.prRoute.id) return;
+    }
     const id = toastSeq++;
     // 同じセッションの古い通知は置き換える(承認待ち → 入力待ち と積み重ならないように)
-    set((s) => ({ toasts: [...s.toasts.filter((t) => t.event.sessionId !== event.sessionId).slice(-2), { id, event }] }));
+    // PR の通知とセッションの通知は別枠(PR の CI 通知で承認待ちの通知が消えないように)
+    const isPr = event.kind === 'pr';
+    set((s) => ({
+      toasts: [
+        ...s.toasts.filter((t) => t.event.sessionId !== event.sessionId || (t.event.kind === 'pr') !== isPr).slice(-2),
+        { id, event },
+      ],
+    }));
     setTimeout(() => get().dismissToast(id), mobile ? 5000 : 8000);
   },
   dismissToast: (id) => set((st) => ({ toasts: st.toasts.filter((t) => t.id !== id) })),

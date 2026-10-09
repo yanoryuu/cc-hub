@@ -6,6 +6,9 @@ import type { HubState, RegisterRepoRequest, ReleaseMode, StartSessionRequest } 
 import type { Auth } from './auth';
 import type { SessionManager } from '../session/manager';
 import type { RepoManager } from '../repo/manager';
+import type { GitHubWatcher } from '../github/watcher';
+import type { PrActions } from '../github/actions';
+import { cleanupBranches, listBranches } from '../repo/branches';
 import { generateSlug } from '../repo/slug';
 import { listProjects, scanSessions } from '../history';
 import { handleGame } from '../game/capture';
@@ -58,6 +61,8 @@ export interface ServerDeps {
   auth: Auth;
   sessions: SessionManager;
   repos: RepoManager;
+  github: GitHubWatcher;
+  prs: PrActions;
   claudePath: string;
   getState: () => HubState;
   onIngestHook: (body: any, hubHeader: string | undefined) => void;
@@ -204,6 +209,50 @@ async function handle(d: ServerDeps, req: http.IncomingMessage, res: http.Server
     const body = (await readBody(req)) as RegisterRepoRequest;
     const repo = await d.repos.register(body);
     return json(res, 200, { ok: true, repo });
+  }
+
+  // ------------------------------------------------ フェーズ 3: ブランチ / PR
+  const bm = /^\/api\/repos\/([^/]+)\/branches(\/cleanup)?$/.exec(p);
+  if (bm) {
+    const repo = d.repos.require(decodeURIComponent(bm[1]));
+    if (repo.status !== 'ready') throw new HttpError(409, `リポジトリの準備ができていません(${repo.status})`);
+    const deps = { pool: d.repos.pool, sessions: () => d.sessions.all(), prs: () => d.github.list() };
+    if (!bm[2] && method === 'GET') return json(res, 200, { ok: true, branches: await listBranches(repo, deps) });
+    if (bm[2] && method === 'POST') {
+      const body = await readBody(req);
+      return json(res, 200, { ok: true, ...(await cleanupBranches(repo, body.names, deps)) });
+    }
+  }
+
+  if (p === '/api/prs/refresh' && method === 'POST') {
+    await d.github.refreshAll();
+    return json(res, 200, { ok: true, prs: d.github.all() });
+  }
+
+  const pm = /^\/api\/prs\/([^/]+)\/(\d+)(?:\/(fix|open-session|merge|close))?$/.exec(p);
+  if (pm) {
+    const repoId = decodeURIComponent(pm[1]);
+    const n = Number(pm[2]);
+    if (!pm[3] && method === 'GET') return json(res, 200, { ok: true, pr: await d.prs.detail(repoId, n) });
+    if (pm[3] && method === 'POST') {
+      const body = await readBody(req);
+      switch (pm[3]) {
+        case 'fix':
+          return json(res, 200, await d.prs.fix(repoId, n, body));
+        case 'open-session':
+          return json(res, 200, await d.prs.openSession(repoId, n, body));
+        case 'merge':
+          return json(res, 200, await d.prs.merge(repoId, n, body.method));
+        case 'close':
+          return json(res, 200, await d.prs.close(repoId, n));
+      }
+    }
+  }
+
+  const cp = /^\/api\/sessions\/([^/]+)\/create-pr$/.exec(p);
+  if (cp && method === 'POST') {
+    const body = await readBody(req);
+    return json(res, 200, d.prs.createPr(decodeURIComponent(cp[1]), body.draft === true));
   }
 
   const rm = /^\/api\/repos\/([^/]+)(\/refill)?$/.exec(p);

@@ -8,6 +8,10 @@ import { AgentTree } from './agents/tree';
 import { UsageTracker } from './usage';
 import { SessionManager } from './session/manager';
 import { RepoManager } from './repo/manager';
+import { GitStatWatcher } from './repo/gitstat';
+import { GitHubWatcher } from './github/watcher';
+import { PrActions } from './github/actions';
+import { setGhPath } from './github/gh';
 import { createServer } from './api/server';
 import { WsHub } from './api/ws';
 import { stopCapture } from './game/capture';
@@ -21,7 +25,16 @@ function main(): void {
   const agents = new AgentTree(store);
   const usage = new UsageTracker(store);
   const sessions = new SessionManager(config, store, agents, usage);
+  setGhPath(config.ghPath, dir);
   const repos = new RepoManager(config, store, dir, sessions);
+  const gitStat = new GitStatWatcher(repos.pool, (id) => repos.all()[id]);
+  const github = new GitHubWatcher({
+    pollMs: config.prPollSeconds * 1000,
+    repos: () => Object.values(repos.all()),
+    pool: repos.pool,
+    sessions: () => sessions.all(),
+  });
+  const prs = new PrActions(repos, sessions, github);
   const startedAt = Date.now();
 
   const getState = (): HubState => ({
@@ -29,6 +42,7 @@ function main(): void {
     agents: agents.all(),
     repos: repos.all(),
     worktrees: repos.pool.all(),
+    prs: github.all(),
     usage: usage.usage,
     daemon: { version: VERSION, startedAt, port: config.port },
   });
@@ -37,6 +51,8 @@ function main(): void {
     auth,
     sessions,
     repos,
+    github,
+    prs,
     claudePath: config.claudePath,
     getState,
     onIngestHook: (body, hubHeader) => sessions.handleHook(body, hubHeader),
@@ -62,6 +78,9 @@ function main(): void {
     sessions.restore();
     // セッションの復元後に worktree プールを復旧する(割当中の worktree の持ち主を確認するため)
     repos.init();
+    // フェーズ 3: worktree の変更状況と PR の監視
+    gitStat.start();
+    github.start();
   });
 
   setInterval(() => agents.gc(), 600_000).unref();
@@ -73,6 +92,8 @@ function main(): void {
     console.log(`[daemon] ${sig} を受けたので終了します`);
     sessions.shutdown();
     repos.stop();
+    gitStat.stop();
+    github.stop();
     stopCapture();
     ws.closeAll();
     server.close();

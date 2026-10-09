@@ -10,7 +10,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
-import type { ReleaseMode, RepoInfo, WorktreeInfo, WorktreeState } from '@cc-hub/shared';
+import type { ReleaseMode, RepoInfo, WorktreeGitStat, WorktreeInfo, WorktreeState } from '@cc-hub/shared';
 import { bus } from '../bus';
 import type { HubConfig } from '../config';
 import type { Store, WorktreeRow } from '../store/db';
@@ -99,7 +99,28 @@ export class WorktreePool {
 
   private pub(w: WorktreeRow): WorktreeInfo {
     const { installHash: _h, failCount: _f, ...info } = w;
-    return { ...info };
+    // 変更状況(フェーズ 3)は assigned の間だけ見せる
+    return { ...info, git: w.state === 'assigned' ? (w.git ?? null) : null };
+  }
+
+  /** 変更状況を更新して配信する(DB には保存しない)。assigned でなければ何もしない */
+  setGitStat(id: string, git: WorktreeGitStat | null): void {
+    const w = this.wts.get(id);
+    if (!w || w.state !== 'assigned') return;
+    w.git = git;
+    bus.state({ t: 'worktree.upsert', worktree: this.pub(w) });
+  }
+
+  /** .base の refs に触れる操作をリポジトリのミューテックスで直列化して実行する */
+  withLock<T>(repoId: string, fn: () => Promise<T>): Promise<T> {
+    return this.rt(repoId).mutex.run(fn);
+  }
+
+  /** git fetch --prune(前回から 30 秒以内なら省略)。ミューテックス内で実行する */
+  async fetchBase(repoId: string, force = false): Promise<void> {
+    const repo = this.d.getRepo(repoId);
+    if (!repo) return;
+    await this.withLock(repoId, () => this.fetch(repo, force));
   }
 
   private rt(repoId: string): RepoRuntime {
@@ -487,13 +508,20 @@ export class WorktreePool {
    * セッションに worktree を割り当て、feat/<slug> ブランチを作る。
    * 待機が無ければ作成を待つ。戻り値の worktree は assigned(sessionId / branch 設定済み)。
    */
-  async acquire(repoId: string, sessionId: string, slug: string, onProgress: (text: string) => void): Promise<WorktreeRow> {
+  async acquire(
+    repoId: string,
+    sessionId: string,
+    slug: string,
+    onProgress: (text: string) => void,
+    /** 指定するとブランチ作成の代わりに呼ぶ(ミューテックス内・fetch 済み)。戻り値 = チェックアウトしたブランチ名(PR の checkout 用) */
+    setup?: (wt: WorktreeRow, logFile: string) => Promise<string>,
+  ): Promise<WorktreeRow> {
     const repo = this.d.getRepo(repoId);
     if (!repo) throw new HttpError(404, 'リポジトリが見つかりません');
     const rt = this.rt(repoId);
     let w = this.forRepo(repoId).find((x) => x.state === 'idle' && !this.busy.has(x.id));
     if (w) {
-      this.set(w, { state: 'assigned', sessionId, branch: null, progress: '割り当て中', lastUsedAt: Date.now() });
+      this.set(w, { state: 'assigned', sessionId, branch: null, progress: '割り当て中', lastUsedAt: Date.now(), git: null });
       this.kick(repoId); // すぐに補充
     } else {
       onProgress('待機中の worktree が無いので、作成を待っています…');
@@ -505,11 +533,13 @@ export class WorktreePool {
     const wt = w;
     this.busy.add(wt.id);
     try {
-      onProgress(`${wt.name} を割り当てました。ブランチを作成しています…`);
+      onProgress(`${wt.name} を割り当てました。ブランチを${setup ? '準備' : '作成'}しています…`);
       const branch = await rt.mutex.run(async () => {
         await this.fetch(repo, true, this.logFile(wt));
+        if (setup) return setup(wt, this.logFile(wt));
         const b = await uniqueBranch(baseOf(repo), `feat/${slug}`);
-        await gitOk(['-C', wt.path, 'switch', '-c', b, `origin/${repo.defaultBranch}`], { logFile: this.logFile(wt) });
+        // --no-track: origin/<default> を upstream にしない(push 状況の判定と git push の既定動作のため)
+        await gitOk(['-C', wt.path, 'switch', '--no-track', '-c', b, `origin/${repo.defaultBranch}`], { logFile: this.logFile(wt) });
         return b;
       });
       this.set(wt, { branch, progress: null });
@@ -538,7 +568,7 @@ export class WorktreePool {
     const rt = this.rt(w.repoId);
     const waiter = rt.waiters.shift();
     if (waiter) {
-      this.set(w, { state: 'assigned', sessionId: waiter.sessionId, branch: null, progress: '割り当て中', lastUsedAt: Date.now() });
+      this.set(w, { state: 'assigned', sessionId: waiter.sessionId, branch: null, progress: '割り当て中', lastUsedAt: Date.now(), git: null });
       waiter.resolve(w);
     }
     this.kick(w.repoId);

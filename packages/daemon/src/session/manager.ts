@@ -388,6 +388,53 @@ export class SessionManager {
     this.touch(e);
   }
 
+  // ================================================================ フェーズ 3: 指示の送信(PR 作成 / 修正)
+  /** PTY が動いていて入力を受けられる(準備中ではない)か */
+  isLive(id: string): boolean {
+    const e = this.sessions.get(id);
+    return !!e && !e.preparing && !!e.host?.alive && e.info.managed;
+  }
+
+  /** モードに合わせた指示文(commander なら /commander か /hub-commander を前に付ける) */
+  promptFor(id: string, text: string): string {
+    const e = this.require(id);
+    return this.buildPrompt(e.info.mode, e.info.cwd, text) ?? '';
+  }
+
+  /**
+   * 指示を送って Enter で確定する。起動直後(starting)や承認待ちの間は送らずに待つ(承認に答えてしまわないため)。
+   * 実行中(running)なら送る(Claude Code が次の入力として預かる)。timeoutMs 以内に送れなければ例外。
+   */
+  async sendInstruction(id: string, text: string, timeoutMs = 120_000): Promise<void> {
+    const t0 = Date.now();
+    let readySince = 0;
+    for (;;) {
+      const e = this.sessions.get(id);
+      if (!e || !e.info.managed) throw new Error('セッションが見つかりません');
+      const st = e.info.status;
+      const alive = !e.preparing && !!e.host?.alive;
+      if (!alive && !e.preparing && st !== 'starting') throw new Error('セッションが起動していません');
+      const ready = alive && (st === 'awaiting_input' || st === 'idle' || st === 'running') && !e.detected;
+      if (ready) {
+        // 入力欄の描画が落ち着くまで少し待つ
+        if (!readySince) readySince = Date.now();
+        if (Date.now() - readySince >= 1200) {
+          const host = e.host!;
+          const line = text.replace(/\r?\n/g, ' ');
+          console.log(`[session] 指示を送信: ${e.info.name} (${line.length} 文字) ${line.slice(0, 100)}`);
+          host.write(line);
+          // 長い文字列は貼り付けとして処理されるので、Enter は少し遅らせる
+          const delay = Math.min(2000, 150 + Math.floor(line.length / 10));
+          await new Promise((r) => setTimeout(r, delay));
+          if (host.alive) host.write('\r');
+          return;
+        }
+      } else readySince = 0;
+      if (Date.now() - t0 > timeoutMs) throw new Error(`セッションが入力を受け付けられる状態になりません(${st})`);
+      await new Promise((r) => setTimeout(r, 500));
+    }
+  }
+
   /** commander: リポジトリに .claude/skills/commander があれば /commander、無ければ /hub-commander */
   private buildPrompt(mode: string, cwd: string, instruction?: string): string | undefined {
     const text = String(instruction ?? '').trim();

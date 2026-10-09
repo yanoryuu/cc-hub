@@ -7,7 +7,8 @@ import type { HubConfig } from '../config';
 import type { Store } from '../store/db';
 import type { SessionManager } from '../session/manager';
 import { HttpError, clampInt } from '../util';
-import { git, gitOk, normPath, run, tail } from './exec';
+import { git, gitOk, normPath, tail } from './exec';
+import { ghRun } from '../github/gh';
 import { defaultKeepDirs, detectKind } from './kind';
 import { WorktreePool, baseOf, DISK_WARN_PREFIX } from './pool';
 import { generateSlug, sanitizeSlug } from './slug';
@@ -83,7 +84,8 @@ export class RepoManager {
     return { repos: Object.values(this.all()), worktrees: this.pool.list() };
   }
 
-  private require(id: string): RepoInfo {
+  /** ID(大文字小文字は区別しない)でリポジトリを引く。無ければ 404 */
+  require(id: string): RepoInfo {
     const r = this.repos.get(id) ?? [...this.repos.values()].find((x) => x.id.toLowerCase() === String(id).toLowerCase());
     if (!r) throw new HttpError(404, 'リポジトリが見つかりません');
     return r;
@@ -126,7 +128,7 @@ export class RepoManager {
     this.registering.add(key);
     try {
       // 存在確認 + 正式な名前と既定ブランチ
-      const view = await run('gh', ['repo', 'view', id, '--json', 'nameWithOwner,defaultBranchRef,url'], { timeout: GH_TIMEOUT });
+      const view = await ghRun(['repo', 'view', id, '--json', 'nameWithOwner,defaultBranchRef,url'], { timeout: GH_TIMEOUT });
       if (view.code !== 0) throw new HttpError(400, `リポジトリを取得できません: ${tail(view, 200)}`);
       let defaultBranch = 'main';
       let url = `https://github.com/${id}`;
@@ -141,7 +143,7 @@ export class RepoManager {
       if (this.repos.has(id)) throw new HttpError(409, `既に登録されています: ${id}`);
       const [owner, name] = id.split('/');
       // クローン前に Unity かどうかを判定する(置き場所のドライブが変わるため)
-      const unity = await run('gh', ['api', `repos/${id}/contents/ProjectSettings/ProjectVersion.txt`, '--silent'], { timeout: GH_TIMEOUT });
+      const unity = await ghRun(['api', `repos/${id}/contents/ProjectSettings/ProjectVersion.txt`, '--silent'], { timeout: GH_TIMEOUT });
       const kind: RepoKind = unity.code === 0 ? 'unity' : 'other';
       const root = kind === 'unity' ? this.cfg.worktreeRoots.unity : this.cfg.worktreeRoots.default;
       let baseDir = path.join(root, name);
@@ -199,7 +201,7 @@ export class RepoManager {
         await gitOk(['-C', base, 'fetch', 'origin', '--prune'], { logFile });
       } else {
         fs.mkdirSync(repo.baseDir, { recursive: true });
-        const r = await run('gh', ['repo', 'clone', repo.id, base, '--', '-c', 'core.longpaths=true'], { timeout: CLONE_TIMEOUT, logFile });
+        const r = await ghRun(['repo', 'clone', repo.id, base, '--', '-c', 'core.longpaths=true'], { timeout: CLONE_TIMEOUT, logFile });
         if (r.code !== 0) throw new Error(`gh repo clone に失敗しました: ${tail(r)}`);
       }
       await gitOk(['-C', base, 'config', 'core.longpaths', 'true']);
@@ -322,6 +324,46 @@ export class RepoManager {
     }
   }
 
+  // ================================================================ フェーズ 3: PR のブランチでセッション
+  /**
+   * プールの worktree を割り当て、worktree 内で gh pr checkout N してから claude を起動する。
+   * instruction は起動時のプロンプト(commander なら前置きが付く)。長い指示は worktree 内のファイルに書いて参照させる
+   */
+  startPrSession(o: { repoId: string; number: number; headRefName: string; mode?: string; instruction?: string; name?: string }): SessionInfo {
+    const repo = this.require(o.repoId);
+    if (repo.status !== 'ready') throw new HttpError(409, `リポジトリの準備ができていません(${repo.status})`);
+    this.pool.checkAvailable(repo.id);
+    const info = this.sessions.createPending({
+      name: String(o.name || '').trim() || `PR #${o.number}`,
+      mode: o.mode === 'commander' ? 'commander' : 'plain',
+      repoId: repo.id,
+      cwd: repo.baseDir,
+    });
+    void this.preparePr(info.id, repo, o);
+    return info;
+  }
+
+  private async preparePr(sid: string, repo: RepoInfo, o: { number: number; headRefName: string; instruction?: string }): Promise<void> {
+    try {
+      const wt = await this.pool.acquire(repo.id, sid, '', (t) => this.sessions.progress(sid, t), async (w, logFile) => {
+        this.sessions.progress(sid, `gh pr checkout ${o.number} を実行しています…`);
+        console.log(`[repo] gh pr checkout ${o.number} --repo ${repo.id} (${w.path})`);
+        const r = await ghRun(['pr', 'checkout', String(o.number), '--repo', repo.id], { cwd: w.path, logFile, timeout: 5 * 60_000 });
+        if (r.code !== 0) throw new Error(`gh pr checkout に失敗しました: ${tail(r)}`);
+        const b = (await gitOk(['-C', w.path, 'rev-parse', '--abbrev-ref', 'HEAD'])).trim();
+        return b && b !== 'HEAD' ? b : o.headRefName;
+      });
+      this.sessions.bindWorktree(sid, wt.id, wt.path, wt.branch);
+      const instruction = o.instruction ? deliverInstruction(repo, wt.path, `pr-${o.number}`, o.instruction) : undefined;
+      this.sessions.launchPending(sid, { cwd: wt.path, worktreeId: wt.id, branch: wt.branch, instruction });
+      console.log(`[repo] PR セッション開始: ${repo.id} #${o.number} ${wt.name} ${wt.branch}`);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      console.error(`[repo] PR セッションの準備に失敗: ${msg}`);
+      this.sessions.failPending(sid, msg);
+    }
+  }
+
   /** セッション停止後、worktree を初期化してプールに戻す */
   async release(sessionId: string, mode: ReleaseMode): Promise<WorktreeInfo> {
     if (mode !== 'keep' && mode !== 'discard') throw new HttpError(400, "mode は 'keep' か 'discard' です");
@@ -343,4 +385,32 @@ export class RepoManager {
   async removeWorktree(id: string): Promise<void> {
     await this.pool.remove(id);
   }
+}
+
+/** これより長い指示は PTY に直接打ち込まず、worktree 内のファイルに書いて読ませる */
+export const INLINE_MAX = 2000;
+
+/**
+ * 指示文を送れる形にする。短ければそのまま(改行は空白に)、長ければ <worktree>\.cc-hub\<tag>.md に書いて
+ * 「このファイルを読んで従って」という短い指示を返す。.cc-hub は .git/info/exclude に入れてコミットされないようにする
+ * (解放時の git clean -fdx で消える)
+ */
+export function deliverInstruction(repo: RepoInfo, wtPath: string, tag: string, text: string): string {
+  if (text.length <= INLINE_MAX) return text.replace(/\r?\n+/g, ' ');
+  const dir = path.join(wtPath, '.cc-hub');
+  const file = path.join(dir, `${tag.replace(/[^\w.-]/g, '_')}-${Date.now()}.md`);
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(file, text);
+  try {
+    const exclude = path.join(baseOf(repo), '.git', 'info', 'exclude');
+    const cur = fs.existsSync(exclude) ? fs.readFileSync(exclude, 'utf8') : '';
+    if (!/^\/?\.cc-hub\/?$/m.test(cur)) {
+      fs.mkdirSync(path.dirname(exclude), { recursive: true });
+      fs.appendFileSync(exclude, `${cur && !cur.endsWith('\n') ? '\n' : ''}# CC Hub: セッションへの指示ファイル\n/.cc-hub/\n`);
+    }
+  } catch {
+    /* 除外できなくても致命的ではない */
+  }
+  const first = text.split(/\r?\n/)[0].slice(0, 200);
+  return `${first} 詳細(レビューコメント・失敗ログ)はファイル ${file} に書きました。まずこのファイルを読み、その指示に従って作業してください(このファイル自体はコミットしないこと)。`;
 }

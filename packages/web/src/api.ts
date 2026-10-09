@@ -1,5 +1,5 @@
 // REST ヘルパー。401 を受けたら PIN 画面を出し、ログイン成功後に同じリクエストを再試行する。
-import type { HubState, RegisterRepoRequest, ReleaseMode, RepoInfo } from '@cc-hub/shared';
+import type { BranchInfo, HubState, MergeMethod, PrDetail, RegisterRepoRequest, ReleaseMode, RepoInfo, SessionMode } from '@cc-hub/shared';
 
 export class AuthError extends Error {
   constructor() {
@@ -127,6 +127,40 @@ export const repoApi = {
   release: (sessionId: string, mode: ReleaseMode) => api(`/api/sessions/${enc(sessionId)}/release`, { mode }),
   slug: (instruction: string) => api('/api/slug', { instruction }),
 };
+
+// ---------------------------------------------------------------- フェーズ 3: ブランチ / PR
+
+/** PR の API パス: /api/prs/<encodeURIComponent("o/r")>/<n> */
+const prPath = (repoId: string, n: number) => `/api/prs/${enc(repoId)}/${n}`;
+
+export interface FixRequest {
+  comments?: boolean;
+  checks?: boolean;
+  note?: string;
+}
+
+export const prApi = {
+  refresh: () => api('/api/prs/refresh', {}, { noRetry: true }),
+  detail: async (repoId: string, n: number): Promise<PrDetail | undefined> => pick<PrDetail>(await api(prPath(repoId, n)), 'pr'),
+  fix: (repoId: string, n: number, req: FixRequest) => api(`${prPath(repoId, n)}/fix`, req),
+  openSession: (repoId: string, n: number, req: { instruction?: string; mode?: SessionMode }) =>
+    api(`${prPath(repoId, n)}/open-session`, req),
+  merge: (repoId: string, n: number, method: MergeMethod) => api(`${prPath(repoId, n)}/merge`, { method }),
+  close: (repoId: string, n: number) => api(`${prPath(repoId, n)}/close`, {}),
+  createPr: (sessionId: string, draft: boolean) => api(`/api/sessions/${enc(sessionId)}/create-pr`, { draft }),
+  branches: async (repoId: string): Promise<BranchInfo[]> =>
+    pick<BranchInfo[]>(await api(`/api/repos/${enc(repoId)}/branches`), 'branches') ?? [],
+  cleanup: (repoId: string, names: string[]) => api(`/api/repos/${enc(repoId)}/branches/cleanup`, { names }),
+};
+
+/** レスポンスから起動 / 送信先のセッション id を取り出す({session} / {sessionId} のどちらでも) */
+export function pickSessionId(r: any): string | null {
+  if (!r) return null;
+  const s = r.session ?? r.data?.session;
+  if (s && typeof s.id === 'string') return s.id;
+  const id = r.sessionId ?? r.data?.sessionId;
+  return typeof id === 'string' ? id : null;
+}
 
 /** エラーを表示用の文字列にする */
 export function errText(e: unknown, fallback = '失敗しました'): string {

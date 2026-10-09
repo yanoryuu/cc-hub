@@ -1,5 +1,6 @@
 // アプリ内トースト(notify イベント)
 import { useHub } from '../store';
+import { resolveNotifyPr } from '../pr';
 
 const KIND_LABEL = { approval: '承認待ち', input: '入力待ち', done: '完了', error: 'エラー', pr: 'PR' } as const;
 
@@ -7,6 +8,7 @@ export function Toasts() {
   const toasts = useHub((s) => s.toasts);
   const dismiss = useHub((s) => s.dismissToast);
   const open = useHub((s) => s.open);
+  const openPr = useHub((s) => s.openPr);
   if (toasts.length === 0) return null;
   return (
     <div className="toasts" aria-live="polite">
@@ -15,7 +17,11 @@ export function Toasts() {
           <button
             className="toast-main"
             onClick={() => {
-              if (useHub.getState().sessions[t.event.sessionId]) open(t.event.sessionId);
+              const st = useHub.getState();
+              if (t.event.kind === 'pr') {
+                // PR の通知は PR を開く(見つからなければ一覧)
+                openPr(resolveNotifyPr(t.event, st.prs, st.sessions));
+              } else if (st.sessions[t.event.sessionId]) open(t.event.sessionId);
               dismiss(t.id);
             }}
           >

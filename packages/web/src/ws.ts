@@ -66,6 +66,12 @@ function handle(msg: ServerMessage): void {
     case 'worktree.remove':
       st.removeWorktree(msg.id);
       break;
+    case 'pr.upsert':
+      st.upsertPr(msg.pr);
+      break;
+    case 'pr.remove':
+      st.removePr(msg.id);
+      break;
     case 'term.snapshot':
       emitTerm(msg.sid, { t: 'snapshot', data: msg.data, cols: msg.cols, rows: msg.rows });
       break;

@@ -1,4 +1,4 @@
-// モバイルレイアウト(幅 900px 未満): 下タブ セッション / 承認 / リポジトリ / ゲーム
+// モバイルレイアウト(幅 900px 未満): 下タブ セッション / 承認 / PR / リポジトリ / ゲーム
 import { useState } from 'react';
 import { useHub } from '../store';
 import { SessionList } from './SessionList';
@@ -11,6 +11,46 @@ import { StatusDot } from './common';
 import { ConnDot, UsageMeters } from './TopBar';
 import { STATUS_LABEL } from '../util';
 import { RegisterRepoForm, RepoListPage, RepoPage } from './Repos';
+import { PrDetailPage, PrListPage, RefreshPrsButton } from './Prs';
+import { SessionGit } from './SessionGit';
+import { needsAttention, usePrGroups } from '../pr';
+
+/** PR タブ: 一覧 → 詳細 */
+function PrMobileScreen() {
+  const route = useHub((s) => s.prRoute);
+  const pr = useHub((s) => (route.page === 'pr' ? s.prs[route.id] : undefined));
+  const openPr = useHub((s) => s.openPr);
+  if (route.page === 'pr') {
+    return (
+      <div className="m-screen">
+        <div className="m-head">
+          <button className="icon-btn back" onClick={() => openPr(null)} aria-label="一覧へ戻る">
+            ‹
+          </button>
+          <span className="m-title">
+            {pr ? `PR #${pr.number}` : 'PR'}
+            <span className="m-sub muted">{pr?.repoId ?? route.id}</span>
+          </span>
+          <RefreshPrsButton compact />
+        </div>
+        <div className="m-scroll">
+          <PrDetailPage key={route.id} id={route.id} mobile />
+        </div>
+      </div>
+    );
+  }
+  return (
+    <div className="m-screen">
+      <div className="m-head">
+        <span className="m-title">PR</span>
+        <RefreshPrsButton compact />
+      </div>
+      <div className="m-scroll">
+        <PrListPage mobile />
+      </div>
+    </div>
+  );
+}
 
 /** リポジトリタブ: 一覧 → 詳細 / 登録 */
 function RepoScreen() {
@@ -114,6 +154,7 @@ function SessionDetailView() {
           {info && (
             <div className="m-info">
               <AgentTree session={session} />
+              <SessionGit session={session} />
               <SessionDetails session={session} />
             </div>
           )}
@@ -130,6 +171,9 @@ export function MobileApp() {
   const open = useHub((s) => s.open);
   const setNew = useHub((s) => s.setNewSessionOpen);
   const approvals = useApprovalSessions();
+  const prGroups = usePrGroups();
+  // PR タブのバッジ: 対応が必要な自分の PR + レビュー依頼
+  const prBadge = prGroups.mine.filter(needsAttention).length + prGroups.review.length;
 
   let body: React.ReactNode;
   if (tab === 'sessions' && detail) {
@@ -163,6 +207,8 @@ export function MobileApp() {
         </div>
       </div>
     );
+  } else if (tab === 'prs') {
+    body = <PrMobileScreen />;
   } else if (tab === 'repos') {
     body = <RepoScreen />;
   } else {
@@ -183,6 +229,10 @@ export function MobileApp() {
         <button className={tab === 'approvals' ? 'active' : ''} onClick={() => setTab('approvals')}>
           承認
           {approvals.length > 0 && <span className="tab-badge">{approvals.length}</span>}
+        </button>
+        <button className={tab === 'prs' ? 'active' : ''} onClick={() => setTab('prs')}>
+          PR
+          {prBadge > 0 && <span className="tab-badge pr">{prBadge}</span>}
         </button>
         <button className={tab === 'repos' ? 'active' : ''} onClick={() => setTab('repos')}>
           リポジトリ
