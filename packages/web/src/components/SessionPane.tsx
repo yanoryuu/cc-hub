@@ -6,6 +6,7 @@ import { ApprovalBanner } from './Approval';
 import { ReleaseBanner } from './ReleaseBanner';
 import { StatusBadge, toolText } from './common';
 import { sessionApi } from '../api';
+import { useSessionWorktree } from '../repo';
 import { fmtElapsed, readLocal, useNow, writeLocal } from '../util';
 
 const QUICK_KEYS: { label: string; title?: string; key?: string; cmd?: string; scroll?: -1 | 1 }[] = [
@@ -205,17 +206,38 @@ export function SessionPane({
               <InputBar session={session} desktop={desktop} onSent={() => termRef.current?.scrollToBottom()} />
             </>
           ) : (
-            <div className="stopped-bar">
-              {session.status === 'error' ? `エラーで終了しました${session.exitCode != null ? `(終了コード ${session.exitCode})` : ''}` : 'セッションは停止しています'}
-              <button className="btn" onClick={() => sessionApi.control(session.id, 'restart').catch(() => {})}>
-                再起動
-              </button>
-            </div>
+            <StoppedBar session={session} />
           )}
         </>
       ) : (
         <ReadOnlyView session={session} />
       )}
+    </div>
+  );
+}
+
+/** 停止中の下部バー。worktree を解放済みのセッションは作業場所が無いので再開できない旨を出す */
+function StoppedBar({ session }: { session: SessionInfo }) {
+  const wt = useSessionWorktree(session);
+  const released = !!session.worktreeId && !wt;
+  const label =
+    session.status === 'error'
+      ? `エラーで終了しました${session.exitCode != null ? `(終了コード ${session.exitCode})` : ''}`
+      : 'セッションは停止しています';
+  if (released) {
+    return (
+      <div className="stopped-bar">
+        {label}。作業ツリーは解放済みのため、このセッションは再開できません
+        {session.branch ? `(ブランチ ${session.branch} を残した場合は、そこから新しいセッションを始めてください)` : ''}
+      </div>
+    );
+  }
+  return (
+    <div className="stopped-bar">
+      {label}
+      <button className="btn" onClick={() => sessionApi.control(session.id, 'restart').catch(() => {})}>
+        再起動
+      </button>
     </div>
   );
 }
