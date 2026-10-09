@@ -1,0 +1,56 @@
+// 共通ヘルパー
+import type http from 'node:http';
+
+/** API のエラー(ステータスコード付き) */
+export class HttpError extends Error {
+  constructor(
+    readonly status: number,
+    message: string,
+  ) {
+    super(message);
+  }
+}
+
+/** ツール入力から「対象」の要約を作る(file_path / command 先頭 80 文字 / pattern / description / url) */
+export function toolTarget(_name: unknown, input: any): string {
+  if (!input || typeof input !== 'object') return '';
+  const pick = input.file_path ?? input.notebook_path ?? input.command ?? input.pattern ?? input.description ?? input.url ?? input.query ?? input.skill ?? '';
+  const s = String(pick).replace(/\s+/g, ' ').trim();
+  return s.length > 80 ? s.slice(0, 80) : s;
+}
+
+export function readBody(req: http.IncomingMessage, limit = 1e6): Promise<any> {
+  return new Promise((resolve, reject) => {
+    const chunks: Buffer[] = [];
+    let size = 0;
+    req.on('data', (c: Buffer) => {
+      size += c.length;
+      if (size > limit) {
+        reject(new HttpError(413, 'body too large'));
+        req.destroy();
+        return;
+      }
+      chunks.push(c);
+    });
+    req.on('end', () => {
+      const text = Buffer.concat(chunks).toString('utf8');
+      try {
+        resolve(text ? JSON.parse(text) : {});
+      } catch {
+        reject(new HttpError(400, 'bad request'));
+      }
+    });
+    req.on('error', reject);
+  });
+}
+
+export function json(res: http.ServerResponse, code: number, obj: unknown, headers: Record<string, string> = {}): void {
+  res.writeHead(code, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store', ...headers });
+  res.end(JSON.stringify(obj));
+}
+
+export function clampInt(v: unknown, min: number, max: number): number {
+  const n = Math.trunc(Number(v));
+  if (!Number.isFinite(n)) return min;
+  return Math.max(min, Math.min(max, n));
+}

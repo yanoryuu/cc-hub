@@ -1,0 +1,14 @@
+{
+  "name": "CC Hub",
+  "short_name": "CC Hub",
+  "description": "複数の Claude Code セッションを操作",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#0f1115",
+  "theme_color": "#0f1115",
+  "icons": [
+    { "src": "/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" },
+    { "src": "/icon.png", "sizes": "192x192", "type": "image/png", "purpose": "any maskable" }
+  ]
+}

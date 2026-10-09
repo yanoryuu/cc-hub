@@ -1,0 +1,19 @@
+{
+  "name": "cc-hub",
+  "private": true,
+  "version": "0.1.0",
+  "description": "複数の Claude Code セッションを集約するハブ(デーモン + Web UI + Electron)",
+  "workspaces": [
+    "packages/*"
+  ],
+  "scripts": {
+    "build": "npm run build -w @cc-hub/web && npm run build -w @cc-hub/daemon && npm run build -w @cc-hub/desktop",
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "daemon": "npm run start -w @cc-hub/daemon",
+    "dev:web": "npm run dev -w @cc-hub/web",
+    "desktop": "npm run start -w @cc-hub/desktop"
+  },
+  "engines": {
+    "node": ">=20.12"
+  }
+}

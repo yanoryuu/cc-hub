@@ -1,0 +1,33 @@
+// アプリ内トースト(notify イベント)
+import { useHub } from '../store';
+
+const KIND_LABEL = { approval: '承認待ち', input: '入力待ち', done: '完了', error: 'エラー' } as const;
+
+export function Toasts() {
+  const toasts = useHub((s) => s.toasts);
+  const dismiss = useHub((s) => s.dismissToast);
+  const open = useHub((s) => s.open);
+  if (toasts.length === 0) return null;
+  return (
+    <div className="toasts" aria-live="polite">
+      {toasts.map((t) => (
+        <div key={t.id} className={`toast k-${t.event.kind}`}>
+          <button
+            className="toast-main"
+            onClick={() => {
+              if (useHub.getState().sessions[t.event.sessionId]) open(t.event.sessionId);
+              dismiss(t.id);
+            }}
+          >
+            <span className="toast-kind">{KIND_LABEL[t.event.kind] ?? t.event.kind}</span>
+            <span className="toast-title">{t.event.title}</span>
+            {t.event.body && <span className="toast-body">{t.event.body}</span>}
+          </button>
+          <button className="icon-btn toast-x" onClick={() => dismiss(t.id)} aria-label="閉じる">
+            ✕
+          </button>
+        </div>
+      ))}
+    </div>
+  );
+}

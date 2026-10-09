@@ -1,0 +1,26 @@
+{
+  "name": "@cc-hub/daemon",
+  "version": "0.1.0",
+  "private": true,
+  "main": "dist/main.js",
+  "scripts": {
+    "build": "esbuild src/main.ts --bundle --platform=node --target=node20 --format=cjs --outfile=dist/main.js --external:@lydell/node-pty --external:better-sqlite3 --external:@xterm/headless --external:@xterm/addon-serialize --external:ws --sourcemap",
+    "start": "npm run build && node dist/main.js",
+    "typecheck": "tsc -p tsconfig.json"
+  },
+  "dependencies": {
+    "@cc-hub/shared": "0.1.0",
+    "@lydell/node-pty": "^1.2.0-beta.12",
+    "@xterm/addon-serialize": "^0.14.0",
+    "@xterm/headless": "^6.0.0",
+    "better-sqlite3": "^11.10.0",
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.12",
+    "@types/node": "^20.17.0",
+    "@types/ws": "^8.5.13",
+    "esbuild": "^0.24.2",
+    "typescript": "^5.7.3"
+  }
+}
