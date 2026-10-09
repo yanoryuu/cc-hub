@@ -145,9 +145,100 @@ export interface WorktreeInfo {
   /** 進行中の作業の説明(例: "npm ci 実行中")。なければ null */
   progress: string | null;
   error: string | null;
+  /** フェーズ 3: assigned 中の変更状況(数秒ごとに更新)。それ以外の状態では null */
+  git?: WorktreeGitStat | null;
 }
 
-export type ReleaseMode = 'keep' | 'discard'; // 'pr' はフェーズ 3
+/** worktree の変更状況(git status / diff --stat / rev-list) */
+export interface WorktreeGitStat {
+  /** 未コミットの変更ファイル数(未追跡を含む) */
+  changed: number;
+  /** base(origin/<default>)からのコミット差分 */
+  insertions: number;
+  deletions: number;
+  /** origin/<default> より進んでいるコミット数 */
+  ahead: number;
+  /** origin/<default> より遅れているコミット数(rebase が必要かの目安) */
+  behind: number;
+  /** push していないコミット数(upstream が無ければ ahead と同じ) */
+  unpushed: number;
+  /** upstream(origin/feat/...)があるか = 一度でも push したか */
+  pushed: boolean;
+  updatedAt: number;
+}
+
+export type ReleaseMode = 'keep' | 'discard'; // PR を作るときは先に POST /api/sessions/:id/create-pr
+
+// ---------------------------------------------------------------- ブランチ / PR(フェーズ 3)
+
+export interface BranchInfo {
+  repoId: string;
+  name: string; // "feat/login-fix"(リモートのみのものは "origin/..." ではなくブランチ名で、isLocal=false)
+  isLocal: boolean;
+  hasRemote: boolean;
+  /** origin/<default> との差 */
+  ahead: number;
+  behind: number;
+  /** upstream に push していないコミット数(upstream が無いローカルブランチは ahead と同じ) */
+  unpushed: number;
+  lastCommit: { sha: string; subject: string; author: string; date: number };
+  /** origin/<default> にマージ済み(ahead=0 かつ default 以外) */
+  merged: boolean;
+  /** このブランチを使っている worktree / セッション */
+  worktreeId: string | null;
+  sessionId: string | null;
+  prNumber: number | null;
+}
+
+export type CheckState = 'pending' | 'success' | 'failure' | 'none';
+export type PrState = 'OPEN' | 'CLOSED' | 'MERGED';
+
+export interface PrInfo {
+  id: string; // "<repoId>#<number>"
+  repoId: string;
+  number: number;
+  title: string;
+  url: string;
+  state: PrState;
+  isDraft: boolean;
+  headRefName: string;
+  baseRefName: string;
+  author: string;
+  reviewDecision: 'APPROVED' | 'CHANGES_REQUESTED' | 'REVIEW_REQUIRED' | null;
+  mergeable: 'MERGEABLE' | 'CONFLICTING' | 'UNKNOWN';
+  checks: CheckState;
+  checksSummary: { passed: number; failed: number; pending: number };
+  /** レビューコメント + 会話コメントの数 */
+  commentCount: number;
+  updatedAt: number;
+  /** 自分の PR か / 自分にレビュー依頼が来ているか */
+  mine: boolean;
+  reviewRequested: boolean;
+  /** headRefName が CC Hub のセッション / worktree のブランチと一致した場合 */
+  sessionId: string | null;
+  worktreeId: string | null;
+}
+
+export interface PrComment {
+  author: string;
+  body: string;
+  createdAt: number;
+  /** レビューコメントの場合のファイルと行 */
+  path?: string;
+  line?: number;
+  url?: string;
+}
+
+export interface PrDetail extends PrInfo {
+  body: string;
+  comments: PrComment[];
+  reviews: { author: string; state: string; body: string; submittedAt: number }[];
+  files: { path: string; additions: number; deletions: number }[];
+  /** 失敗したチェック(「直して」でログを送る対象) */
+  failedChecks: { name: string; url: string; runId: number | null }[];
+}
+
+export type MergeMethod = 'squash' | 'merge' | 'rebase';
 
 export interface RegisterRepoRequest {
   /** https / git@ / "owner/name" のいずれか */
@@ -164,6 +255,8 @@ export interface HubState {
   agents: Record<string, AgentNode>;
   repos: Record<string, RepoInfo>;
   worktrees: Record<string, WorktreeInfo>;
+  /** フェーズ 3: 自分の PR / レビュー依頼 / セッションに紐付いた PR。key = PrInfo.id */
+  prs?: Record<string, PrInfo>;
   usage: Usage | null;
   daemon: { version: string; startedAt: number; port: number };
 }
@@ -199,7 +292,7 @@ export interface HistoryEntry {
 
 // ---------------------------------------------------------------- 通知イベント
 
-export type NotifyKind = 'approval' | 'input' | 'done' | 'error';
+export type NotifyKind = 'approval' | 'input' | 'done' | 'error' | 'pr';
 
 export interface NotifyEvent {
   kind: NotifyKind;
@@ -230,6 +323,8 @@ export type ServerMessage =
   | { t: 'repo.remove'; id: string }
   | { t: 'worktree.upsert'; worktree: WorktreeInfo }
   | { t: 'worktree.remove'; id: string }
+  | { t: 'pr.upsert'; pr: PrInfo }
+  | { t: 'pr.remove'; id: string }
   | { t: 'term.snapshot'; sid: string; data: string; cols: number; rows: number }
   | { t: 'term.data'; sid: string; data: string }
   | { t: 'term.resize'; sid: string; cols: number; rows: number }
@@ -263,6 +358,19 @@ export type ServerMessage =
 //   POST /api/worktrees/:id/rebuild  broken などを作り直す
 //   DELETE /api/worktrees/:id      待機中 / broken の worktree を削除
 //   (:id の "/" と "#" は encodeURIComponent する)
+//   --- フェーズ 3(ブランチ / PR)---
+//   GET  /api/repos/:id/branches                        → {ok, branches: BranchInfo[]}(取得時に git fetch --prune)
+//   POST /api/repos/:id/branches/cleanup {names}        マージ済みのローカルブランチを削除(リモートは消さない。使用中は 409)
+//   POST /api/prs/refresh                               PR 一覧を今すぐ取り直す(画面のフォーカス時・手動更新)
+//   GET  /api/prs/:repo/:n                              → {ok, pr: PrDetail}   (:repo は encodeURIComponent("o/r"))
+//   POST /api/prs/:repo/:n/fix {comments?: boolean, checks?: boolean, note?: string}
+//          紐付いたセッションにレビューコメント / 失敗したチェックのログを送って直させる。
+//          セッションが動いていなければ、プールの worktree でブランチを checkout して新しいセッションを起動する
+//   POST /api/prs/:repo/:n/open-session {instruction?, mode?}  PR のブランチで新しいセッション(gh pr checkout)
+//   POST /api/prs/:repo/:n/merge {method: MergeMethod}  gh pr merge --<method> --delete-branch。紐付いた worktree は停止済みなら解放(keep)
+//   POST /api/prs/:repo/:n/close
+//   POST /api/sessions/:id/create-pr {draft?: boolean}  実行中のセッションに「push して gh pr create して」と指示する。
+//          PR ができると headRefName で自動的に紐付く
 //   GET  /game/windows | GET /game/stream?hwnd= | POST /game/input   (CC Remote から移植、仕様そのまま)
 // ingest(ingest トークン: ヘッダ X-CC-Hub-Token。tailscale 経由=X-Forwarded-For 付きは拒否):
 //   POST /ingest/hook        hooks の stdin JSON をそのまま

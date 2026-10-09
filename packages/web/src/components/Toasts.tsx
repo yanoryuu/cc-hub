@@ -1,7 +1,7 @@
 // アプリ内トースト(notify イベント)
 import { useHub } from '../store';
 
-const KIND_LABEL = { approval: '承認待ち', input: '入力待ち', done: '完了', error: 'エラー' } as const;
+const KIND_LABEL = { approval: '承認待ち', input: '入力待ち', done: '完了', error: 'エラー', pr: 'PR' } as const;
 
 export function Toasts() {
   const toasts = useHub((s) => s.toasts);
