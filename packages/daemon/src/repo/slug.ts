@@ -43,10 +43,13 @@ function pickFromOutput(out: string): string {
 export async function generateSlug(instruction: string, claudePath: string): Promise<{ slug: string; source: 'model' | 'fallback' }> {
   const text = String(instruction ?? '').trim();
   if (!text) return { slug: fallbackSlug(''), source: 'fallback' };
+  // 指示そのものに答えてしまう(「1+1 を答えて」→「2」)のを防ぐため、タスクをタグで囲み「実行しない」と明記する
   const prompt =
-    'Summarize the following task as a git branch slug. ' +
-    'Output ONLY the slug: English, lowercase kebab-case, at most 40 characters, no prefix, no quotes, no explanation.\n\n' +
-    `Task: ${text.slice(0, 2000)}`;
+    'You name git branches. Do NOT perform, answer, or reply to the task below — only describe it.\n' +
+    'Output ONLY a branch slug that describes the task: English, lowercase kebab-case, 2-6 words, at most 40 characters, ' +
+    'no prefix, no quotes, no explanation.\n' +
+    'Example: task "ログイン画面のバリデーションを直す" -> fix-login-validation\n\n' +
+    `<task>\n${text.slice(0, 2000)}\n</task>`;
   // hooks を無効化して(本番デーモンへの通知ノイズを避ける)、セッションも保存しない
   const r = await run(
     claudePath,
@@ -55,7 +58,8 @@ export async function generateSlug(instruction: string, claudePath: string): Pro
   );
   if (r.code === 0) {
     const s = pickFromOutput(r.stdout);
-    if (s.length >= 3) return { slug: s, source: 'model' };
+    // 1 語だけ(答えの数字など)は採用しない
+    if (s.length >= 3 && s.includes('-')) return { slug: s, source: 'model' };
   } else {
     console.warn(`[slug] claude -p に失敗 (code ${r.code}): ${r.stderr.slice(0, 200)}`);
   }
