@@ -90,11 +90,21 @@ export class PtyHost {
   }
 
   /** 画面の末尾 n 行(現在表示中の領域の下端から) */
+  /**
+   * 画面末尾の n 行。末尾の空行は数えない(行数が多い画面では、上寄せで描かれたダイアログが
+   * 下の空行に押し出されて検出範囲から外れるため)。範囲は表示中の画面内に限る。
+   */
   tailLines(n: number): string[] {
     const buf = this.term.buffer.active;
-    const end = buf.baseY + this.term.rows;
+    const top = buf.baseY;
+    let end = buf.baseY + this.term.rows;
+    while (end > top) {
+      const line = buf.getLine(end - 1);
+      if (line && line.translateToString(true).trim()) break;
+      end--;
+    }
     const lines: string[] = [];
-    for (let i = Math.max(0, end - n); i < end; i++) {
+    for (let i = Math.max(top, end - n); i < end; i++) {
       const line = buf.getLine(i);
       lines.push(line ? line.translateToString(true) : '');
     }

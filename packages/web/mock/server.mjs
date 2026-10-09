@@ -54,7 +54,7 @@ const REPO_CLONING = 'ryuichi-yano/cc-remote';
 
 const s1 = mkSession({
   name: 'login-fix',
-  cwd: 'C:\\wt\\shop-web\\wt-01',
+  cwd: 'D:\\WorkTree\\shop-web\\wt-01',
   status: 'awaiting_approval',
   branch: 'feat/login-fix',
   repoId: REPO_WEB,
@@ -73,7 +73,7 @@ const s1 = mkSession({
 });
 const s2 = mkSession({
   name: 'shop-refactor',
-  cwd: 'C:\\wt\\shop-web\\wt-02',
+  cwd: 'D:\\WorkTree\\shop-web\\wt-02',
   status: 'running',
   branch: 'feat/shop-refactor',
   repoId: REPO_WEB,
@@ -100,7 +100,7 @@ const s3 = mkSession({
 // 停止済み・worktree が割り当てられたまま(解放待ち)
 const s4 = mkSession({
   name: 'cart-badge',
-  cwd: 'C:\\wt\\shop-web\\wt-03',
+  cwd: 'D:\\WorkTree\\shop-web\\wt-03',
   status: 'stopped',
   exitCode: 0,
   branch: 'feat/cart-badge-count',
@@ -123,7 +123,7 @@ function mkRepo(id, p) {
     url: `https://github.com/${id}`,
     owner,
     name,
-    baseDir: `C:\\wt\\${name}`,
+    baseDir: `D:\\WorkTree\\${name}`,
     defaultBranch: 'main',
     kind: 'node',
     installCmd: null,
@@ -156,7 +156,7 @@ function mkWt(repo, n, p) {
 }
 const rWeb = mkRepo(REPO_WEB, {});
 const rUnity = mkRepo(REPO_UNITY, {
-  baseDir: 'D:\\wt\\TomsLands',
+  baseDir: 'D:\\WorkTree\\TomsLands',
   kind: 'unity',
   keepDirs: ['Library'],
   seedLibraryFrom: 'D:\\Unity\\TomsLands\\Library',
@@ -365,7 +365,7 @@ const server = http.createServer(async (req, res) => {
       ok: true,
       projects: [
         { path: 'C:\\Users\\yanor\\cc-hub', lastUsed: now - 5 * MIN },
-        { path: 'C:\\wt\\TomsLands\\.base', lastUsed: now - 60 * MIN },
+        { path: 'D:\\WorkTree\\TomsLands\\.base', lastUsed: now - 60 * MIN },
         { path: 'C:\\Users\\yanor\\cc-remote', lastUsed: now - 600 * MIN },
       ],
     });
@@ -374,7 +374,7 @@ const server = http.createServer(async (req, res) => {
       ok: true,
       sessions: [
         { id: crypto.randomUUID(), cwd: 'C:\\Users\\yanor\\cc-hub', title: 'デーモンの WS プロトコルを実装', mtime: now - 20 * MIN },
-        { id: crypto.randomUUID(), cwd: 'C:\\wt\\TomsLands\\wt-03', title: 'インベントリ UI の不具合修正', mtime: now - 300 * MIN },
+        { id: crypto.randomUUID(), cwd: 'D:\\WorkTree\\TomsLands\\wt-03', title: 'インベントリ UI の不具合修正', mtime: now - 300 * MIN },
       ],
     });
   // ---------------- フェーズ 2: リポジトリ / worktree

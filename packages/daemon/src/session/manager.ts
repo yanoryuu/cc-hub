@@ -12,7 +12,29 @@ import type {
   StartSessionRequest,
 } from '@cc-hub/shared';
 import { bus } from '../bus';
-import type { HubConfig } from '../config';
+import { dataDir, type HubConfig } from '../config';
+
+// 終了したセッションの最後の画面(デーモン再起動後も「どう終わったか」を見られるように保存する)
+const SCREEN_MAX_BYTES = 512 * 1024;
+function screenFile(id: string): string {
+  return path.join(dataDir(), 'screens', `${id.replace(/[^0-9a-zA-Z-]/g, '')}.ans`);
+}
+function saveScreen(id: string, data: string): void {
+  try {
+    const f = screenFile(id);
+    fs.mkdirSync(path.dirname(f), { recursive: true });
+    fs.writeFileSync(f, data.length > SCREEN_MAX_BYTES ? data.slice(-SCREEN_MAX_BYTES) : data);
+  } catch {
+    /* 保存できなくても動作には影響しない */
+  }
+}
+function loadScreen(id: string): string | null {
+  try {
+    return fs.readFileSync(screenFile(id), 'utf8');
+  } catch {
+    return null;
+  }
+}
 import type { Store, SessionRow } from '../store/db';
 import type { AgentTree } from '../agents/tree';
 import type { UsageTracker } from '../usage';
@@ -491,6 +513,7 @@ export class SessionManager {
       this.sessions.delete(id);
       this.store.deleteSession(id);
       this.agents.removeSession(id);
+      fs.rm(screenFile(id), { force: true }, () => {});
       bus.state({ t: 'session.remove', id });
       return;
     }
@@ -573,7 +596,8 @@ export class SessionManager {
 
   private runDetect(e: Entry): void {
     if (!e.host?.alive) return;
-    const next = detectApproval(e.host.tailLines(25), e.info.cwd);
+    // 画面全体を見る(行数の多い画面では、ダイアログが末尾 25 行より上に描かれることがある)
+    const next = detectApproval(e.host.tailLines(Math.max(25, e.host.rows)), e.info.cwd);
     if (next && this.autoTrust(e, next)) return;
     const prevJson = JSON.stringify(e.detected);
     if (JSON.stringify(next) === prevJson) return;
@@ -616,6 +640,12 @@ export class SessionManager {
     if (status === 'awaiting_approval') e.statusBeforeApproval = info.status;
     else e.statusBeforeApproval = null;
     info.status = status;
+    // 区切りのよいところで画面を保存しておく(終了時は Claude がフルスクリーン表示を抜けて画面が空になるため、
+    // 終了後に見せる「最後の画面」はここで保存したものを使う)。描画が落ち着くまで少し待つ
+    if (e.host?.alive && (status === 'awaiting_input' || status === 'awaiting_approval' || status === 'idle')) {
+      const host = e.host;
+      setTimeout(() => host.alive && host.snapshot((d) => saveScreen(info.id, d)), 800);
+    }
     if (quiet) return;
     if (status === 'awaiting_approval') {
       const q = info.approval?.question || (info.currentTool ? `${info.currentTool.name}: ${info.currentTool.target}` : '承認が必要です');
@@ -666,6 +696,18 @@ export class SessionManager {
 
     this.agents.handleHook(info.id, b);
 
+    // バックグラウンド待機中に最後のエージェントが終わったら、少し待っても再開しなければ「入力待ち」にする
+    if (ev === 'SubagentStop' && info.currentTool?.name === '待機' && this.agents.runningCount(info.id) === 0) {
+      const mark = info.lastEventAt;
+      setTimeout(() => {
+        if (info.lastEventAt === mark && info.status === 'running' && info.currentTool?.name === '待機') {
+          info.currentTool = null;
+          this.setStatus(e, 'awaiting_input');
+          this.touch(e, false);
+        }
+      }, 20000);
+    }
+
     // managed で PTY が無い(終了済み)なら状態は PTY 側の判定を優先する
     const dead = info.managed && !e.host?.alive;
     const fromSubagent = typeof b.agent_id === 'string' && !!b.agent_id;
@@ -711,6 +753,17 @@ export class SessionManager {
           if (fromSubagent) break;
           info.currentTool = null;
           if (typeof b.last_assistant_message === 'string') info.lastMessage = b.last_assistant_message.slice(0, 200);
+          {
+            // バックグラウンドのサブエージェントが動いている間は、ターンが終わっても「入力待ち」にしない
+            // (Claude はエージェントの完了通知で自動的に再開するため、ここで通知するとユーザーを早く呼びすぎる)
+            const bg = Array.isArray(b.background_tasks) ? b.background_tasks.length : 0;
+            const running = Math.max(bg, this.agents.runningCount(info.id));
+            if (running > 0) {
+              info.currentTool = { name: '待機', target: `バックグラウンドのエージェント ${running} 件`, since: now };
+              this.setStatus(e, 'running');
+              break;
+            }
+          }
           this.setStatus(e, 'awaiting_input');
           break;
         case 'StopFailure':
@@ -774,9 +827,17 @@ export class SessionManager {
   snapshot(id: string, cb: (data: string, cols: number, rows: number) => void): void {
     const e = this.sessions.get(id);
     if (!e) return cb('\x1b[31m[セッションが見つかりません]\x1b[0m\r\n', DEFAULT_COLS, DEFAULT_ROWS);
-    if (!e.host) {
-      const note = e.info.managed ? '' : '\x1b[90m[外部セッション: ターミナルは表示できません]\x1b[0m\r\n';
-      return cb(note, e.info.cols || DEFAULT_COLS, e.info.rows || DEFAULT_ROWS);
+    if (!e.host || !e.host.alive) {
+      if (!e.info.managed) return cb('\x1b[90m[外部セッション: ターミナルは表示できません]\x1b[0m\r\n', DEFAULT_COLS, DEFAULT_ROWS);
+      // 生きている PTY が無い: 区切りごとに保存しておいた最後の画面を出す
+      const saved = loadScreen(id);
+      const exit = e.info.exitCode != null ? `終了コード ${e.info.exitCode}。` : '';
+      const note = saved
+        ? `\r\n\x1b[90m[停止前の最後の画面です。${exit}「再起動」で会話の続きから再開できます]\x1b[0m\r\n`
+        : `\x1b[90m[このセッションの画面は残っていません。${exit}「再起動」で会話の続きから再開できます]\x1b[0m\r\n`;
+      const cols = e.host?.cols || e.info.cols || DEFAULT_COLS;
+      const rows = e.host?.rows || e.info.rows || DEFAULT_ROWS;
+      return cb((saved ?? '') + note, cols, rows);
     }
     const host = e.host;
     host.snapshot((data) => cb(data, host.cols, host.rows));

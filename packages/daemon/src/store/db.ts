@@ -211,6 +211,10 @@ export class Store {
   }
 
   // ------------------------------------------------------------ agents
+  deleteAgent(agentId: string): void {
+    this.db.prepare('DELETE FROM agents WHERE agent_id = ?').run(agentId);
+  }
+
   saveAgent(a: AgentNode): void {
     this.db
       .prepare(

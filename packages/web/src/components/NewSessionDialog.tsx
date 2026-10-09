@@ -331,8 +331,8 @@ function FolderTab({ busy, err, setErr, start, onClose }: TabProps) {
     api('/api/projects')
       .then((r) => {
         const list = pick<ProjectEntry[]>(r, 'projects') ?? [];
+        // 先頭のプロジェクトを自動選択しない: 意図しない実プロジェクトで起動してしまうのを防ぐ
         setProjects(list);
-        if (list[0]) setCwd((c) => c || list[0].path);
       })
       .catch(() => setProjects([]));
   }, []);
@@ -378,6 +378,9 @@ function FolderTab({ busy, err, setErr, start, onClose }: TabProps) {
         </div>
       )}
       {projects === null && <div className="muted small">プロジェクト一覧を読み込み中…</div>}
+      <div className="muted small">
+        worktree は使わず、このフォルダで直接動きます。並行作業にはリポジトリからの起動を使ってください。
+      </div>
       <ModeSeg mode={mode} setMode={setMode} />
       <label className="field">
         <span>名前(任意)</span>
@@ -397,7 +400,7 @@ function FolderTab({ busy, err, setErr, start, onClose }: TabProps) {
         <button type="button" className="btn" onClick={onClose}>
           キャンセル
         </button>
-        <button type="submit" className="btn primary" disabled={busy}>
+        <button type="submit" className="btn primary" disabled={busy || !cwd.trim()}>
           {busy ? '起動中…' : '起動'}
         </button>
       </div>

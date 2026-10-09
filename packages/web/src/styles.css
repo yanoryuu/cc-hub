@@ -525,6 +525,51 @@ kbd {
 .sgroup {
   margin-bottom: 6px;
 }
+/* 終了したセッション(畳んで表示) */
+.sgroup-done {
+  border-top: 1px solid var(--border);
+  margin-top: 6px;
+  padding-top: 2px;
+}
+.sgroup-done-head {
+  justify-content: space-between;
+  align-items: center;
+}
+.sgroup-toggle {
+  background: none;
+  border: 0;
+  padding: 2px 0;
+  color: var(--fg-2);
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+  display: inline-flex;
+  gap: 6px;
+  align-items: center;
+}
+.sgroup-toggle:hover {
+  color: var(--fg);
+}
+.sgroup-count {
+  font-weight: 400;
+  color: var(--dim);
+}
+.link-btn {
+  background: none;
+  border: 0;
+  padding: 0;
+  color: var(--accent);
+  font: inherit;
+  font-weight: 400;
+  cursor: pointer;
+}
+.link-btn:disabled {
+  color: var(--dim);
+  cursor: default;
+}
+.sgroup-done .srow {
+  opacity: 0.75;
+}
 .sgroup-title {
   display: flex;
   align-items: baseline;
@@ -1135,10 +1180,11 @@ kbd {
 .toasts {
   position: fixed;
   right: 16px;
-  top: 52px; /* 入力バーを隠さないよう右上に出す */
+  /* デスクトップは右下(右パネル下部の空き)に出す。右上だとエージェントツリーを隠してしまう */
+  bottom: 16px;
   z-index: 60;
   display: flex;
-  flex-direction: column;
+  flex-direction: column-reverse;
   gap: 8px;
   width: min(360px, calc(100% - 32px));
 }
@@ -2401,6 +2447,12 @@ input:disabled {
     padding: 5px 9px;
     font-size: 12px;
   }
+  /* スマホは下に入力欄とタブがあるので上に出す */
+  .toasts {
+    top: 52px;
+    bottom: auto;
+    flex-direction: column;
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -2410,4 +2462,12 @@ input:disabled {
     animation: none !important;
     transition: none !important;
   }
+}
+
+/* 1 行に収めて末尾を … にする(全文は title で確認) */
+.ellipsis {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
 }

@@ -16,6 +16,20 @@ function ApprovalDrawer() {
   const open = useHub((s) => s.approvalDrawer);
   const setOpen = useHub((s) => s.setApprovalDrawer);
   const openSession = useHub((s) => s.open);
+  const pending = useHub((s) => Object.values(s.sessions).filter((x) => x.approval).length);
+  // 最後の承認に答えて空になったら、少し間を置いて自動で閉じる(空のドロワーが出しっぱなしになるのを防ぐ)
+  useEffect(() => {
+    if (!open || pending > 0) return;
+    const t = setTimeout(() => setOpen(false), 1200);
+    return () => clearTimeout(t);
+  }, [open, pending, setOpen]);
+  // Esc で閉じる
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e: KeyboardEvent) => e.key === 'Escape' && setOpen(false);
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [open, setOpen]);
   if (!open) return null;
   return (
     <>
@@ -56,7 +70,7 @@ export function DesktopApp() {
       if (!e.ctrlKey || e.altKey || e.metaKey) return;
       if (/^[1-9]$/.test(e.key) && !e.shiftKey) {
         const st = useHub.getState();
-        const s = orderedSessions(st.sessions, st.repos)[parseInt(e.key, 10) - 1];
+        const s = orderedSessions(st.sessions, st.repos, st.worktrees)[parseInt(e.key, 10) - 1];
         if (s) {
           e.preventDefault();
           e.stopPropagation();

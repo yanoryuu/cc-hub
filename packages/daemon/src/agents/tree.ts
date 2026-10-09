@@ -30,6 +30,8 @@ const AGENT_TOOLS = new Set(['Agent', 'Task']);
 export class AgentTree {
   readonly agents = new Map<string, AgentNode>();
   private readonly pending = new Map<string, PendingSpawn>(); // key = tool_use_id
+  /** 1 回でもツールを使ったエージェント(内部処理の判定に使う) */
+  private readonly usedTool = new Set<string>();
 
   constructor(private readonly store: Store) {
     for (const a of store.loadAgents()) this.agents.set(a.agentId, a);
@@ -60,6 +62,7 @@ export class AgentTree {
           });
         }
         if (agentId) {
+          this.usedTool.add(agentId);
           const a = this.ensure(sessionId, agentId, b.agent_type);
           a.currentTool = { name: String(b.tool_name || ''), target: toolTarget(b.tool_name, b.tool_input), since: now };
           this.emit(a, false);
@@ -84,6 +87,14 @@ export class AgentTree {
       case 'SubagentStop': {
         if (!agentId) break;
         const a = this.ensure(sessionId, agentId, b.agent_type);
+        // Agent ツール経由でない・説明なし・ツールも使わずに一瞬で終わったものは Claude Code 内部の処理
+        // (セッション終了時の要約など)なので、ツリーから消す
+        if (!this.spawnOf(agentId) && !a.description && !this.usedTool.has(agentId) && now - a.startedAt < 3000) {
+          this.agents.delete(agentId);
+          this.store.deleteAgent(agentId);
+          bus.state({ t: 'agent.remove', agentId });
+          break;
+        }
         if (a.status === 'running') {
           a.status = 'done';
           a.endedAt = now;
@@ -234,6 +245,13 @@ export class AgentTree {
   private emit(a: AgentNode, persist = true): void {
     if (persist) this.store.saveAgent(a);
     bus.state({ t: 'agent.upsert', agent: { ...a } });
+  }
+
+  /** セッション内で実行中のサブエージェント数(バックグラウンド実行の判定に使う) */
+  runningCount(sessionId: string): number {
+    let n = 0;
+    for (const a of this.agents.values()) if (a.sessionId === sessionId && a.status === 'running') n++;
+    return n;
   }
 
   /** セッション終了時: 実行中のエージェントを done にする */

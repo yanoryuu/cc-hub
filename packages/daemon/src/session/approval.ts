@@ -45,26 +45,47 @@ function trustQuestion(cwd: string): string {
 // 1) 番号付き(CC Remote と同じ判定: 2 件以上、どれかにカーソル印)
 function detectNumbered(lines: string[], cwd: string): DetectedApproval | null {
   const optRe = /^[\s│┃]*(❯|>)?\s*(\d+)\.\s+(.+?)\s*[│┃]?\s*$/;
-  const options: { n: string; label: string; selected: boolean }[] = [];
+  const options: { n: string; label: string; selected: boolean; line: number }[] = [];
   let hasCursorMark = false;
-  let question: string | null = null;
-  for (const l of lines) {
+  lines.forEach((l, i) => {
     const m = l.match(optRe);
     if (m) {
       if (m[1]) hasCursorMark = true;
-      options.push({ n: m[2], label: m[3], selected: !!m[1] });
-    } else if (QUESTION_RE.test(l)) {
-      question = l.replace(/[│┃]/g, '').trim();
+      options.push({ n: m[2], label: m[3], selected: !!m[1], line: i });
     }
-  }
+  });
   if (options.length < 2 || !hasCursorMark) return null;
   // 同じ番号が重複している場合(古いリストが画面に残っている等)は、最後の連番だけを使う
   let start = 0;
   for (let i = 1; i < options.length; i++) if (options[i].n === '1') start = i;
   const opts = options.slice(start);
   if (opts.length < 2 || !opts.some((o) => o.selected)) return null;
+  const first = opts[0].line;
+  const last = opts[opts.length - 1].line;
+  // 質問文: 選択肢の上 10 行以内で、既知の質問パターン > '?' を含む行 > 直上の意味のある行 の順に採用
+  // (AskUserQuestion のダイアログは「赤と青、どちらが好きですか？」のような自由な文になる)
+  let question: string | null = null;
+  let fallback: string | null = null;
+  for (let i = first - 1; i >= Math.max(0, first - 10); i--) {
+    const t = lines[i].replace(/[│┃]/g, '').trim();
+    if (!t || BORDER_RE.test(lines[i])) continue;
+    if (QUESTION_RE.test(t)) {
+      question = t;
+      break;
+    }
+    if (!question && /[?？]\s*$/.test(t)) question = t;
+    if (!fallback && !/^[☐☑✔]/.test(t)) fallback = t;
+  }
+  // 誤検知対策(画面全体を見るため): 質問文があるか、選択肢の下 6 行以内に操作ヒントがあること
+  const hint = lines.slice(last + 1, last + 7).some((l) => HINT_RE.test(l));
+  if (!question && !hint) return null;
   if (isTrust(lines)) question = trustQuestion(cwd);
-  return { type: 'options', question: question || 'Claude が確認を求めています', options: opts, numbered: true };
+  return {
+    type: 'options',
+    question: question || fallback || 'Claude が確認を求めています',
+    options: opts.map(({ n, label, selected }) => ({ n, label, selected })),
+    numbered: true,
+  };
 }
 
 // 2) 番号なし: "❯ label" 行と、同じ桁から始まる隣接行を選択肢とみなす。

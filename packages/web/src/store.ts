@@ -231,7 +231,22 @@ export function groupSessions(list: SessionInfo[], repos: Record<string, RepoInf
   return groups;
 }
 
-/** 表示順に並べたセッション一覧(Ctrl+1..9 用) */
-export function orderedSessions(sessions: Record<string, SessionInfo>, repos: Record<string, RepoInfo> = {}): SessionInfo[] {
-  return groupSessions(Object.values(sessions), repos).flatMap((g) => g.sessions);
+/**
+ * 終了済みで、もう操作の必要がないセッション(停止 / エラー かつ 解放待ちの worktree を持たない)。
+ * 一覧では「終了したセッション」に畳んで表示する。
+ */
+export function isFinished(s: SessionInfo, worktrees: Record<string, WorktreeInfo>): boolean {
+  if (s.status !== 'stopped' && s.status !== 'error') return false;
+  const w = s.worktreeId ? worktrees[s.worktreeId] : undefined;
+  return !(w && w.state === 'assigned' && w.sessionId === s.id);
+}
+
+/** 表示順に並べたセッション一覧(Ctrl+1..9 用。終了済みは含めない) */
+export function orderedSessions(
+  sessions: Record<string, SessionInfo>,
+  repos: Record<string, RepoInfo> = {},
+  worktrees: Record<string, WorktreeInfo> = {},
+): SessionInfo[] {
+  const live = Object.values(sessions).filter((s) => !isFinished(s, worktrees));
+  return groupSessions(live, repos).flatMap((g) => g.sessions);
 }

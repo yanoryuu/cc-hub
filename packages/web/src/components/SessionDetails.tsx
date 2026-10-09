@@ -166,7 +166,9 @@ export function SessionDetails({ session }: { session: SessionInfo }) {
         {session.branch && (
           <>
             <dt>ブランチ</dt>
-            <dd className="mono break">{session.branch}</dd>
+            <dd className="mono ellipsis" title={session.branch}>
+              {session.branch}
+            </dd>
           </>
         )}
         <dt>開始</dt>

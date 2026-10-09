@@ -49,8 +49,12 @@ export function PoolChips({ repo, worktrees }: { repo: RepoInfo; worktrees: Work
   const tone = c.idle >= repo.poolMin ? '' : c.idle === 0 && c.preparing === 0 ? 'zero' : 'short';
   return (
     <span className="pool-chips">
-      <span className={`pchip idle ${tone}`} title="待機中 / 目標本数">
-        待機 {c.idle}/{repo.poolMin}
+      {/* 目標を超えている間(返却直後など)は「4/3」と出すと不自然なので本数だけ出す。余剰は一定時間後に自動で削除される */}
+      <span
+        className={`pchip idle ${tone}`}
+        title={c.idle > repo.poolMin ? `待機 ${c.idle} 本(目標 ${repo.poolMin} 本。余った分はしばらく使われなければ削除)` : `待機中 / 目標 ${repo.poolMin} 本`}
+      >
+        待機 {c.idle > repo.poolMin ? c.idle : `${c.idle}/${repo.poolMin}`}
       </span>
       {c.preparing > 0 && <span className="pchip preparing">準備中 {c.preparing}</span>}
       {c.assigned > 0 && <span className="pchip assigned">使用中 {c.assigned}</span>}

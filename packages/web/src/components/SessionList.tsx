@@ -1,6 +1,8 @@
 // セッション一覧(リポジトリ / cwd ごとにグループ化)。デスクトップのサイドバーとモバイルの一覧で共用
+import { useState } from 'react';
 import type { SessionInfo } from '@cc-hub/shared';
-import { groupSessions, useHub } from '../store';
+import { api } from '../api';
+import { groupSessions, isFinished, useHub } from '../store';
 import { STATUS_LABEL, projectLabel } from '../util';
 import { needsRelease, useSessionWorktree } from '../repo';
 import { CtxMeter, StatusDot, toolText } from './common';
@@ -56,12 +58,33 @@ export function SessionList({
 }) {
   const sessions = useHub((s) => s.sessions);
   const repos = useHub((s) => s.repos);
+  const worktrees = useHub((s) => s.worktrees);
   const selectedId = useHub((s) => s.selectedId);
-  const groups = groupSessions(Object.values(sessions), repos);
-  if (groups.length === 0) return <div className="empty">セッションがありません</div>;
+  const [showDone, setShowDone] = useState(false);
+  const [clearing, setClearing] = useState(false);
+  const all = Object.values(sessions);
+  const done = all.filter((s) => isFinished(s, worktrees)).sort((a, b) => b.lastEventAt - a.lastEventAt);
+  const groups = groupSessions(
+    all.filter((s) => !isFinished(s, worktrees)),
+    repos,
+  );
+  if (all.length === 0) return <div className="empty">セッションがありません</div>;
   let idx = 0;
+  const clearDone = async () => {
+    if (!window.confirm(`終了したセッション ${done.length} 件を一覧から削除しますか?(会話の記録は残ります)`)) return;
+    setClearing(true);
+    for (const s of done) {
+      try {
+        await api(`/api/sessions/${encodeURIComponent(s.id)}/control`, { action: 'remove' });
+      } catch {
+        /* 個別の失敗は無視して続ける */
+      }
+    }
+    setClearing(false);
+  };
   return (
     <nav className="slist" aria-label="セッション">
+      {groups.length === 0 && <div className="empty small">動いているセッションはありません</div>}
       {groups.map((g) => (
         <div className="sgroup" key={g.key}>
           <div className="sgroup-title" title={g.sub}>
@@ -94,6 +117,31 @@ export function SessionList({
           })}
         </div>
       ))}
+      {done.length > 0 && (
+        <div className="sgroup sgroup-done">
+          <div className="sgroup-title sgroup-done-head">
+            <button className="sgroup-toggle" onClick={() => setShowDone((v) => !v)} aria-expanded={showDone}>
+              <span aria-hidden="true">{showDone ? '▾' : '▸'}</span> 終了したセッション
+              <span className="sgroup-count">{done.length}</span>
+            </button>
+            {showDone && (
+              <button className="link-btn" onClick={clearDone} disabled={clearing}>
+                {clearing ? '削除中…' : 'すべて削除'}
+              </button>
+            )}
+          </div>
+          {showDone &&
+            done.map((s) => (
+              <SessionRow
+                key={s.id}
+                s={s}
+                index={99}
+                active={!activeOnlyInSessionView && s.id === selectedId}
+                onClick={() => onPick(s.id)}
+              />
+            ))}
+        </div>
+      )}
     </nav>
   );
 }

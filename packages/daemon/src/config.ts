@@ -27,7 +27,8 @@ export interface HubConfig {
   minFreeDiskGB: number;
 }
 
-export const DEFAULT_WORKTREE_ROOTS = { default: 'C:\\wt', unity: 'D:\\wt' };
+// プロジェクトごとに D:\WorkTree\<name>\(.base + wt-NN)を作る。C ドライブの空きが少ないため D に統一
+export const DEFAULT_WORKTREE_ROOTS = { default: 'D:\\WorkTree', unity: 'D:\\WorkTree' };
 
 function numOr(v: unknown, def: number, min: number, max: number): number {
   const n = Number(v);

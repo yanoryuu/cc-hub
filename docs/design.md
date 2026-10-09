@@ -204,19 +204,19 @@ interface AgentNode {
 
 ### 7.1 配置
 ```
-C:\wt\
+D:\WorkTree\
 └─ <repo>\
    ├─ .base\        ← gh repo clone 先(worktree の親リポジトリ)
    ├─ wt-01\        ← worktree
    ├─ wt-02\
    └─ ...
 ```
-- **Unity リポジトリは `D:\wt\<repo>\`、それ以外は `C:\wt\<repo>\`**(Unity の `Library` が大きいため。リポジトリごとに変更可能)
-- `C:\wt` は短いパスにしてあるので、Windows のパス長制限を避けやすい。加えて `core.longpaths=true` を設定する
+- **すべて `D:\WorkTree\<repo>\` に置く**(プロジェクトごとのフォルダ。C ドライブの空きが少ないため。リポジトリごとに変更可能)
+- `D:\WorkTree` は短いパスにしてあるので、Windows のパス長制限を避けやすい。加えて `core.longpaths=true` を設定する
 
 ### 7.2 登録(URL 入力)
 1. URL を正規化する(`https://github.com/o/r(.git)` / `git@...` / `o/r`)
-2. `gh repo clone o/r C:\wt\<r>\.base`
+2. `gh repo clone o/r D:\WorkTree\<r>\.base`
 3. 既定ブランチを判定する(`gh repo view --json defaultBranchRef`)
 4. **プロジェクト種別を判定**して、依存インストールと保持ディレクトリを決める
 
