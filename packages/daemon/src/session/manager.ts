@@ -831,9 +831,11 @@ export class SessionManager {
       if (!e.info.managed) return cb('\x1b[90m[外部セッション: ターミナルは表示できません]\x1b[0m\r\n', DEFAULT_COLS, DEFAULT_ROWS);
       // 生きている PTY が無い: 区切りごとに保存しておいた最後の画面を出す
       const saved = loadScreen(id);
-      const exit = e.info.exitCode != null ? `終了コード ${e.info.exitCode}。` : '';
+      // 終了コードはユーザー操作以外で止まった(エラー)ときだけ出す。停止ボタンでも kill により 1 になるため
+      const exit = e.info.status === 'error' && e.info.exitCode != null ? `終了コード ${e.info.exitCode}。` : '';
+      // 保存画面のカーソル位置(入力欄の途中)に書くと重なるので、最下行へ移動して改行してから出す
       const note = saved
-        ? `\r\n\x1b[90m[停止前の最後の画面です。${exit}「再起動」で会話の続きから再開できます]\x1b[0m\r\n`
+        ? `\x1b[999;1H\r\n\x1b[90m[停止前の最後の画面です。${exit}「再起動」で会話の続きから再開できます]\x1b[0m`
         : `\x1b[90m[このセッションの画面は残っていません。${exit}「再起動」で会話の続きから再開できます]\x1b[0m\r\n`;
       const cols = e.host?.cols || e.info.cols || DEFAULT_COLS;
       const rows = e.host?.rows || e.info.rows || DEFAULT_ROWS;

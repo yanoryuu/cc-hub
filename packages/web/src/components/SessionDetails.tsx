@@ -6,7 +6,6 @@ import { fmtCost, fmtDate } from '../util';
 import { useHub } from '../store';
 import { WT_STATE_LABEL, useSessionWorktree } from '../repo';
 import { StatusBadge } from './common';
-import { ReleaseBanner } from './ReleaseBanner';
 
 export function SessionControls({ session, onDone }: { session: SessionInfo; onDone?: () => void }) {
   const [busy, setBusy] = useState(false);
@@ -176,7 +175,7 @@ export function SessionDetails({ session }: { session: SessionInfo }) {
         <dt>ID</dt>
         <dd className="mono small break">{session.id}</dd>
       </dl>
-      <ReleaseBanner session={session} compact />
+      {/* 解放バナーはセッション画面側(SessionPane)にだけ出す。ここにも出すと二重になる */}
       <SessionControls session={session} />
     </section>
   );

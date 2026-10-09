@@ -13,7 +13,8 @@ const has = (dir: string, f: string) => fs.existsSync(path.join(dir, f));
 /** クローン後のファイルから種別を判定する */
 export function detectKind(dir: string): RepoKind {
   if (has(dir, path.join('ProjectSettings', 'ProjectVersion.txt'))) return 'unity';
-  if (has(dir, 'package.json') && NODE_LOCKS.some((f) => has(dir, f))) return 'node';
+  // lockfile が無くても package.json があれば Node(npm install で入れる。生成された lockfile は初期化時に消える)
+  if (has(dir, 'package.json')) return 'node';
   if (has(dir, 'pyproject.toml') || has(dir, 'requirements.txt')) return 'python';
   return 'other';
 }

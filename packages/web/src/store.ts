@@ -166,9 +166,18 @@ export const useHub = create<Store>((set, get) => ({
   setApprovalDrawer: (approvalDrawer) => set({ approvalDrawer }),
   setNewSessionOpen: (newSessionOpen, repoId = null) => set({ newSessionOpen, newSessionRepo: repoId }),
   pushToast: (event) => {
+    const st = get();
+    // いま見ているセッションの通知は画面に出ているので出さない(スマホでは承認バナーを隠してしまうため)
+    const mobile = typeof window !== 'undefined' && window.innerWidth < 900;
+    const viewing =
+      st.selectedId === event.sessionId &&
+      (mobile ? st.mobileTab === 'sessions' && st.mobileDetail : st.deskView === 'session') &&
+      (typeof document === 'undefined' || document.visibilityState === 'visible');
+    if (viewing) return;
     const id = toastSeq++;
-    set((st) => ({ toasts: [...st.toasts.slice(-3), { id, event }] }));
-    setTimeout(() => get().dismissToast(id), 8000);
+    // 同じセッションの古い通知は置き換える(承認待ち → 入力待ち と積み重ならないように)
+    set((s) => ({ toasts: [...s.toasts.filter((t) => t.event.sessionId !== event.sessionId).slice(-2), { id, event }] }));
+    setTimeout(() => get().dismissToast(id), mobile ? 5000 : 8000);
   },
   dismissToast: (id) => set((st) => ({ toasts: st.toasts.filter((t) => t.id !== id) })),
 }));

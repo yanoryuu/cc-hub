@@ -206,7 +206,7 @@ export function SessionPane({
             </>
           ) : (
             <div className="stopped-bar">
-              セッションは停止しています{session.exitCode != null ? `(終了コード ${session.exitCode})` : ''}
+              {session.status === 'error' ? `エラーで終了しました${session.exitCode != null ? `(終了コード ${session.exitCode})` : ''}` : 'セッションは停止しています'}
               <button className="btn" onClick={() => sessionApi.control(session.id, 'restart').catch(() => {})}>
                 再起動
               </button>

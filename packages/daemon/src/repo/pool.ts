@@ -410,6 +410,20 @@ export class WorktreePool {
   private async install(repo: RepoInfo, w: WorktreeRow, logFile: string): Promise<void> {
     const cmd = installCommand(repo, w.path);
     const hash = lockHash(w.path);
+    // lockfile を持たない Node リポジトリで npm install すると package-lock.json が生成される。
+    // セッションが誤ってコミットしないよう、共通の .git/info/exclude に入れておく(全 worktree に効く)
+    if (cmd === 'npm install') {
+      try {
+        const exclude = path.join(repo.baseDir, '.base', '.git', 'info', 'exclude');
+        const cur = fs.existsSync(exclude) ? fs.readFileSync(exclude, 'utf8') : '';
+        if (!/^\/?package-lock\.json$/m.test(cur)) {
+          fs.mkdirSync(path.dirname(exclude), { recursive: true });
+          fs.appendFileSync(exclude, `${cur && !cur.endsWith('\n') ? '\n' : ''}# CC Hub: npm install が生成する lockfile\n/package-lock.json\n`);
+        }
+      } catch {
+        /* 除外できなくても致命的ではない */
+      }
+    }
     if (cmd) {
       this.set(w, { progress: `${cmd} 実行中` });
       const r = await run(cmd, [], { cwd: w.path, shell: true, timeout: INSTALL_TIMEOUT, logFile });
