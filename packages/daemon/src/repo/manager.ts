@@ -374,7 +374,8 @@ export class RepoManager {
     const w = await this.pool.release(info.worktreeId, mode, sessionId);
     this.sessions.markReleased(sessionId, mode);
     const { installHash: _h, failCount: _f, ...pub } = w;
-    return pub;
+    // 変更状況は assigned の間だけ見せる(契約どおり。解放後に古い数字を返さない)
+    return { ...pub, git: null };
   }
 
   // ================================================================ worktree 個別操作
