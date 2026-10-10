@@ -119,6 +119,8 @@ export class SessionManager {
   private repoHooks: RepoHooks | null = null;
   /** プロジェクトの共通の指示ファイル(--append-system-prompt-file に渡す)。無ければ null */
   private instructionsFor: ((info: SessionInfo) => string | null) | null = null;
+  /** cwd → 登録リポジトリ(linkedDirs の中なら)。RepoManager が設定する */
+  private repoForCwd: ((cwd: string) => string | null) | null = null;
 
   constructor(
     private readonly cfg: HubConfig,
@@ -133,6 +135,29 @@ export class SessionManager {
 
   setInstructionsResolver(fn: (info: SessionInfo) => string | null): void {
     this.instructionsFor = fn;
+  }
+
+  setRepoResolver(fn: (cwd: string) => string | null): void {
+    this.repoForCwd = fn;
+  }
+
+  private resolveRepo(cwd: string): string | null {
+    if (!cwd || !this.repoForCwd) return null;
+    try {
+      return this.repoForCwd(cwd);
+    } catch {
+      return null;
+    }
+  }
+
+  /** 既存のセッションを登録リポジトリに紐付ける(再スキャン)。紐付けたら true */
+  linkRepo(id: string, repoId: string, branch: string | null): boolean {
+    const e = this.sessions.get(id);
+    if (!e || e.info.repoId) return false;
+    e.info.repoId = repoId;
+    if (!e.info.branch && branch) e.info.branch = branch;
+    this.touch(e);
+    return true;
   }
 
   /** プロジェクトの共通の指示を渡す引数(指示が無ければ空) */
@@ -193,6 +218,14 @@ export class SessionManager {
     // /clear 直後で新しい会話に何も送っていない場合は transcript が無いので、元の ID で再開する
     if (e.claudeId && (findTranscript(e.claudeId) || !findTranscript(e.info.id))) return e.claudeId;
     return e.info.id;
+  }
+
+  /** 会話を写して横から質問するときの --resume の ID(会話の記録が無ければ null) */
+  resumeIdFor(id: string): string | null {
+    const e = this.sessions.get(id);
+    if (!e) return null;
+    const rid = this.resumeId(e);
+    return findTranscript(rid) ? rid : null;
   }
 
   private require(id: string): Entry {
@@ -260,7 +293,7 @@ export class SessionManager {
       cols: managed ? DEFAULT_COLS : 0,
       rows: managed ? DEFAULT_ROWS : 0,
       exitCode: null,
-      repoId: null,
+      repoId: this.resolveRepo(cwd),
       worktreeId: null,
       branch: null,
       handedOff: false,
@@ -333,7 +366,7 @@ export class SessionManager {
       permissionMode: r.permission_mode,
       lastMessage: r.last_message,
       exitCode: r.exit_code,
-      repoId: r.repo_id ?? null,
+      repoId: r.repo_id ?? info.repoId,
       worktreeId: r.worktree_id ?? null,
       branch: r.branch ?? null,
       handedOff: !!r.handed_off && !r.managed,
@@ -1005,7 +1038,8 @@ export class SessionManager {
     if (quiet) return;
     if (status === 'awaiting_approval') {
       const q = info.approval?.question || (info.currentTool ? `${info.currentTool.name}: ${info.currentTool.target}` : '承認が必要です');
-      this.notify(e, 'approval', '承認待ち', q);
+      const opts = info.approval?.options.map((o) => `${o.n}. ${o.label}`) ?? [];
+      this.notify(e, 'approval', '承認待ち', [q, ...opts].join('\n'));
     } else if (status === 'awaiting_input') {
       this.notify(e, 'input', '入力待ち', info.lastMessage || '');
     } else if (status === 'error') {

@@ -1,6 +1,6 @@
 // 管理画面「Git」: ターゲット(worktree / .base / フォルダ)ごとのステージング・コミット・Push・コミット履歴
 import { useEffect, useMemo, useRef, useState } from 'react';
-import type { FileChange, GitTarget, ProjectOverview, SessionInfo } from '@cc-hub/shared';
+import type { FileChange, GitBranchItem, GitTarget, ProjectOverview, SessionInfo } from '@cc-hub/shared';
 import { errText, isConflict } from '../api';
 import { useHub } from '../store';
 import { CHANGE_LABEL, changeCount, isWorking, projectApi } from '../project';
@@ -132,6 +132,7 @@ function TargetGit({
   const [log, setLog] = useState<LogEntry[]>([]);
   const [conflict, setConflict] = useState<string | null>(null);
   const [pushOpen, setPushOpen] = useState(false);
+  const [branchOpen, setBranchOpen] = useState(false);
   const msgRef = useRef<HTMLTextAreaElement>(null);
 
   const addLog = (ok: boolean, text: string) => setLog((l) => [{ id: logSeq++, ts: Date.now(), ok, text }, ...l].slice(0, 20));
@@ -307,6 +308,14 @@ function TargetGit({
             ↑{t.ahead} ↓{t.behind}
           </span>
           {t.unpushed > 0 && <span className="gstat warn">未 push <b>{t.unpushed}</b></span>}
+          <button
+            className="btn sm"
+            disabled={t.kind !== 'dir' || !!busy}
+            onClick={() => setBranchOpen(true)}
+            title={t.kind === 'dir' ? 'ブランチを切り替える' : 'CC Hub の作業ツリーと .base のブランチは CC Hub が管理しています(セッションごとにブランチが決まります)'}
+          >
+            ⑂ ブランチを切り替え
+          </button>
           <span className="spacer" />
           {session && (
             <button className="wt-session" onClick={() => open(session.id)} title="セッションを開く">
@@ -471,7 +480,135 @@ function TargetGit({
           }}
         />
       )}
+      {branchOpen && (
+        <BranchModal
+          t={t}
+          onClose={() => setBranchOpen(false)}
+          onDone={(ok, text) => {
+            addLog(ok, text);
+            if (ok) reload();
+          }}
+        />
+      )}
     </>
+  );
+}
+
+/** ブランチの切り替え(一覧から選ぶ / 今の位置から新しく作る)。作業中のセッションがあれば 409 → 同意のチェックで強制 */
+function BranchModal({ t, onClose, onDone }: { t: GitTarget; onClose: () => void; onDone: (ok: boolean, text: string) => void }) {
+  const [list, setList] = useState<GitBranchItem[] | null>(null);
+  const [loadErr, setLoadErr] = useState<string | null>(null);
+  const [filter, setFilter] = useState('');
+  const [pick, setPick] = useState<string | null>(null);
+  const [newName, setNewName] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const [blocked, setBlocked] = useState<string | null>(null);
+  const [ack, setAck] = useState(false);
+  const now = useNow(60000);
+
+  useEffect(() => {
+    projectApi
+      .branches(t.id)
+      .then(setList)
+      .catch((e) => setLoadErr(errText(e, 'ブランチの一覧を取得できませんでした')));
+  }, [t.id]);
+
+  const creating = newName.trim().length > 0;
+  const target = creating ? newName.trim() : pick;
+  const q = filter.trim().toLowerCase();
+  const shown = (list ?? []).filter((b) => !q || b.name.toLowerCase().includes(q));
+
+  const run = async () => {
+    if (!target) return;
+    setBusy(true);
+    setErr(null);
+    const force = !!blocked;
+    try {
+      await projectApi.switchBranch({ target: t.id, branch: target, create: creating || undefined, force: force || undefined });
+      onDone(true, `${target} に切り替えました${creating ? '(新しいブランチ)' : ''}`);
+      onClose();
+    } catch (e) {
+      const msg = errText(e, '切り替えに失敗しました');
+      if (isConflict(e) && !force && /作業中/.test(msg)) setBlocked(msg);
+      else setErr(msg);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <ConfirmModal
+      title="ブランチを切り替え"
+      confirmLabel={blocked ? 'それでも切り替える' : creating ? '作成して切り替え' : '切り替え'}
+      danger={!!blocked}
+      wide
+      busy={busy}
+      confirmDisabled={!target || (!creating && target === t.branch) || (!!blocked && !ack)}
+      error={err}
+      onConfirm={() => void run()}
+      onClose={onClose}
+    >
+      <p>
+        <span className="mono strong">{t.label}</span> のブランチを切り替えます(今: <span className="mono">{t.branch ?? 'detached'}</span>)。
+        コミットしていない変更があると切り替えられません。
+      </p>
+      <label className="field">
+        <span>ブランチを探す</span>
+        <input value={filter} onChange={(e) => setFilter(e.target.value)} placeholder="名前で絞り込み" disabled={creating} />
+      </label>
+      {loadErr ? (
+        <div className="form-error">{loadErr}</div>
+      ) : !list ? (
+        <div className="muted small">
+          <Spinner /> 読み込み中…
+        </div>
+      ) : (
+        <ul className={`br-pick ${creating ? 'off' : ''}`} role="listbox" aria-label="ブランチ">
+          {shown.length === 0 && <li className="muted small">該当するブランチはありません</li>}
+          {shown.map((b) => {
+            const disabled = b.current || !!b.checkedOutAt;
+            return (
+              <li key={`${b.local ? 'l' : 'r'}:${b.name}`}>
+                <button
+                  type="button"
+                  role="option"
+                  aria-selected={pick === b.name}
+                  className={`br-item ${pick === b.name ? 'on' : ''}`}
+                  disabled={disabled || creating}
+                  onClick={() => setPick(b.name)}
+                  title={b.checkedOutAt ? `別の作業ツリーで使用中: ${b.checkedOutAt}` : undefined}
+                >
+                  <span className="mono br-name">{b.name}</span>
+                  {b.current && <span className="tag">今のブランチ</span>}
+                  {!b.local && <span className="tag">origin のみ</span>}
+                  {b.checkedOutAt && <span className="tag ro">別の作業ツリーで使用中</span>}
+                  <span className="spacer" />
+                  {b.date > 0 && (
+                    <span className="muted small" title={fmtDate(b.date)}>
+                      {fmtAgo(b.date, now)}
+                    </span>
+                  )}
+                </button>
+              </li>
+            );
+          })}
+        </ul>
+      )}
+      <label className="field">
+        <span>または、今の位置から新しいブランチを作る</span>
+        <input className="mono" value={newName} onChange={(e) => setNewName(e.target.value)} placeholder="例: feat/new-stage" />
+      </label>
+      {blocked && (
+        <>
+          <div className="warn-box">{blocked}</div>
+          <label className={`check-field ${ack ? 'danger-on' : ''}`}>
+            <input type="checkbox" checked={ack} onChange={(e) => setAck(e.target.checked)} />
+            <span>理解した上で切り替える</span>
+          </label>
+        </>
+      )}
+    </ConfirmModal>
   );
 }
 

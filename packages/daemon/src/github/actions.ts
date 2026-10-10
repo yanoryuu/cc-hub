@@ -1,6 +1,6 @@
 // PR まわりの操作(F5-3): 詳細取得 / PR 作成の指示 / 「直して」/ PR から新規セッション / マージ / クローズ。
 // GitHub を変更する gh 呼び出しは必ず ghMutate を通す(ログ "[gh] <args>")。
-import type { MergeMethod, PrComment, PrDetail, PrInfo, RepoInfo, SessionInfo, SessionMode } from '@cc-hub/shared';
+import type { MergeMethod, PrComment, PrDetail, PrInfo, PrReviewEvent, RepoInfo, SessionInfo, SessionMode } from '@cc-hub/shared';
 import type { RepoManager } from '../repo/manager';
 import { deliverInstruction } from '../repo/manager';
 import type { SessionManager } from '../session/manager';
@@ -18,6 +18,38 @@ export interface FixResult {
 }
 
 const METHODS = new Set<MergeMethod>(['squash', 'merge', 'rebase']);
+
+const REVIEW_FLAGS: Record<PrReviewEvent, string> = {
+  approve: '--approve',
+  request_changes: '--request-changes',
+  comment: '--comment',
+};
+
+/** 「Claude にレビューさせる」の指示 */
+export function buildReviewInstruction(
+  repoId: string,
+  pr: Pick<PrInfo, 'number' | 'title' | 'headRefName' | 'baseRefName'>,
+  o: { post: boolean; note: string },
+): string {
+  const n = pr.number;
+  const lines = [
+    `PR #${n}「${pr.title}」(${pr.baseRefName} ← ${pr.headRefName})をレビューしてください。`,
+    'コードは変更しないでください(編集・コミット・push はしない)。',
+    '',
+    `1. \`gh pr view ${n} --repo ${repoId}\` と \`gh pr diff ${n} --repo ${repoId}\` で変更内容を把握し、必要なら周辺のコードも読む`,
+    '2. 観点: 不具合・境界条件・エラー処理・セキュリティ・性能・既存コードとの一貫性・テストの不足',
+    '3. 指摘は重大な順に「重大度(高 / 中 / 低)・ファイル:行・問題・修正案」の形で書く。問題が無ければそう書く',
+    '4. 最後に総評(このままマージしてよいか)を 1〜2 行で書く',
+  ];
+  if (o.post) {
+    lines.push(
+      `5. レビュー結果を Markdown で作業ツリーの外の一時ファイル(例: %TEMP%\\pr-${n}-review.md)に書き、` +
+        `\`gh pr review ${n} --repo ${repoId} --comment --body-file <そのファイル>\` で GitHub に投稿する(承認・修正依頼はしない。判断はユーザーが行う)`,
+    );
+  }
+  if (o.note) lines.push('', `補足: ${o.note}`);
+  return lines.join('\n');
+}
 
 /** レビュースレッド(未解決のみ使う) */
 const THREADS_QUERY = `query($owner:String!,$name:String!,$n:Int!){repository(owner:$owner,name:$name){pullRequest(number:$n){reviewThreads(first:100){nodes{isResolved isOutdated path line originalLine comments(first:30){nodes{author{login} body createdAt url}}}}}}}`;
@@ -263,5 +295,49 @@ export class PrActions {
     if (r.code !== 0) throw new HttpError(409, `クローズできませんでした: ${tail(r, 500)}`);
     await this.watcher.poll(repo, true);
     return { ok: true };
+  }
+
+  // ================================================================ レビュー
+  /** GitHub にレビューを送る(承認 / 修正依頼 / コメント)。自分の PR は GitHub の仕様で承認・修正依頼できない */
+  async review(repoId: string, n: unknown, body: any): Promise<{ ok: true }> {
+    const repo = this.repo(repoId);
+    const num = this.num(n);
+    const event = String(body?.event || '') as PrReviewEvent;
+    const flag = REVIEW_FLAGS[event];
+    if (!flag) throw new HttpError(400, "event は 'approve' / 'request_changes' / 'comment' のいずれかです");
+    const text = typeof body?.body === 'string' ? body.body.trim().slice(0, 60_000) : '';
+    if (event !== 'approve' && !text) throw new HttpError(400, '修正依頼とコメントには本文が必要です');
+    const args = ['pr', 'review', String(num), '--repo', repo.id, flag];
+    if (text) args.push('--body', text);
+    const r = await ghMutate(args, { timeout: 60_000 });
+    if (r.code !== 0) {
+      const msg = tail(r, 500);
+      if (/own pull request/i.test(msg)) throw new HttpError(409, '自分の PR は GitHub の仕様で承認・修正依頼できません(コメントは送れます)');
+      throw new HttpError(409, `レビューを送れませんでした: ${msg}`);
+    }
+    console.log(`[pr] ${repo.id}#${num} にレビューを送りました (${event})`);
+    await this.watcher.poll(repo, true);
+    return { ok: true };
+  }
+
+  /** PR のブランチで Claude にレビューさせる(コードは変更させない)。post = 結果を GitHub にコメントとして投稿させる */
+  async aiReview(repoId: string, n: unknown, body: any): Promise<{ ok: true; session: SessionInfo }> {
+    const repo = this.repo(repoId);
+    const num = this.num(n);
+    const pr = this.watcher.get(repo.id, num) ?? (await this.detail(repo.id, num));
+    if (pr.state !== 'OPEN') throw new HttpError(409, `この PR は ${pr.state} です`);
+    const post = body?.post === true;
+    const note = typeof body?.note === 'string' ? body.note.trim().slice(0, 4000) : '';
+    const mode: SessionMode = body?.mode === 'commander' ? 'commander' : 'plain';
+    const session = this.repos.startPrSession({
+      repoId: repo.id,
+      number: num,
+      headRefName: pr.headRefName,
+      mode,
+      instruction: buildReviewInstruction(repo.id, pr, { post, note }),
+      name: `PR #${num} レビュー`,
+    });
+    console.log(`[pr] ${repo.id}#${num}: Claude にレビューさせます${post ? '(結果を GitHub に投稿)' : ''}`);
+    return { ok: true, session };
   }
 }

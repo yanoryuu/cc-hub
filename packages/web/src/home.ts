@@ -146,7 +146,8 @@ export function useProjectCatalog(): Catalog {
   const recent = useRecentProjects();
 
   return useMemo(() => {
-    const baseDirs: [string, string][] = repoList.map((r) => [normPath(r.baseDir), r.id]);
+    // 置き場所と、紐付けたクローン済みのフォルダ
+    const baseDirs: [string, string][] = repoList.flatMap((r) => [r.baseDir, ...(r.linkedDirs ?? [])].map((d): [string, string] => [normPath(d), r.id]));
     const repoSessions: Record<string, SessionInfo[]> = {};
     const folderMap = new Map<string, { path: string; sessions: SessionInfo[]; lastUsed: number; recent: boolean }>();
     const addFolder = (path: string) => {

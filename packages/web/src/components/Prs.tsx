@@ -1,6 +1,6 @@
 // PR 画面(フェーズ 3): 一覧 / 詳細 / 操作ダイアログ。デスクトップとモバイルで共用
 import { useEffect, useMemo, useState } from 'react';
-import type { CheckState, MergeMethod, PrDetail, PrInfo, SessionMode } from '@cc-hub/shared';
+import type { CheckState, MergeMethod, PrDetail, PrInfo, PrReviewEvent, SessionMode } from '@cc-hub/shared';
 import { errText, pickSessionId, prApi } from '../api';
 import { useHub } from '../store';
 import {
@@ -438,7 +438,7 @@ const MERGE_LABEL: Record<MergeMethod, string> = {
 };
 
 /** 「マージ」確認ダイアログ。override = 条件を満たしていないのにマージする */
-function MergeDialog({
+export function MergeDialog({
   pr,
   override,
   onClose,
@@ -552,9 +552,133 @@ function CloseDialog({ pr, onClose, onDone }: { pr: PrInfo; onClose: () => void;
   );
 }
 
+const REVIEW_EVENT_LABEL: Record<PrReviewEvent, string> = {
+  comment: 'コメント',
+  approve: '承認',
+  request_changes: '修正依頼',
+};
+
+/** GitHub にレビューを送る(承認 / 修正依頼 / コメント) */
+function ReviewDialog({ pr, onClose, onDone }: { pr: PrInfo; onClose: () => void; onDone: (n: Notice) => void }) {
+  // 自分の PR は GitHub の仕様で承認・修正依頼できない
+  const [event, setEvent] = useState<PrReviewEvent>(pr.mine ? 'comment' : 'approve');
+  const [body, setBody] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const needBody = event !== 'approve';
+  const run = async () => {
+    setBusy(true);
+    setErr(null);
+    try {
+      await prApi.review(pr.repoId, pr.number, event, body.trim());
+      onDone({ text: `#${pr.number} に${REVIEW_EVENT_LABEL[event]}を送りました` });
+      onClose();
+    } catch (e) {
+      setErr(errText(e, 'レビューを送れませんでした'));
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <ConfirmModal
+      title={`#${pr.number} をレビュー`}
+      confirmLabel={`${REVIEW_EVENT_LABEL[event]}を送る`}
+      wide
+      busy={busy}
+      confirmDisabled={needBody && !body.trim()}
+      error={err}
+      onConfirm={() => void run()}
+      onClose={onClose}
+    >
+      <p className="fix-target">
+        <span className="mono">
+          {pr.repoId}#{pr.number}
+        </span>{' '}
+        {pr.title}
+      </p>
+      <div className="field">
+        <span>種類</span>
+        <div className="seg small">
+          {(['comment', 'approve', 'request_changes'] as PrReviewEvent[]).map((ev) => (
+            <button
+              key={ev}
+              type="button"
+              className={event === ev ? 'on' : ''}
+              disabled={pr.mine && ev !== 'comment'}
+              title={pr.mine && ev !== 'comment' ? '自分の PR は承認・修正依頼できません(GitHub の仕様)' : undefined}
+              onClick={() => setEvent(ev)}
+            >
+              {REVIEW_EVENT_LABEL[ev]}
+            </button>
+          ))}
+        </div>
+      </div>
+      {pr.mine && <p className="hint">自分の PR は GitHub の仕様で承認・修正依頼ができないため、コメントだけ送れます。</p>}
+      <label className="field">
+        <span>本文{needBody ? '' : '(任意)'}</span>
+        <textarea
+          rows={6}
+          value={body}
+          onChange={(e) => setBody(e.target.value)}
+          placeholder={event === 'approve' ? '例: LGTM' : event === 'request_changes' ? '直してほしい点を書いてください' : 'コメント(Markdown)'}
+        />
+      </label>
+    </ConfirmModal>
+  );
+}
+
+/** 「Claude にレビューさせる」: PR のブランチで新しいセッションを起動してレビューさせる */
+function AiReviewDialog({ pr, onClose, onDone }: { pr: PrInfo; onClose: () => void; onDone: (n: Notice) => void }) {
+  const open = useHub((s) => s.open);
+  const [note, setNote] = useState('');
+  const [post, setPost] = useState(() => readLocal('cchub_ai_review_post', '0') === '1');
+  const [mode, setMode] = useState<SessionMode>('plain');
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const run = async () => {
+    setBusy(true);
+    setErr(null);
+    try {
+      writeLocal('cchub_ai_review_post', post ? '1' : '0');
+      const r = await prApi.aiReview(pr.repoId, pr.number, { post, mode, ...(note.trim() ? { note: note.trim() } : {}) });
+      const sid = pickSessionId(r);
+      onClose();
+      if (sid) open(sid);
+      else onDone({ text: 'レビュー用のセッションを起動しました' });
+    } catch (e) {
+      setErr(errText(e, '起動に失敗しました'));
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <ConfirmModal title="Claude にレビューさせる" confirmLabel="レビュー開始" wide busy={busy} error={err} onConfirm={() => void run()} onClose={onClose}>
+      <p>
+        プールの worktree に <span className="mono">{pr.headRefName}</span> を checkout して新しいセッションを起動し、差分をレビューさせます。コードは変更させません。
+      </p>
+      <label className="field">
+        <span>観点の補足(任意)</span>
+        <textarea rows={3} value={note} onChange={(e) => setNote(e.target.value)} placeholder="例: パフォーマンスとエラー処理を重点的に" />
+      </label>
+      <label className="check-field">
+        <input type="checkbox" checked={post} onChange={(e) => setPost(e.target.checked)} />
+        <span>レビュー結果を GitHub の PR にコメントとして投稿させる(承認・修正依頼はしません)</span>
+      </label>
+      <ModeSeg mode={mode} setMode={setMode} />
+    </ConfirmModal>
+  );
+}
+
 // ---------------------------------------------------------------- 詳細
 
-type Dialog = null | { t: 'fix'; kind: 'comments' | 'checks' } | { t: 'open' } | { t: 'merge'; override: boolean } | { t: 'close' };
+type Dialog =
+  | null
+  | { t: 'fix'; kind: 'comments' | 'checks' }
+  | { t: 'open' }
+  | { t: 'merge'; override: boolean }
+  | { t: 'close' }
+  | { t: 'review' }
+  | { t: 'ai-review' };
 
 interface TimelineItem {
   key: string;
@@ -744,6 +868,13 @@ export function PrDetailPage({ id, mobile = false }: { id: string; mobile?: bool
         {open && (
           <>
             <span className="pr-actions-sep" aria-hidden="true" />
+            <button className="btn" onClick={() => setDialog({ t: 'ai-review' })} title="PR のブランチで Claude に差分をレビューさせる">
+              Claude にレビューさせる
+            </button>
+            <button className="btn" onClick={() => setDialog({ t: 'review' })} title="GitHub にレビュー(承認 / 修正依頼 / コメント)を送る">
+              レビューを送る
+            </button>
+            <span className="pr-actions-sep" aria-hidden="true" />
             <button
               className={`btn ${mergeOk ? 'approve' : ''}`}
               disabled={!mergeOk}
@@ -878,6 +1009,8 @@ export function PrDetailPage({ id, mobile = false }: { id: string; mobile?: bool
         <MergeDialog pr={pr} override={dialog.override} onClose={() => setDialog(null)} onDone={setNotice} />
       )}
       {dialog?.t === 'close' && <CloseDialog pr={pr} onClose={() => setDialog(null)} onDone={setNotice} />}
+      {dialog?.t === 'review' && <ReviewDialog pr={pr} onClose={() => setDialog(null)} onDone={setNotice} />}
+      {dialog?.t === 'ai-review' && <AiReviewDialog pr={pr} onClose={() => setDialog(null)} onDone={setNotice} />}
     </div>
   );
 }

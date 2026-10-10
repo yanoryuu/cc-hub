@@ -294,7 +294,7 @@ async function handle(d: ServerDeps, req: http.IncomingMessage, res: http.Server
     return json(res, 200, { ok: true, prs: d.github.all() });
   }
 
-  const pm = /^\/api\/prs\/([^/]+)\/(\d+)(?:\/(fix|open-session|merge|close))?$/.exec(p);
+  const pm = /^\/api\/prs\/([^/]+)\/(\d+)(?:\/(fix|open-session|merge|close|review|ai-review))?$/.exec(p);
   if (pm) {
     const repoId = decodeURIComponent(pm[1]);
     const n = Number(pm[2]);
@@ -310,6 +310,10 @@ async function handle(d: ServerDeps, req: http.IncomingMessage, res: http.Server
           return json(res, 200, await d.prs.merge(repoId, n, body.method));
         case 'close':
           return json(res, 200, await d.prs.close(repoId, n));
+        case 'review':
+          return json(res, 200, await d.prs.review(repoId, n, body));
+        case 'ai-review':
+          return json(res, 200, await d.prs.aiReview(repoId, n, body));
       }
     }
   }
@@ -318,6 +322,12 @@ async function handle(d: ServerDeps, req: http.IncomingMessage, res: http.Server
   if (cp && method === 'POST') {
     const body = await readBody(req);
     return json(res, 200, d.prs.createPr(decodeURIComponent(cp[1]), body.draft === true));
+  }
+
+  const rs = /^\/api\/repos\/([^/]+)\/rescan$/.exec(p);
+  if (rs && method === 'POST') {
+    const body = await readBody(req);
+    return json(res, 200, { ok: true, ...(await d.repos.rescan(decodeURIComponent(rs[1]), { addWorktrees: body?.addWorktrees })) });
   }
 
   const rm = /^\/api\/repos\/([^/]+)(\/refill)?$/.exec(p);
@@ -380,6 +390,14 @@ async function handle(d: ServerDeps, req: http.IncomingMessage, res: http.Server
 
   if (p === '/api/git/commit' && method === 'POST') {
     return json(res, 200, { ok: true, commit: await d.project.commit(await readBody(req)) });
+  }
+
+  if (p === '/api/git/branches' && method === 'GET') {
+    return json(res, 200, { ok: true, branches: await d.project.branches(url.searchParams.get('target')) });
+  }
+
+  if (p === '/api/git/switch' && method === 'POST') {
+    return json(res, 200, { ok: true, target: await d.project.switchBranch(await readBody(req)) });
   }
 
   if (p === '/api/git/push' && method === 'POST') {

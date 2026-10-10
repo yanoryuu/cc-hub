@@ -1,13 +1,16 @@
 // 通知の振り分け(種類・絞り込み・間引き・表示中の抑制・Windows の出し先)と Discord(URL の検証・本文)のテスト。
 // 実行: npm run test -w @cc-hub/daemon
 import assert from 'node:assert/strict';
-import type { NotifyEvent, NotifySettings } from '@cc-hub/shared';
+import type { DeployJob, NotifyEvent, NotifySettings } from '@cc-hub/shared';
 import { Throttle, prTopic, route, throttleKey, topicOf } from '../src/notify/topic';
 import { DESCRIPTION_MAX, DiscordSender, buildPayload, maskWebhook, redact, retryAfterMs, validateWebhookUrl } from '../src/notify/discord';
 import { defaultSettings, loadStored, mergeUpdate, toPublic } from '../src/notify/settings';
 import { NotifyService } from '../src/notify/service';
 import { emitNotify } from '../src/notify/emit';
 import { bus } from '../src/bus';
+import { parseInteraction, parseReply, splitMessage } from '../src/notify/bot';
+import { DeployApprovals, buttons, cardText, customId, parseCustomId } from '../src/notify/approvals';
+import { HISTORY_TURNS, btwPrompt, decideReply } from '../src/notify/replies';
 
 let passed = 0;
 const pending: Promise<void>[] = [];
@@ -270,7 +273,7 @@ test('NotifyService: emitNotify → 間引き・抑制・Windows の出し先・
     await flush();
     assert.deepEqual(toasts, ['入力待ち: login-fix']); // 未接続 → デーモン
     assert.equal(posts.length, 1);
-    assert.equal(posts[0].u, 'http://127.0.0.1:1/hook');
+    assert.equal(posts[0].u, 'http://127.0.0.1:1/hook?wait=true');
     assert.equal(posts[0].body.embeds[0].fields[0].value, 'login-fix');
     // 間引き: 同じセッション・種類は 60 秒以内は出さない
     emitNotify(ev({ kind: 'input', title: '入力待ち 2' }));
@@ -299,6 +302,180 @@ test('NotifyService: emitNotify → 間引き・抑制・Windows の出し先・
     svc.stop();
     delete process.env.CC_HUB_TEST;
   }
+});
+
+// ------------------------------------------------------------ Discord Bot(通知への返信)
+test('Bot: 人のメッセージを拾う(返信先 / スレッドへの書き込み。Bot の発言は無視)', () => {
+  const base = { id: 'm2', channel_id: 'c1', content: ' はい ', author: { id: '111', username: 'me' }, message_reference: { message_id: 'm1' } };
+  assert.deepEqual(parseReply(base), { refMessageId: 'm1', channelId: 'c1', messageId: 'm2', authorId: '111', authorName: 'me', content: 'はい' });
+  assert.equal(parseReply({ ...base, author: { id: '2', bot: true } }), null);
+  // 返信ではない書き込み(スレッド内など)は返信先なし
+  assert.equal(parseReply({ ...base, message_reference: undefined })?.refMessageId, null);
+  assert.equal(parseReply(null), null);
+});
+
+test('Bot: 続けての質問にはそれまでのやり取りを渡す', () => {
+  assert.ok(!btwPrompt('Q').includes('やり取り'));
+  const p = btwPrompt('次は?', [
+    { q: '何を直した?', a: 'ログインを直しました' },
+    { q: 'テストは?', a: '通っています' },
+  ]);
+  assert.ok(p.includes('Q: 何を直した?') && p.includes('A: 通っています'));
+  assert.ok(p.endsWith('次は?'));
+  // 古いやり取りは HISTORY_TURNS 件まで
+  const many = Array.from({ length: 10 }, (_, i) => ({ q: `q${i}`, a: `a${i}` }));
+  const p2 = btwPrompt('x', many);
+  assert.ok(!p2.includes('Q: q0') && p2.includes(`Q: q${10 - 1}`) && p2.includes(`Q: q${10 - HISTORY_TURNS}`));
+});
+
+test('Bot: 長い答えは分けて送る', () => {
+  assert.deepEqual(splitMessage('短い'), ['短い']);
+  const long = Array.from({ length: 100 }, (_, i) => `${i} ${'x'.repeat(60)}`).join('\n');
+  const parts = splitMessage(long, 1000, 3);
+  assert.equal(parts.length, 3);
+  assert.ok(parts.every((p) => p.length <= 1000 + 30));
+  assert.ok(parts[2].endsWith('(長いので省略しました)'));
+});
+
+test('Bot: 返信はすべて横からの質問(先頭の /btw は取り除く)', () => {
+  const info = (status: string) => ({ id: 's', name: 'n', status, approval: null }) as any;
+  assert.deepEqual(decideReply(undefined, 'x'), { kind: 'missing' });
+  assert.deepEqual(decideReply(info('awaiting_input'), ' 続けて '), { kind: 'btw', text: '続けて' });
+  assert.deepEqual(decideReply(info('awaiting_approval'), '1'), { kind: 'btw', text: '1' });
+  assert.deepEqual(decideReply(info('running'), '/btw 今なにしてる?'), { kind: 'btw', text: '今なにしてる?' });
+  assert.deepEqual(decideReply(info('stopped'), '/BTW'), { kind: 'btw', text: '' });
+  assert.ok(btwPrompt('Q').endsWith('Q'));
+});
+
+test('Bot: 設定(トークンは暗号化 / 形式チェック / 削除 / トークン無しでは有効にできない)', async () => {
+  const enc = async (p: string) => `enc:${p}`;
+  const token = 'test-fake-bot-token-0000.dummy.not-a-real-secret-0000';
+  const s1 = await mergeUpdate(defaultSettings(), { bot: { enabled: true, token: `Bot ${token}`, allowedUserIds: '123456789012345678, abc' } }, enc);
+  assert.equal(s1.bot.tokenEnc, `enc:${token}`);
+  assert.deepEqual(s1.bot.allowedUserIds, ['123456789012345678']);
+  assert.deepEqual(toPublic(s1).bot, { enabled: true, allowedUserIds: ['123456789012345678'], hasToken: true, approvalChannelId: '' });
+  assert.ok(!JSON.stringify(toPublic(s1)).includes(token));
+  // token を送らなければ据え置き
+  const s2 = await mergeUpdate(s1, { bot: { enabled: false } }, enc);
+  assert.equal(s2.bot.tokenEnc, s1.bot.tokenEnc);
+  assert.equal(s2.bot.enabled, false);
+  // bot を送らなければ全部据え置き
+  assert.deepEqual((await mergeUpdate(s1, { throttleSeconds: 5 }, enc)).bot, s1.bot);
+  await assert.rejects(mergeUpdate(s1, { bot: { token: 'not-a-token' } }, enc));
+  await assert.rejects(mergeUpdate(defaultSettings(), { bot: { enabled: true } }, enc));
+  const s3 = await mergeUpdate(s1, { bot: { enabled: false, clearToken: true } }, enc);
+  assert.equal(s3.bot.tokenEnc, '');
+  assert.deepEqual(loadStored(JSON.parse(JSON.stringify(s1))).bot, s1.bot);
+});
+
+// ------------------------------------------------------------ 承認ボタン(アップロード / Firebase デプロイ)
+const job = (o: Partial<DeployJob> = {}): DeployJob =>
+  ({
+    id: 'j1',
+    serverId: 'sv',
+    serverName: 'ポートフォリオ本番',
+    localDir: 'D:/site/dist',
+    requestedBy: { kind: 'claude', sessionId: 's1', sessionName: 'login-fix' },
+    note: '修正を反映',
+    state: 'pending_approval',
+    buildCommand: null,
+    plan: null,
+    progress: null,
+    log: [],
+    error: null,
+    createdAt: 1,
+    finishedAt: null,
+    url: null,
+    ...o,
+  }) as DeployJob;
+
+test('承認ボタン: custom_id とボタン・本文', () => {
+  assert.deepEqual(parseCustomId(customId('approve', 'abc:1')), { action: 'approve', jobId: 'abc:1' });
+  assert.equal(parseCustomId('other:x'), null);
+  assert.equal(parseCustomId('cchub:deploy:drop:j1'), null);
+  const b = buttons(job()) as any[];
+  assert.deepEqual(b[0].components.map((c: any) => c.label), ['承認', '却下']);
+  const fb = job({ state: 'preview_ready', firebase: { projectId: 'p', projectDir: 'd', targets: ['hosting'], preview: true, channel: 'c', previewUrl: 'https://p--c.web.app', previewExpiresAt: null, promoted: false } });
+  assert.deepEqual((buttons(fb) as any[])[0].components.map((c: any) => c.label), ['本番に反映', 'やめる']);
+  assert.ok(cardText(job()).includes('アップロードの承認'));
+  assert.ok(cardText(job()).includes('login-fix'));
+  assert.ok(cardText(fb).includes('https://p--c.web.app'));
+  assert.deepEqual(parseInteraction({ type: 3, id: 'i', token: 't', channel_id: 'c', message: { id: 'm' }, data: { custom_id: 'x' }, member: { user: { id: '1', username: 'me' } } }), {
+    id: 'i', token: 't', customId: 'x', userId: '1', userName: 'me', channelId: 'c', messageId: 'm',
+  });
+  assert.equal(parseInteraction({ type: 2, id: 'i', token: 't' }), null);
+});
+
+test('承認ボタン: 投稿 → 押して承認 / 許可されていない人 / CC Hub で先に操作', async () => {
+  const posts: any[] = [];
+  const edits: any[] = [];
+  const responses: any[] = [];
+  const calls: string[] = [];
+  const ap = new DeployApprovals({
+    channelId: () => 'C1',
+    allowed: (u) => u === 'me',
+    post: async (ch, body) => {
+      posts.push({ ch, body });
+      return `m${posts.length}`;
+    },
+    edit: async (ch, id, body) => {
+      edits.push({ ch, id, body });
+    },
+    respond: async (_i, type, data) => {
+      responses.push({ type, data });
+    },
+  });
+  ap.setActions({
+    approve: (id) => (calls.push(`approve:${id}`), job({ id, state: 'planning' })),
+    reject: (id) => (calls.push(`reject:${id}`), job({ id, state: 'rejected' })),
+    promote: (id) => (calls.push(`promote:${id}`), job({ id, state: 'uploading' })),
+    cancel: (id) => (calls.push(`cancel:${id}`), job({ id, state: 'cancelled' })),
+  });
+  const flush = () => new Promise((r) => setTimeout(r, 10));
+  ap.onState({ t: 'deploy.upsert', deploy: job() });
+  ap.onState({ t: 'deploy.upsert', deploy: job() }); // 同じ状態では投稿し直さない
+  await flush();
+  assert.equal(posts.length, 1);
+  assert.equal(posts[0].ch, 'C1');
+  const click = (customIdStr: string, userId: string) =>
+    ap.onInteraction({ id: 'i', token: 't', customId: customIdStr, userId, userName: userId, channelId: 'C1', messageId: 'm1' });
+  // 許可されていない人 → 本人にだけ見えるメッセージ、操作しない
+  await click(customId('approve', 'j1'), 'other');
+  assert.equal(calls.length, 0);
+  assert.equal(responses[0].type, 4);
+  assert.equal(responses[0].data.flags, 64);
+  // 承認 → メッセージを書き換えてボタンを外す
+  await click(customId('approve', 'j1'), 'me');
+  assert.deepEqual(calls, ['approve:j1']);
+  assert.equal(responses[1].type, 7);
+  assert.deepEqual(responses[1].data.components, []);
+  assert.ok(responses[1].data.content.includes('承認しました'));
+  // その後の状態の変化ではメッセージを書き換えない
+  ap.onState({ t: 'deploy.upsert', deploy: job({ state: 'uploading' }) });
+  await flush();
+  assert.equal(edits.length, 0);
+  // 別の申請を CC Hub で却下 → Discord のボタンを外す
+  ap.onState({ t: 'deploy.upsert', deploy: job({ id: 'j2' }) });
+  await flush();
+  ap.onState({ t: 'deploy.upsert', deploy: job({ id: 'j2', state: 'rejected' }) });
+  await flush();
+  assert.equal(edits.length, 1);
+  assert.deepEqual(edits[0].body.components, []);
+  assert.ok(edits[0].body.content.includes('CC Hub で操作'));
+  // 操作に失敗(状態が変わっていた)→ 本人にだけエラー
+  ap.setActions({ ...{ approve: () => { throw new Error('承認待ちではありません'); } }, reject: () => null, promote: () => null, cancel: () => null } as any);
+  await click(customId('approve', 'j3'), 'me');
+  assert.equal(responses[2].type, 4);
+  assert.ok(responses[2].data.content.includes('承認待ちではありません'));
+});
+
+test('承認ボタン: チャンネル ID の設定', async () => {
+  const enc = async (p: string) => `enc:${p}`;
+  const s1 = await mergeUpdate(defaultSettings(), { bot: { approvalChannelId: ' 123456789012345678 ' } }, enc);
+  assert.equal(s1.bot.approvalChannelId, '123456789012345678');
+  assert.equal(toPublic(s1).bot?.approvalChannelId, '123456789012345678');
+  assert.equal((await mergeUpdate(s1, { bot: { approvalChannelId: 'abc' } }, enc)).bot.approvalChannelId, '');
+  assert.equal((await mergeUpdate(s1, { bot: { enabled: false } }, enc)).bot.approvalChannelId, '123456789012345678');
 });
 
 void Promise.all(pending).then(() => console.log(`\nnotify: ${passed} passed`));

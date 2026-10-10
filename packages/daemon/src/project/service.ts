@@ -9,6 +9,7 @@ import type {
   Artifact,
   CommitInfo,
   FileChangeStatus,
+  GitBranchItem,
   GitTarget,
   ProjectOverview,
   ProjectTokens,
@@ -21,7 +22,7 @@ import { normalizeRepoUrl } from '../repo/manager';
 import type { GitStatWatcher } from '../repo/gitstat';
 import type { GitHubWatcher } from '../github/watcher';
 import { baseOf } from '../repo/pool';
-import { Semaphore, git, tail, type RunResult } from '../repo/exec';
+import { Semaphore, git, normPath, tail, type RunResult } from '../repo/exec';
 import { HttpError } from '../util';
 import {
   LOG_FORMAT,
@@ -168,7 +169,11 @@ export class ProjectService {
   private async buildRepo(repo: RepoInfo): Promise<ProjectOverview> {
     const all = Object.values(this.d.sessions.all());
     const sessions = all
-      .filter((s) => eqi(s.repoId, repo.id) || (!!s.cwd && isInside(repo.baseDir, s.cwd)))
+      .filter(
+        (s) =>
+          eqi(s.repoId, repo.id) ||
+          (!!s.cwd && (isInside(repo.baseDir, s.cwd) || (repo.linkedDirs ?? []).some((d) => isInside(d, s.cwd)))),
+      )
       .sort((a, b) => b.createdAt - a.createdAt);
     const list: { t: Target; idle: boolean }[] = [];
     for (const w of this.d.repos.pool.forRepo(repo.id)) {
@@ -190,6 +195,15 @@ export class ProjectService {
     const base = baseOf(repo);
     if (repo.status === 'ready' && isDir(base)) {
       list.push({ t: { id: `base:${repo.id}`, kind: 'base', label: '.base', path: base, repo, worktreeId: null, sessionId: this.guessSession(base, all) }, idle: false });
+    }
+    // 紐付けたクローン済みのフォルダ(再スキャンで見つけたもの)。プールの外なので dir として扱う
+    for (const dir of repo.linkedDirs ?? []) {
+      if (!isDir(dir)) continue;
+      const top = path.resolve(dir);
+      list.push({
+        t: { id: `dir:${top}`, kind: 'dir', label: path.basename(top) || top, path: top, repo: null, worktreeId: null, sessionId: this.guessSession(top, all) },
+        idle: false,
+      });
     }
     const sem = new Semaphore(TARGET_PARALLEL);
     const computed = await Promise.all(
@@ -603,6 +617,83 @@ export class ProjectService {
     console.log(`[git] commit ${t.id} ${commit.sha.slice(0, 8)} ${commit.subject.slice(0, 80)}`);
     this.after(t);
     return commit;
+  }
+
+  // ================================================================ ブランチの切り替え
+  /** 切り替え先の候補: ローカルのブランチ + origin にだけあるブランチ(新しい順) */
+  async branches(targetId: unknown): Promise<GitBranchItem[]> {
+    const t = await this.resolve(targetId);
+    const fmt = '%(refname)%09%(HEAD)%09%(upstream:short)%09%(committerdate:unix)';
+    const [refs, wl] = await Promise.all([
+      g(t.path, ['for-each-ref', `--format=${fmt}`, 'refs/heads', 'refs/remotes/origin'], 30_000),
+      g(t.path, ['worktree', 'list', '--porcelain'], 30_000),
+    ]);
+    if (refs.code !== 0) throw new HttpError(409, `ブランチの一覧を取得できませんでした: ${tail(refs)}`);
+    // 別の作業ツリーでチェックアウト中のブランチ
+    const elsewhere = new Map<string, string>();
+    let wtPath = '';
+    for (const line of wl.stdout.split(/\r?\n/)) {
+      if (line.startsWith('worktree ')) wtPath = path.resolve(line.slice(9).trim());
+      const m = /^branch refs\/heads\/(.+)$/.exec(line.trim());
+      if (m && normPath(wtPath) !== normPath(t.path)) elsewhere.set(m[1], wtPath);
+    }
+    const local = new Map<string, GitBranchItem>();
+    const remote: GitBranchItem[] = [];
+    for (const line of refs.stdout.split(/\r?\n/)) {
+      const [ref, head, upstream, date] = line.split('\t');
+      if (!ref) continue;
+      const item = (name: string, isLocal: boolean): GitBranchItem => ({
+        name,
+        current: head === '*',
+        local: isLocal,
+        upstream: upstream || null,
+        date: Number(date) * 1000 || 0,
+        checkedOutAt: isLocal ? elsewhere.get(name) ?? null : null,
+      });
+      if (ref.startsWith('refs/heads/')) local.set(ref.slice(11), item(ref.slice(11), true));
+      else if (ref.startsWith('refs/remotes/origin/') && ref !== 'refs/remotes/origin/HEAD') remote.push(item(ref.slice(20), false));
+    }
+    const list = [...local.values(), ...remote.filter((r) => !local.has(r.name))];
+    return list.sort((a, b) => Number(b.current) - Number(a.current) || b.date - a.date);
+  }
+
+  /** ブランチを切り替える(create = 今の位置から新しいブランチを作る) */
+  async switchBranch(body: any): Promise<GitTarget> {
+    const t = await this.resolve(body?.target);
+    if (t.kind !== 'dir') {
+      throw new HttpError(409, 'CC Hub の作業ツリーと .base のブランチは CC Hub が管理しているため切り替えられません(セッションごとにブランチが決まります)');
+    }
+    const name = typeof body?.branch === 'string' ? body.branch.trim() : '';
+    if (!name) throw new HttpError(400, 'ブランチ名を指定してください');
+    const create = body?.create === true;
+    const valid = await g(t.path, ['check-ref-format', '--branch', name], 30_000);
+    if (valid.code !== 0 || name.startsWith('-')) throw new HttpError(400, `ブランチ名に使えない文字が含まれています: ${name}`);
+    if (body?.force !== true) {
+      const busy = this.busySession(t);
+      if (busy) throw new HttpError(409, `セッションが作業中です(${busy.name})。Claude の作業中にブランチを変えると混乱するので、止まってから切り替えるか強制してください`);
+    }
+    const dirty = await g(t.path, ['status', '--porcelain', '--untracked-files=no'], 30_000);
+    if (dirty.stdout.trim()) throw new HttpError(409, 'コミットしていない変更があります。先にコミットするか、変更を戻してから切り替えてください');
+    await this.withLock(t, false, async () => {
+      let args: string[];
+      if (create) {
+        args = ['switch', '-c', name];
+      } else {
+        const hasLocal = await g(t.path, ['rev-parse', '--verify', '--quiet', `refs/heads/${name}`], 30_000);
+        const hasRemote = hasLocal.code === 0 ? null : await g(t.path, ['rev-parse', '--verify', '--quiet', `refs/remotes/origin/${name}`], 30_000);
+        if (hasLocal.code !== 0 && hasRemote?.code !== 0) throw new HttpError(404, `ブランチが見つかりません: ${name}`);
+        args = hasLocal.code === 0 ? ['switch', name] : ['switch', '-c', name, '--track', `origin/${name}`];
+      }
+      const r = await g(t.path, args);
+      if (r.code !== 0) {
+        const msg = tail(r);
+        if (/already (checked out|used by worktree)/i.test(msg)) throw new HttpError(409, `このブランチは別の作業ツリーで使われているため切り替えられません: ${msg}`);
+        throw new HttpError(409, `git switch に失敗しました: ${msg}`);
+      }
+    });
+    console.log(`[git] switch ${t.id} → ${name}${create ? '(新規)' : ''}`);
+    this.after(t);
+    return (await this.compute(t)).target;
   }
 
   async push(body: any): Promise<{ branch: string; output: string }> {

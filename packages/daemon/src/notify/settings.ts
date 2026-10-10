@@ -11,8 +11,61 @@ export interface StoredDiscordTarget extends DiscordTarget {
   webhookEnc: string;
 }
 
-export interface StoredNotifySettings extends Omit<NotifySettings, 'discord'> {
+/** 保存形式の Discord Bot(tokenEnc = DPAPI の暗号文。'' = 未設定) */
+export interface StoredBotSettings {
+  enabled: boolean;
+  allowedUserIds: string[];
+  tokenEnc: string;
+  /** アップロードの承認ボタンを出すチャンネル ID('' = 出さない) */
+  approvalChannelId: string;
+}
+
+export interface StoredNotifySettings extends Omit<NotifySettings, 'discord' | 'bot'> {
   discord: StoredDiscordTarget[];
+  bot: StoredBotSettings;
+}
+
+/** Discord のユーザー ID(数字 17〜20 桁)だけ残す */
+function userIds(v: unknown): string[] {
+  const list = Array.isArray(v) ? v : typeof v === 'string' ? v.split(/[\s,、]+/) : [];
+  return [...new Set(list.map((x) => String(x).trim()).filter((x) => /^\d{15,25}$/.test(x)))].slice(0, 20);
+}
+
+/** Discord のチャンネル ID(数字)。それ以外は '' */
+function channelId(v: unknown): string {
+  const s = typeof v === 'string' ? v.trim() : '';
+  return /^[0-9]{15,25}$/.test(s) ? s : '';
+}
+
+function loadBot(raw: unknown): StoredBotSettings {
+  const b = (raw && typeof raw === 'object' ? raw : {}) as Partial<StoredBotSettings>;
+  return {
+    enabled: b.enabled === true,
+    allowedUserIds: userIds(b.allowedUserIds),
+    tokenEnc: typeof b.tokenEnc === 'string' ? b.tokenEnc : '',
+    approvalChannelId: channelId(b.approvalChannelId),
+  };
+}
+
+/** PUT の bot を検証する。token に新しい値があるときだけ暗号化して差し替え、clearToken: true なら消す */
+async function mergeBot(cur: StoredBotSettings, b: any, protect: (plain: string) => Promise<string>): Promise<StoredBotSettings> {
+  if (b == null) return cur;
+  if (typeof b !== 'object') throw new HttpError(400, 'bot の形式が不正です');
+  let tokenEnc = cur.tokenEnc;
+  const token = typeof b.token === 'string' ? b.token.trim().replace(/^Bot\s+/i, '') : '';
+  if (b.clearToken === true) tokenEnc = '';
+  if (token) {
+    if (!/^[\w-]{20,}\.[\w-]{4,}\.[\w-]{20,}$/.test(token)) throw new HttpError(400, 'Bot のトークンの形式が正しくありません(Developer Portal の Bot → Reset Token で表示されるもの)');
+    tokenEnc = await protect(token);
+  }
+  const next: StoredBotSettings = {
+    enabled: b.enabled == null ? cur.enabled : b.enabled === true,
+    allowedUserIds: b.allowedUserIds == null ? cur.allowedUserIds : userIds(b.allowedUserIds),
+    approvalChannelId: b.approvalChannelId == null ? cur.approvalChannelId : channelId(b.approvalChannelId),
+    tokenEnc,
+  };
+  if (next.enabled && !next.tokenEnc) throw new HttpError(400, 'Bot を有効にするにはトークンを入力してください');
+  return next;
 }
 
 export const DEFAULT_WINDOWS_TOPICS: NotifyTopic[] = ['approval', 'input', 'error', 'pr_ci_failed', 'pr_review', 'pr_merged', 'deploy_request', 'deploy_done'];
@@ -23,6 +76,7 @@ export function defaultSettings(): StoredNotifySettings {
     windows: { enabled: true, topics: [...DEFAULT_WINDOWS_TOPICS], suppressWhenViewing: true },
     discord: [],
     throttleSeconds: 30,
+    bot: { enabled: false, allowedUserIds: [], tokenEnc: '', approvalChannelId: '' },
   };
 }
 
@@ -56,6 +110,7 @@ export function loadStored(raw: unknown): StoredNotifySettings {
           }))
       : [],
     throttleSeconds: clampThrottle(r.throttleSeconds, d.throttleSeconds),
+    bot: loadBot(r.bot),
   };
 }
 
@@ -71,6 +126,7 @@ export function toPublic(s: StoredNotifySettings): NotifySettings {
     windows: { ...s.windows, topics: [...s.windows.topics] },
     discord: s.discord.map(({ webhookEnc: _e, ...t }) => ({ ...t, repoIds: [...t.repoIds], topics: [...t.topics] })),
     throttleSeconds: s.throttleSeconds,
+    bot: { enabled: s.bot.enabled, allowedUserIds: [...s.bot.allowedUserIds], hasToken: !!s.bot.tokenEnc, approvalChannelId: s.bot.approvalChannelId },
   };
 }
 
@@ -93,6 +149,7 @@ export async function mergeUpdate(
     },
     discord: [],
     throttleSeconds: body.throttleSeconds == null ? cur.throttleSeconds : clampThrottle(body.throttleSeconds, cur.throttleSeconds),
+    bot: await mergeBot(cur.bot, body.bot, protect),
   };
   const list = body.discord == null ? null : body.discord;
   if (list == null) {

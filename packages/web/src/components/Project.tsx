@@ -15,12 +15,13 @@ import {
   useProjectOverview,
   useProjectSessions,
 } from '../project';
-import { fmtAgo, findSessionPr, needsAttention } from '../pr';
+import { canMerge, fmtAgo, findSessionPr, mergeBlockers, needsAttention } from '../pr';
+import { errText, repoApi } from '../api';
 import { needsRelease } from '../repo';
 import { STATUS_ICON, fmtCost, fmtDate, useNow } from '../util';
 import { StatusBadge, toolText } from './common';
-import { Spinner } from './RepoCommon';
-import { CheckIcon, PrChip, PrRow } from './Prs';
+import { PoolChips, Spinner } from './RepoCommon';
+import { CheckIcon, MergeDialog, PrChip, PrRow } from './Prs';
 import { RepoPage } from './Repos';
 import { ArtifactsTab } from './ProjectArtifacts';
 import { GitTab } from './ProjectGit';
@@ -201,7 +202,7 @@ function ProjectDashboard({ route, mobile }: { route: ProjectRoute; mobile: bool
   } else if (tab === 'sessions') {
     body = <SessionsTab sessions={sessions} data={data} tokens={tokens} mobile={mobile} />;
   } else if (tab === 'worktrees') {
-    body = <WorktreesTab data={data} gotoGit={gotoGit} />;
+    body = <WorktreesTab data={data} gotoGit={gotoGit} reload={reload} />;
   } else if (tab === 'artifacts') {
     body = <ArtifactsTab data={data} sessions={storeSessions} mobile={mobile} />;
   } else if (tab === 'prs') {
@@ -592,13 +593,86 @@ function SessionsTab({
 
 // ---------------------------------------------------------------- 作業ツリー
 
-function WorktreesTab({ data, gotoGit }: { data: ProjectOverview; gotoGit: (id: string) => void }) {
+/** リポジトリの作業ツリーの操作: 再スキャン(同じリポジトリのフォルダとセッションを紐付ける)/ 待機の作業ツリーを増やす */
+function WorktreeToolbar({ repoId, reload }: { repoId: string; reload: () => void }) {
+  const repo = useHub((s) => s.repos[repoId]);
+  const allWt = useHub((s) => s.worktrees);
+  const worktrees = useMemo(() => Object.values(allWt).filter((w) => w.repoId === repoId), [allWt, repoId]);
+  const [busy, setBusy] = useState<'scan' | 'add' | null>(null);
+  const [msg, setMsg] = useState<{ text: string; error?: boolean } | null>(null);
+  if (!repo) return null;
+  const run = async (kind: 'scan' | 'add') => {
+    setBusy(kind);
+    setMsg(null);
+    try {
+      const r = await repoApi.rescan(repoId, kind === 'add' ? 1 : 0);
+      const parts = [
+        `紐付けたフォルダ ${r.repo.linkedDirs?.length ?? 0} 件${r.addedDirs.length ? `(新規 ${r.addedDirs.length})` : ''}`,
+        `セッション ${r.linkedSessions} 件を新たに紐付けました`,
+      ];
+      if (kind === 'add') parts.push(`待機の目標を ${r.repo.poolMin} 本にしました(作成には少し時間がかかります)`);
+      setMsg({ text: parts.join(' / ') });
+      reload();
+    } catch (e) {
+      setMsg({ text: errText(e, '再スキャンに失敗しました'), error: true });
+    } finally {
+      setBusy(null);
+    }
+  };
+  const atMax = worktrees.length >= repo.poolMax || repo.poolMin >= repo.poolMax;
+  return (
+    <div className="wtree-toolbar">
+      <div className="ctl-row">
+        <PoolChips repo={repo} worktrees={worktrees} />
+        <span className="spacer" />
+        <button
+          className="btn sm"
+          disabled={!!busy}
+          onClick={() => void run('scan')}
+          title="同じリポジトリのクローン済みフォルダ(と git worktree)を探し、その中のセッションをこのプロジェクトに紐付けます"
+        >
+          {busy === 'scan' ? '再スキャン中…' : '再スキャン'}
+        </button>
+        <button
+          className="btn sm"
+          disabled={!!busy || atMax || repo.status !== 'ready'}
+          onClick={() => void run('add')}
+          title={atMax ? `上限(${repo.poolMax} 本)に達しています。設定タブで上限を変更できます` : '待機の作業ツリーを 1 本増やします'}
+        >
+          {busy === 'add' ? '追加中…' : '+ 作業ツリーを追加'}
+        </button>
+      </div>
+      {(repo.linkedDirs?.length ?? 0) > 0 && (
+        <div className="muted small wtree-linked-list">
+          紐付けたフォルダ:
+          {repo.linkedDirs!.map((d) => (
+            <span key={d} className="mono wtree-linked">
+              {d}
+            </span>
+          ))}
+        </div>
+      )}
+      {msg && <div className={`rp-alert ${msg.error ? 'error' : 'info'}`}>{msg.text}</div>}
+    </div>
+  );
+}
+
+function WorktreesTab({ data, gotoGit, reload }: { data: ProjectOverview; gotoGit: (id: string) => void; reload: () => void }) {
   const sessions = useHub((s) => s.sessions);
   const open = useHub((s) => s.open);
   const now = useNow(30000);
-  if (data.targets.length === 0) return <div className="rp-empty">作業ツリーはありません。</div>;
+  const toolbar = data.key.repoId ? <WorktreeToolbar repoId={data.key.repoId} reload={reload} /> : null;
+  if (data.targets.length === 0)
+    return (
+      <>
+        {toolbar}
+        <div className="rp-empty">作業ツリーはありません。</div>
+      </>
+    );
   const KIND = { worktree: '作業ツリー', base: 'ベース', dir: 'フォルダ' } as const;
   return (
+    <>
+    {toolbar}
     <div className="wtree-cards">
       {data.targets.map((t) => {
         const s = t.sessionId ? sessions[t.sessionId] : undefined;
@@ -647,6 +721,7 @@ function WorktreesTab({ data, gotoGit }: { data: ProjectOverview; gotoGit: (id: 
         );
       })}
     </div>
+    </>
   );
 }
 
@@ -654,6 +729,9 @@ function WorktreesTab({ data, gotoGit }: { data: ProjectOverview; gotoGit: (id: 
 
 function PrsTab({ prs }: { prs: PrInfo[] }) {
   const now = useNow(30000);
+  const openPr = useHub((s) => s.openPr);
+  const [merging, setMerging] = useState<PrInfo | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
   if (prs.length === 0)
     return (
       <div className="rp-empty">
@@ -675,17 +753,51 @@ function PrsTab({ prs }: { prs: PrInfo[] }) {
         )}
         <span className="gstat">マージ / クローズ {closed.length}</span>
       </div>
+      {notice && (
+        <div className="rp-alert info" role="status">
+          <span>{notice}</span>
+          <span className="spacer" />
+          <button className="icon-btn" onClick={() => setNotice(null)} aria-label="閉じる">
+            ✕
+          </button>
+        </div>
+      )}
       {open.length > 0 && (
         <section className="pr-group">
           <h3 className="sec-title">
             Open <span className="count-pill">{open.length}</span>
           </h3>
           <div className="pr-list">
-            {open.map((p) => (
-              <PrRow key={p.id} pr={p} now={now} />
-            ))}
+            {open.map((p) => {
+              const ok = canMerge(p);
+              return (
+                <div className="pj-pr-item" key={p.id}>
+                  <PrRow pr={p} now={now} />
+                  <div className="pj-pr-acts">
+                    <button className="btn sm" onClick={() => openPr(p.id)} title="詳細を開いて、Claude にレビューさせる / レビューを送る">
+                      レビュー
+                    </button>
+                    <button
+                      className={`btn sm ${ok ? 'approve' : ''}`}
+                      onClick={() => setMerging(p)}
+                      title={ok ? 'マージする' : `マージの条件を満たしていません: ${mergeBlockers(p).join(' / ')}`}
+                    >
+                      マージ
+                    </button>
+                  </div>
+                </div>
+              );
+            })}
           </div>
         </section>
+      )}
+      {merging && (
+        <MergeDialog
+          pr={merging}
+          override={!canMerge(merging)}
+          onClose={() => setMerging(null)}
+          onDone={(n) => setNotice(n.text)}
+        />
       )}
       {closed.length > 0 && (
         <section className="pr-group">

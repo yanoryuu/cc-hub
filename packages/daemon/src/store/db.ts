@@ -84,6 +84,7 @@ export class Store {
     this.addColumn('sessions', 'handed_off', 'INTEGER');
     this.addColumn('sessions', 'task', 'TEXT');
     this.addColumn('sessions', 'tokens_json', 'TEXT');
+    this.addColumn('repos', 'linked_dirs_json', 'TEXT');
   }
 
   private addColumn(table: string, col: string, type: string): void {
@@ -150,19 +151,25 @@ export class Store {
     this.db
       .prepare(
         `INSERT OR REPLACE INTO repos (id, url, owner, name, base_dir, default_branch, kind, install_cmd,
-           keep_dirs_json, seed_library_from, pool_min, pool_max, trusted, status, error, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+           keep_dirs_json, seed_library_from, pool_min, pool_max, trusted, status, error, created_at, linked_dirs_json)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(r.id, r.url, r.owner, r.name, r.baseDir, r.defaultBranch, r.kind, r.installCmd, JSON.stringify(r.keepDirs),
-        r.seedLibraryFrom, r.poolMin, r.poolMax, r.trusted ? 1 : 0, r.status, r.error, r.createdAt);
+        r.seedLibraryFrom, r.poolMin, r.poolMax, r.trusted ? 1 : 0, r.status, r.error, r.createdAt, JSON.stringify(r.linkedDirs ?? []));
   }
 
   loadRepos(): RepoInfo[] {
     const rows = this.db.prepare('SELECT * FROM repos ORDER BY created_at').all() as Record<string, any>[];
     return rows.map((r) => {
       let keepDirs: string[] = [];
+      let linkedDirs: string[] = [];
       try {
         keepDirs = JSON.parse(r.keep_dirs_json);
+      } catch {
+        /* 壊れていたら空 */
+      }
+      try {
+        linkedDirs = r.linked_dirs_json ? JSON.parse(r.linked_dirs_json) : [];
       } catch {
         /* 壊れていたら空 */
       }
@@ -180,6 +187,7 @@ export class Store {
         poolMin: Number(r.pool_min),
         poolMax: Number(r.pool_max),
         trusted: !!r.trusted,
+        linkedDirs: Array.isArray(linkedDirs) ? linkedDirs.map(String) : [],
         status: r.status,
         error: r.error ?? null,
         createdAt: Number(r.created_at),

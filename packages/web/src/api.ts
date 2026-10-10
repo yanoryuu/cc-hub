@@ -1,5 +1,5 @@
 // REST ヘルパー。401 を受けたら PIN 画面を出し、ログイン成功後に同じリクエストを再試行する。
-import type { BranchInfo, HubState, McpServerInfo, MergeMethod, PrDetail, RegisterRepoRequest, ReleaseMode, RepoInfo, SessionMode, SkillInfo } from '@cc-hub/shared';
+import type { BranchInfo, HubState, McpServerInfo, MergeMethod, PrDetail, PrReviewEvent, RegisterRepoRequest, RescanResult, ReleaseMode, RepoInfo, SessionMode, SkillInfo } from '@cc-hub/shared';
 
 export class AuthError extends Error {
   constructor() {
@@ -150,6 +150,7 @@ export const repoApi = {
   remove: (id: string, purge: boolean) =>
     api(`/api/repos/${enc(id)}${purge ? '?purge=1' : ''}`, undefined, { method: 'DELETE' }),
   refill: (id: string) => api(`/api/repos/${enc(id)}/refill`, {}),
+  rescan: (id: string, addWorktrees = 0) => api<RescanResult>(`/api/repos/${enc(id)}/rescan`, addWorktrees ? { addWorktrees } : {}),
   rebuildWorktree: (id: string) => api(`/api/worktrees/${enc(id)}/rebuild`, {}),
   deleteWorktree: (id: string) => api(`/api/worktrees/${enc(id)}`, undefined, { method: 'DELETE' }),
   release: (sessionId: string, mode: ReleaseMode) => api(`/api/sessions/${enc(sessionId)}/release`, { mode }),
@@ -175,6 +176,8 @@ export const prApi = {
     api(`${prPath(repoId, n)}/open-session`, req),
   merge: (repoId: string, n: number, method: MergeMethod) => api(`${prPath(repoId, n)}/merge`, { method }),
   close: (repoId: string, n: number) => api(`${prPath(repoId, n)}/close`, {}),
+  review: (repoId: string, n: number, event: PrReviewEvent, body: string) => api(`${prPath(repoId, n)}/review`, { event, body }),
+  aiReview: (repoId: string, n: number, req: { post: boolean; note?: string; mode?: SessionMode }) => api(`${prPath(repoId, n)}/ai-review`, req),
   createPr: (sessionId: string, draft: boolean) => api(`/api/sessions/${enc(sessionId)}/create-pr`, { draft }),
   branches: async (repoId: string): Promise<BranchInfo[]> =>
     pick<BranchInfo[]>(await api(`/api/repos/${enc(repoId)}/branches`), 'branches') ?? [],

@@ -8076,3 +8076,100 @@ th[aria-sort='descending'] .th-arrow {
     font-size: 15px;
   }
 }
+
+/* 管理画面: 作業ツリーの操作(再スキャン / 追加)と PR の行のボタン */
+.wtree-toolbar {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 12px;
+}
+.wtree-linked-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+  align-items: baseline;
+}
+.wtree-linked {
+  word-break: break-all;
+}
+.pj-pr-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.pj-pr-item > .pr-row {
+  flex: 1;
+  min-width: 0;
+}
+.pj-pr-acts {
+  display: flex;
+  gap: 6px;
+  flex: none;
+}
+@media (max-width: 640px) {
+  .pj-pr-item {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .pj-pr-acts {
+    justify-content: flex-end;
+  }
+}
+
+/* 設定: Discord Bot の接続状態 */
+.bot-st.bot-connected {
+  color: var(--ok, #3fb950);
+}
+.bot-st.bot-connecting {
+  color: var(--warn-fg);
+}
+.bot-st.bot-error {
+  color: var(--danger-fg);
+}
+
+/* Git タブ: ブランチの切り替え */
+.br-pick {
+  list-style: none;
+  margin: 0 0 12px;
+  padding: 0;
+  max-height: 280px;
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+.br-pick.off {
+  opacity: 0.5;
+}
+.br-pick > li + li {
+  border-top: 1px solid var(--border);
+}
+.br-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 7px 10px;
+  background: none;
+  border: none;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+  min-width: 0;
+}
+.br-item:hover:not(:disabled) {
+  background: var(--hover, rgba(127, 127, 127, 0.12));
+}
+.br-item.on {
+  background: var(--accent-bg, rgba(88, 166, 255, 0.18));
+}
+.br-item:disabled {
+  cursor: default;
+  opacity: 0.65;
+}
+.br-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}

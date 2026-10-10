@@ -116,6 +116,13 @@ export type FetchLike = (url: string, init: { method: string; headers: Record<st
   text(): Promise<string>;
 }>;
 
+/** 送信結果。messageId = 送ったメッセージの ID(返信の紐付けに使う) */
+export interface SendResult {
+  ok: boolean;
+  error?: string;
+  messageId?: string;
+}
+
 /** Webhook ごとに直列で送る。失敗はログだけ(URL は出さない) */
 export class DiscordSender {
   private readonly queues = new Map<string, Promise<unknown>>();
@@ -126,7 +133,7 @@ export class DiscordSender {
   ) {}
 
   /** キューに積む。戻り値は送信結果(ok / エラー文) */
-  send(key: string, url: string, payload: unknown): Promise<{ ok: boolean; error?: string }> {
+  send(key: string, url: string, payload: unknown): Promise<SendResult> {
     const prev = this.queues.get(key) ?? Promise.resolve();
     const p = prev.then(() => this.post(url, payload));
     const tail = p.catch(() => undefined);
@@ -137,20 +144,30 @@ export class DiscordSender {
     return p;
   }
 
-  private async post(url: string, payload: unknown): Promise<{ ok: boolean; error?: string }> {
+  private async post(url: string, payload: unknown): Promise<SendResult> {
     const body = JSON.stringify(payload);
     for (let attempt = 0; ; attempt++) {
       const ac = new AbortController();
       const timer = setTimeout(() => ac.abort(), SEND_TIMEOUT_MS);
       try {
-        const res = await this.fetchImpl(url, {
+        // ?wait=true: 送ったメッセージ(ID)を返させる。Bot が返信を受けたとき、どのセッションの通知かを引くのに使う
+        const res = await this.fetchImpl(`${url}${url.includes('?') ? '&' : '?'}wait=true`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body,
           signal: ac.signal,
         });
         const text = await res.text().catch(() => '');
-        if (res.status >= 200 && res.status < 300) return { ok: true };
+        if (res.status >= 200 && res.status < 300) {
+          let messageId: string | undefined;
+          try {
+            const j = JSON.parse(text) as { id?: unknown };
+            if (typeof j.id === 'string') messageId = j.id;
+          } catch {
+            /* 本文なし(204) */
+          }
+          return { ok: true, messageId };
+        }
         if (res.status === 429 && attempt < MAX_RETRY) {
           let j: unknown = null;
           try {

@@ -1,13 +1,14 @@
 // RepoManager: リポジトリの登録(gh repo clone)・設定変更・登録解除と、worktree でのセッション起動 / 解放(design §7)。
 import fs from 'node:fs';
 import path from 'node:path';
-import type { RegisterRepoRequest, ReleaseMode, RepoInfo, RepoKind, SessionInfo, StartSessionRequest, WorktreeInfo } from '@cc-hub/shared';
+import type { RegisterRepoRequest, ReleaseMode, RescanResult, RepoInfo, RepoKind, SessionInfo, StartSessionRequest, WorktreeInfo } from '@cc-hub/shared';
 import { bus } from '../bus';
 import type { HubConfig } from '../config';
 import type { Store } from '../store/db';
 import type { SessionManager } from '../session/manager';
 import { HttpError, clampInt } from '../util';
 import { git, gitOk, normPath, overlaps, tail } from './exec';
+import { isInside } from '../project/parse';
 import { ghRun } from '../github/gh';
 import { defaultKeepDirs, detectKind } from './kind';
 import { WorktreePool, baseOf, DISK_WARN_PREFIX } from './pool';
@@ -71,6 +72,21 @@ export class RepoManager {
         return !!w && w.sessionId === info.id && w.state === 'assigned';
       },
     });
+    sessions.setRepoResolver((cwd) => this.linkedRepoFor(cwd)?.id ?? null);
+  }
+
+  /** cwd が登録リポジトリの linkedDirs(クローン済みのフォルダなど)の中ならそのリポジトリ */
+  linkedRepoFor(cwd: string): RepoInfo | null {
+    if (!cwd) return null;
+    for (const r of this.repos.values()) if ((r.linkedDirs ?? []).some((d) => isInside(d, cwd))) return r;
+    return null;
+  }
+
+  /** cwd がリポジトリの置き場所(.base / worktree)か linkedDirs の中ならそのリポジトリ */
+  repoForCwd(cwd: string): RepoInfo | null {
+    if (!cwd) return null;
+    for (const r of this.repos.values()) if (isInside(r.baseDir, cwd)) return r;
+    return this.linkedRepoFor(cwd);
   }
 
   // ================================================================ 状態
@@ -167,6 +183,7 @@ export class RepoManager {
         poolMin: clampInt(req.poolMin ?? this.cfg.defaultPoolMin, 0, poolMax),
         poolMax,
         trusted: true,
+        linkedDirs: local ? [local.dir] : [],
         status: 'cloning',
         error: null,
         createdAt: Date.now(),
@@ -175,6 +192,8 @@ export class RepoManager {
       this.update(repo, {});
       console.log(`[repo] 登録: ${id} (${kind}) → ${baseDir}${local ? `(複製元: ${local.dir})` : ''}`);
       void this.clone(repo, local?.dir ?? null);
+      // 元のフォルダで動いていたセッションをこのリポジトリに紐付ける
+      if (local) void this.rescan(repo.id).catch((e) => console.warn(`[repo] ${repo.id}: 再スキャンに失敗: ${(e as Error).message}`));
       return { ...repo };
     } finally {
       this.registering.delete(key);
@@ -303,6 +322,79 @@ export class RepoManager {
         throw new HttpError(500, `.base の削除に失敗しました: ${(e as Error).message}`);
       }
     }
+  }
+
+  /**
+   * 再スキャン: 同じリポジトリ(origin が同じ)のフォルダを探して linkedDirs に加え、その中のセッションを紐付ける。
+   * 探す場所: 既存の linkedDirs / 紐付いていないセッションの cwd / Library の複製元 / それぞれの git worktree list。
+   * addWorktrees > 0 なら待機 worktree の目標本数(poolMin)をその分増やして補充する
+   */
+  async rescan(id: string, opts: { addWorktrees?: unknown } = {}): Promise<RescanResult> {
+    const r = this.require(id);
+    const sessions = Object.values(this.sessions.all());
+    const candidates = new Set<string>();
+    for (const d of r.linkedDirs ?? []) candidates.add(d);
+    for (const s of sessions) if (s.cwd && (!s.repoId || s.repoId === r.id) && !s.worktreeId) candidates.add(s.cwd);
+    if (r.seedLibraryFrom && path.basename(r.seedLibraryFrom).toLowerCase() === 'library') candidates.add(path.dirname(r.seedLibraryFrom));
+
+    const found = new Map<string, string>(); // normPath → 表示用のパス
+    const checked = new Set<string>();
+    const inspect = async (dir: string, expand: boolean): Promise<void> => {
+      if (!dir || !fs.existsSync(dir)) return;
+      const top = await git(['-C', dir, 'rev-parse', '--show-toplevel'], { timeout: 30_000 });
+      if (top.code !== 0) return;
+      const t = path.normalize(top.stdout.trim());
+      const key = normPath(t);
+      if (checked.has(key)) return;
+      checked.add(key);
+      // CC Hub の置き場所(.base / プールの worktree)はプールが管理するので含めない
+      if (isInside(r.baseDir, t)) return;
+      const origin = await git(['-C', t, 'remote', 'get-url', 'origin'], { timeout: 30_000 });
+      const o = origin.code === 0 ? normalizeRepoUrl(origin.stdout.trim()) : null;
+      if (!o || `${o.owner}/${o.name}`.toLowerCase() !== r.id.toLowerCase()) return;
+      found.set(key, t);
+      if (!expand) return;
+      // 同じクローンの別の worktree
+      const wl = await git(['-C', t, 'worktree', 'list', '--porcelain'], { timeout: 30_000 });
+      if (wl.code !== 0) return;
+      for (const line of wl.stdout.split(/\r?\n/)) {
+        const m = /^worktree (.+)$/.exec(line.trim());
+        if (m) await inspect(path.normalize(m[1]), false);
+      }
+    };
+    for (const c of candidates) {
+      try {
+        await inspect(c, true);
+      } catch (e) {
+        console.warn(`[repo] 再スキャン: ${c}: ${(e as Error).message}`);
+      }
+    }
+
+    const before = new Set((r.linkedDirs ?? []).map(normPath));
+    const dirs = [...found.values()].sort((a, b) => a.localeCompare(b));
+    const addedDirs = dirs.filter((d) => !before.has(normPath(d)));
+    const patch: Partial<RepoInfo> = { linkedDirs: dirs };
+    const add = clampInt(opts.addWorktrees ?? 0, 0, 20);
+    if (add > 0) patch.poolMin = Math.min(r.poolMin + add, r.poolMax);
+    this.update(r, patch);
+    if (add > 0) this.refill(r.id);
+
+    // 見つかったフォルダの中のセッションを紐付ける(ブランチは今の HEAD)
+    let linkedSessions = 0;
+    const branchOf = new Map<string, string | null>();
+    for (const s of sessions) {
+      if (s.repoId || !s.cwd) continue;
+      const dir = dirs.find((d) => isInside(d, s.cwd));
+      if (!dir) continue;
+      if (!branchOf.has(dir)) {
+        const b = await git(['-C', dir, 'rev-parse', '--abbrev-ref', 'HEAD'], { timeout: 30_000 });
+        const name = b.code === 0 ? b.stdout.trim() : '';
+        branchOf.set(dir, name && name !== 'HEAD' ? name : null);
+      }
+      if (this.sessions.linkRepo(s.id, r.id, branchOf.get(dir) ?? null)) linkedSessions++;
+    }
+    console.log(`[repo] 再スキャン: ${r.id} フォルダ ${dirs.length} 件(新規 ${addedDirs.length})/ セッション ${linkedSessions} 件を紐付け${add ? ` / 待機の目標 +${add}` : ''}`);
+    return { repo: { ...r }, addedDirs, linkedSessions };
   }
 
   /** 補充を即時実行。エラーのリポジトリはクローンからやり直す */

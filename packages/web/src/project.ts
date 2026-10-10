@@ -3,6 +3,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type {
   Artifact,
   FileChangeStatus,
+  GitBranchItem,
   GitTarget,
   ProjectOverview,
   ProjectTokens,
@@ -59,6 +60,9 @@ export const projectApi = {
     api('/api/git/stage', unstage ? { target, paths, unstage: true } : { target, paths }),
   commit: (req: CommitReq) => api('/api/git/commit', req),
   push: (target: string, force = false) => api('/api/git/push', force ? { target, force: true } : { target }),
+  branches: async (target: string): Promise<GitBranchItem[]> =>
+    pick<GitBranchItem[]>(await api(`/api/git/branches?target=${enc(target)}`), 'branches') ?? [],
+  switchBranch: (req: { target: string; branch: string; create?: boolean; force?: boolean }) => api('/api/git/switch', req),
 };
 
 /** テキストファイルの中身を取得(エラー時は {ok:false} の JSON をメッセージにする) */

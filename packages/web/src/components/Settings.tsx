@@ -1,7 +1,7 @@
 // 設定画面: 通知(Windows / Discord)・アップロード先のサーバー・Claude との連携(CC Hub の MCP)
 // デスクトップは中央の表示(上部バーの ⚙)、モバイルは「その他 → 設定」
 import { useEffect, useMemo, useState } from 'react';
-import type { DiscordTarget, NotifySettings, NotifyTopic, ServerInfo, ServerProtocol } from '@cc-hub/shared';
+import type { DiscordBotSettings, DiscordBotStatus, DiscordTarget, NotifySettings, NotifyTopic, ServerInfo, ServerProtocol } from '@cc-hub/shared';
 import { type SettingsTab, useHub } from '../store';
 import { errText } from '../api';
 import {
@@ -195,7 +195,7 @@ function NotifySection({ mobile }: { mobile: boolean }) {
         </fieldset>
         <label className="check-inline set-inline">
           <input type="checkbox" checked={w.suppressWhenViewing} onChange={(e) => setW({ suppressWhenViewing: e.target.checked })} disabled={!w.enabled} />
-          表示中のセッションは通知しない(アプリでそのセッションを開いているとき)
+          表示中のセッションは通知しない(アプリでそのセッションを開いているとき。Discord は 2 分以上操作がなければ送ります)
         </label>
         <label className="field set-throttle">
           <span>同じセッション・同じ種類の通知の間隔(秒)</span>
@@ -295,6 +295,22 @@ function NotifySection({ mobile }: { mobile: boolean }) {
         </details>
       </section>
 
+      <BotCard
+        bot={saved.bot ?? { enabled: false, allowedUserIds: [], hasToken: false, approvalChannelId: '' }}
+        save={async (bot) => {
+          const s = await put({ ...saved, bot });
+          setDraft((d) => (d ? { ...d, bot: s.bot } : d));
+          return s;
+        }}
+        reload={async () => {
+          const s = await notifyApi.get();
+          if (s) {
+            setSaved(s);
+            setDraft((d) => (d ? { ...d, bot: s.bot } : d));
+          }
+        }}
+      />
+
       {edit && (
         <DiscordModal
           target={edit === 'new' ? null : edit}
@@ -328,6 +344,150 @@ function NotifySection({ mobile }: { mobile: boolean }) {
         </ConfirmModal>
       )}
     </div>
+  );
+}
+
+const BOT_STATE_LABEL: Record<DiscordBotStatus['state'], string> = {
+  off: '停止中',
+  connecting: '接続中…',
+  connected: '接続済み',
+  error: 'エラー',
+};
+
+/** Discord Bot: 通知への返信をセッションに届ける */
+function BotCard({
+  bot,
+  save,
+  reload,
+}: {
+  bot: DiscordBotSettings;
+  save: (b: DiscordBotSettings & { token?: string; clearToken?: boolean }) => Promise<NotifySettings>;
+  reload: () => Promise<void>;
+}) {
+  const [token, setToken] = useState('');
+  const [ids, setIds] = useState(bot.allowedUserIds.join(', '));
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  const st = bot.status ?? { state: 'off' as const, user: null, error: null };
+  // 接続中の間は状態を取り直す
+  useEffect(() => {
+    if (st.state !== 'connecting') return;
+    const t = setTimeout(() => void reload().catch(() => undefined), 3000);
+    return () => clearTimeout(t);
+  }, [st.state, bot, reload]);
+  const [approvalCh, setApprovalCh] = useState(bot.approvalChannelId ?? '');
+  const idList = ids.split(/[\s,、]+/).map((x) => x.trim()).filter(Boolean);
+  const badIds = idList.filter((x) => !/^\d{15,25}$/.test(x));
+  const ch = approvalCh.trim();
+  const badCh = !!ch && !/^\d{15,25}$/.test(ch);
+  const dirty = !!token.trim() || idList.join(',') !== bot.allowedUserIds.join(',') || ch !== (bot.approvalChannelId ?? '');
+  const run = async (patch: Partial<DiscordBotSettings> & { token?: string; clearToken?: boolean }, done: string) => {
+    setBusy(true);
+    setMsg(null);
+    try {
+      await save({ ...bot, allowedUserIds: idList, approvalChannelId: ch, ...(token.trim() ? { token: token.trim() } : {}), ...patch });
+      setToken('');
+      setMsg({ ok: true, text: done });
+    } catch (e) {
+      setMsg({ ok: false, text: errText(e, '保存に失敗しました') });
+    } finally {
+      setBusy(false);
+    }
+  };
+  const canEnable = bot.hasToken || !!token.trim();
+  return (
+    <section className="rp-card set-card" aria-labelledby="set-bot">
+      <div className="set-card-head">
+        <h3 id="set-bot" className="set-h">
+          Discord への返信(Bot)
+        </h3>
+        <span className={`tag bot-st bot-${st.state}`}>
+          {BOT_STATE_LABEL[st.state]}
+          {st.state === 'connected' && st.user ? `: ${st.user}` : ''}
+        </span>
+        <span className="spacer" />
+        <Toggle
+          checked={bot.enabled}
+          label={bot.enabled ? 'オン' : 'オフ'}
+          onChange={(v) => {
+            if (v && !canEnable) {
+              setMsg({ ok: false, text: '先にトークンを入力してください' });
+              return;
+            }
+            void run({ enabled: v }, v ? 'Bot を有効にしました' : 'Bot を停止しました');
+          }}
+        />
+      </div>
+      <p className="muted small">
+        Discord に届いた通知に「返信」すると、その通知にスレッドを作り、そのセッションへの横からの質問(/btw のように)として会話の内容をもとに答えます。
+        続けての質問はスレッドに書くだけで、それまでのやり取りも踏まえて答えます。
+        セッションには送らないので作業は止まりません。作業の指示やセッション中の承認は CC Hub から行ってください。
+        承認用チャンネルを設定すると、アップロード / Firebase デプロイの承認待ちを Bot がボタン付きで投稿し、押すだけで承認・却下できます。
+      </p>
+      {msg && (
+        <div className={`set-msg ${msg.ok ? 'ok' : 'ng'}`} role="status">
+          {msg.ok ? '✓' : '✗'} {msg.text}
+        </div>
+      )}
+      {st.error && <div className="rp-alert error">{st.error}</div>}
+      <label className="field">
+        <span>Bot のトークン{bot.hasToken ? '(保存済み。変えるときだけ入力)' : ''}</span>
+        <input type="password" autoComplete="off" value={token} onChange={(e) => setToken(e.target.value)} placeholder={bot.hasToken ? '••••••••(保存済み)' : 'Developer Portal の Bot → Reset Token で表示されるもの'} />
+      </label>
+      <label className="field">
+        <span>返信を受け付けるユーザー ID(カンマ区切り)</span>
+        <input value={ids} onChange={(e) => setIds(e.target.value)} placeholder="例: 123456789012345678" />
+        {badIds.length > 0 ? (
+          <span className="warn-text small">ユーザー ID は数字です: {badIds.join(', ')}</span>
+        ) : (
+          <span className="hint">ここにあるユーザーの返信と承認ボタンだけを受け付けます。ほかの人が返信すると、その人の ID を案内する返事をします。</span>
+        )}
+      </label>
+      <label className="field">
+        <span>承認ボタンを出すチャンネル ID(空 = 出さない)</span>
+        <input className="mono" value={approvalCh} onChange={(e) => setApprovalCh(e.target.value)} placeholder="例: 123456789012345678" />
+        {badCh ? (
+          <span className="warn-text small">チャンネル ID は数字です</span>
+        ) : (
+          <span className="hint">
+            開発者モードでチャンネル名を右クリック →「チャンネル ID をコピー」。ボタン付きのメッセージは Webhook では送れないため、Bot がこのチャンネルに投稿します(Bot にチャンネルの表示・メッセージの送信の権限が必要)。
+            同じ申請の通知が二重に届かないよう、Webhook の送信先では「アップロードの申請」のチェックを外してください。
+          </span>
+        )}
+      </label>
+      <div className="set-actions">
+        {bot.hasToken && (
+          <button className="btn sm danger" disabled={busy} onClick={() => void run({ enabled: false, clearToken: true }, 'トークンを削除しました')}>
+            トークンを削除
+          </button>
+        )}
+        <span className="spacer" />
+        <button className="btn primary sm" disabled={!dirty || busy || badIds.length > 0 || badCh} onClick={() => void run({}, '保存しました')}>
+          {busy ? '保存中…' : '保存'}
+        </button>
+      </div>
+      <details className="set-help" open={!bot.hasToken || undefined}>
+        <summary>Bot の作り方(無料)</summary>
+        <ol>
+          <li>
+            <a href="https://discord.com/developers/applications" target="_blank" rel="noreferrer">
+              Discord Developer Portal
+            </a>
+            で「New Application」を押し、名前(例: CC Hub)を付けて作る
+          </li>
+          <li>左の「Bot」を開き、「Reset Token」でトークンを表示してコピーし、上の「Bot のトークン」に貼る</li>
+          <li>同じ「Bot」の画面の「Privileged Gateway Intents」で「MESSAGE CONTENT INTENT」をオンにして保存する</li>
+          <li>
+            左の「OAuth2」→「URL Generator」で「bot」にチェックし、Bot Permissions で「View Channels」「Send Messages」「Read Message History」「Create Public Threads」「Send Messages in Threads」にチェックして、下に出た URL を開き、通知を送っているサーバーに招待する(招待済みなら、サーバー設定 → ロールで Bot のロールに後の 2 つを追加する)
+          </li>
+          <li>
+            自分のユーザー ID を調べる: Discord の「ユーザー設定」→「詳細設定」で「開発者モード」をオンにし、自分のアイコンを右クリック →「ユーザー ID をコピー」。上の欄に貼る
+          </li>
+          <li>保存して右上のスイッチをオンにし、「接続済み」になれば完了。Discord の通知に返信して質問してみてください</li>
+        </ol>
+        <p className="set-lock">🔒 トークンはこの PC の CC Hub にだけ暗号化して保存され、画面にも Claude にも渡しません。</p>
+      </details>
+    </section>
   );
 }
 

@@ -20,7 +20,7 @@ import { dpapi } from './dpapi';
 import { NotifyService } from './notify/service';
 import { DeployService } from './deploy/service';
 import { InstructionsService } from './project/instructions';
-import { isInside } from './project/parse';
+import { ReplyRouter } from './notify/replies';
 import { createRunner } from './firebase/cli';
 import { FirebaseInfoService } from './firebase/info';
 
@@ -64,11 +64,17 @@ function main(): void {
     session: (id) => sessions.info(id),
     desktopClients: () => ws?.desktopCount() ?? 0,
   });
-  /** cwd がプールのリポジトリ(.base / worktree)の中なら repoId */
-  const repoIdForCwd = (cwd: string): string | null => {
-    for (const r of Object.values(repos.all())) if (isInside(r.baseDir, cwd)) return r.id;
-    return null;
-  };
+  // Discord の通知への返信 / スレッドへの書き込み → そのセッションへの横からの質問(作業の指示や承認は CC Hub から行う)
+  const replies = new ReplyRouter({
+    info: (id) => sessions.info(id),
+    resumeIdFor: (id) => sessions.resumeIdFor(id),
+    claudePath: config.claudePath,
+  });
+  notify.setReplyHandler((req, io) => replies.handle(req, io));
+  // アップロード / Firebase デプロイの承認ボタン(Bot が承認用チャンネルに投稿)
+  notify.setDeployActions(deploy);
+  /** cwd がリポジトリ(.base / worktree / 紐付けたクローン済みのフォルダ)の中なら repoId */
+  const repoIdForCwd = (cwd: string): string | null => repos.repoForCwd(cwd)?.id ?? null;
   const startedAt = Date.now();
 
   const getState = (): HubState => ({

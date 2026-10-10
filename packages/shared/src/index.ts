@@ -163,6 +163,11 @@ export interface RepoInfo {
   poolMax: number;
   /** 登録時にユーザーが信頼を確認した = 信頼ダイアログに自動で「Yes」と答えてよい */
   trusted: boolean;
+  /**
+   * CC Hub の置き場所(baseDir)の外にある、同じリポジトリのフォルダ(クローン済みのフォルダとその worktree)。
+   * 中で動くセッションはこのリポジトリのものとして扱う。登録時と「再スキャン」で更新する
+   */
+  linkedDirs?: string[];
   status: RepoStatus;
   /** エラーや警告(ディスク不足で補充停止 など)。正常時 null */
   error: string | null;
@@ -284,6 +289,17 @@ export interface PrDetail extends PrInfo {
 }
 
 export type MergeMethod = 'squash' | 'merge' | 'rebase';
+/** GitHub に送るレビュー(gh pr review --approve / --request-changes / --comment) */
+export type PrReviewEvent = 'approve' | 'request_changes' | 'comment';
+
+/** POST /api/repos/:id/rescan の結果 */
+export interface RescanResult {
+  repo: RepoInfo;
+  /** 新しく見つかったフォルダ */
+  addedDirs: string[];
+  /** このリポジトリに紐付けたセッションの数 */
+  linkedSessions: number;
+}
 
 // ---------------------------------------------------------------- フォルダ(プロジェクト)ごとの管理画面
 
@@ -296,6 +312,20 @@ export interface FileChange {
   deletions: number;
   /** R のときの元のパス */
   from?: string;
+}
+
+/** GET /api/git/branches の 1 件(切り替え先の候補) */
+export interface GitBranchItem {
+  name: string;
+  /** いまチェックアウトしているブランチ */
+  current: boolean;
+  /** ローカルにある(false = origin にだけある。切り替えると追跡ブランチを作る) */
+  local: boolean;
+  upstream: string | null;
+  /** 最後のコミットの日時(epoch ms) */
+  date: number;
+  /** 別の作業ツリーでチェックアウト中(git の仕様で切り替えられない)。そのパス */
+  checkedOutAt: string | null;
 }
 
 export interface CommitInfo {
@@ -485,6 +515,32 @@ export interface NotifySettings {
   discord: DiscordTarget[];
   /** 同じセッション・同じ種類の通知の最短間隔(秒) */
   throttleSeconds: number;
+  /** Discord の通知への返信を受け取る Bot(無い場合は無効) */
+  bot?: DiscordBotSettings;
+}
+
+/**
+ * Discord Bot: Webhook で送った通知に Discord で返信すると、そのセッションに届ける。
+ * 返信は横からの質問(/btw のように)として、作業を止めずに会話の写しで答えて返信する(セッションには送らない)。
+ * approvalChannelId を設定すると、アップロード / Firebase デプロイの承認待ちを Bot がボタン付きで投稿し、押すだけで承認・却下できる
+ */
+export interface DiscordBotSettings {
+  enabled: boolean;
+  /** 返信を受け付ける Discord のユーザー ID(これ以外の人の返信は受け付けない) */
+  allowedUserIds: string[];
+  /** トークンが保存されているか(トークン自体は返さない)。PUT では token に新しい値を入れたときだけ更新、clearToken: true で削除 */
+  hasToken: boolean;
+  /** アップロード / Firebase デプロイの承認ボタンを Bot が投稿するチャンネルの ID('' = 出さない) */
+  approvalChannelId: string;
+  /** 接続状態(読み取り専用) */
+  status?: DiscordBotStatus;
+}
+
+export interface DiscordBotStatus {
+  state: 'off' | 'connecting' | 'connected' | 'error';
+  /** 接続中の Bot の名前 */
+  user: string | null;
+  error: string | null;
 }
 
 // ---------------------------------------------------------------- アップロード先のサーバー(レンタルサーバー FTP / SFTP)
@@ -663,6 +719,8 @@ export type ServerMessage =
 //   POST /api/servers  {…ServerInfo の編集項目, secret?: string}  → {ok, server}   secret = パスワード or 秘密鍵のパスフレーズ。DPAPI で暗号化して保存
 //   PATCH /api/servers/:id {…, secret?} / DELETE /api/servers/:id
 //   POST /api/servers/:id/test                           接続してリモートフォルダを確認 → {ok, message, entries?: string[]}
+//   Discord Bot: PUT /api/notify/settings の bot: {enabled, allowedUserIds, token?: string, clearToken?: boolean}
+//     トークンは DPAPI で暗号化して保存。Webhook の通知(?wait=true で送ってメッセージ ID を記録)への返信を Gateway で受け取る
 //   POST /api/deploys {serverId, localDir?, buildCommand?, dryRun?: boolean}  ユーザーからのアップロード → {ok, deploy}
 //          まず planning(ビルド → 差分計算)→ ready。ready で POST /api/deploys/:id/start すると送信(dryRun なら ready で止まる)
 //   POST /api/deploys/:id/approve   Claude の申請(pending_approval)を承認 → planning → ready → 自動で送信
@@ -700,6 +758,8 @@ export type ServerMessage =
 //   PATCH /api/repos/:id           Partial<Pick<RepoInfo,'poolMin'|'poolMax'|'installCmd'|'keepDirs'|'seedLibraryFrom'|'trusted'>>
 //   DELETE /api/repos/:id?purge=1  登録解除。待機 worktree を削除。purge=1 で .base も削除(使用中の worktree があれば 409)
 //   POST /api/repos/:id/refill     補充を即時実行
+//   POST /api/repos/:id/rescan     → RescanResult & {ok}  同じリポジトリのフォルダ(セッションの cwd / git worktree list)を探して linkedDirs に加え、
+//                                  その中のセッションをこのリポジトリに紐付ける。{addWorktrees?: number} で待機 worktree の目標本数を増やす
 //   POST /api/worktrees/:id/rebuild  broken などを作り直す
 //   DELETE /api/worktrees/:id      待機中 / broken の worktree を削除
 //   (:id の "/" と "#" は encodeURIComponent する)
@@ -714,6 +774,9 @@ export type ServerMessage =
 //   POST /api/prs/:repo/:n/open-session {instruction?, mode?}  PR のブランチで新しいセッション(gh pr checkout)
 //   POST /api/prs/:repo/:n/merge {method: MergeMethod}  gh pr merge --<method> --delete-branch。紐付いた worktree は停止済みなら解放(keep)
 //   POST /api/prs/:repo/:n/close
+//   POST /api/prs/:repo/:n/review {event: PrReviewEvent, body?: string}  gh pr review(request_changes / comment は body 必須)
+//   POST /api/prs/:repo/:n/ai-review {note?, post?: boolean, mode?}  PR のブランチで Claude にレビューさせるセッションを起動。
+//                                  post=true ならレビュー結果を GitHub にコメントとして投稿させる
 //   POST /api/sessions/:id/create-pr {draft?: boolean}  実行中のセッションに「push して gh pr create して」と指示する。
 //          PR ができると headRefName で自動的に紐付く
 //   --- 指示・PowerShell・スキル・MCP ---
@@ -734,6 +797,10 @@ export type ServerMessage =
 //   POST /api/git/commit  {target, message, paths?: string[]}   paths があれば先に stage。空コミットは 409
 //                          そのセッションが実行中なら {force: true} が無い限り 409(Claude の作業と衝突しないように)
 //   POST /api/git/push    {target}   git push -u origin HEAD(既定ブランチへの直接 push は {force: true} が無い限り 409)
+//   GET  /api/git/branches?target=  → {ok, branches: GitBranchItem[]}(ローカル + origin だけにあるもの。新しい順)
+//   POST /api/git/switch  {target, branch, create?: boolean, force?: boolean}  → {ok, target: GitTarget}
+//                          dir のターゲットだけ(CC Hub の作業ツリーと .base はブランチを CC Hub が管理するので 409)。
+//                          未コミットの変更があれば 409。作業中のセッションがあれば {force: true} が無い限り 409
 //   GitTarget.id: "wt:<worktreeId>" / "base:<repoId>" / "dir:<path>"
 //   GET  /game/windows | GET /game/stream?hwnd= | POST /game/input   (CC Remote から移植、仕様そのまま)
 // ingest(ingest トークン: ヘッダ X-CC-Hub-Token。tailscale 経由=X-Forwarded-For 付きは拒否):
