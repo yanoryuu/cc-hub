@@ -1,8 +1,9 @@
-// 上部バー: 使用率メーター / 承認待ち / 新規セッション
+// 上部バー: 使用率メーター / MCP の要約 / 承認待ち / 新規セッション
 import type { RateWindow } from '@cc-hub/shared';
 import { useHub } from '../store';
 import { fmtUntil, useNow } from '../util';
 import { useApprovalSessions } from './Approval';
+import { McpSummary } from './Mcp';
 
 function Meter({ label, w, now }: { label: string; w: RateWindow | null; now: number }) {
   if (!w) {
@@ -69,6 +70,7 @@ export function TopBar() {
       </div>
       <UsageMeters />
       <div className="spacer" />
+      <McpSummary />
       <button
         className={`btn appr-btn ${approvals.length > 0 ? 'has' : ''}`}
         onClick={() => setDrawer(!drawer)}

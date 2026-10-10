@@ -42,6 +42,7 @@ import { findTranscript } from '../history';
 import { HttpError, clampInt, toolTarget } from '../util';
 import { PtyHost } from './pty-host';
 import { approvalKeys, detectApproval, type DetectedApproval } from './approval';
+import { buildTerminalArgv, launchTerminal, type TerminalSpec } from './terminal';
 
 const DEFAULT_COLS = 120;
 const DEFAULT_ROWS = 32;
@@ -65,7 +66,16 @@ interface Entry {
   preparing: boolean;
   /** 信頼ダイアログに自動で答えた(起動ごとに 1 回だけ) */
   trustAnswered: boolean;
+  /** PowerShell へ移している最中(PTY の停止 → ウィンドウ起動) */
+  handingOff: boolean;
+  /** PowerShell に移した時刻(止めた PTY の遅れて届く SessionEnd を無視するため) */
+  handoffAt: number | null;
+  /** PTY の終了を待っている処理 */
+  exitWaiters: (() => void)[];
 }
+
+/** PowerShell に移したセッションが、まだ向こうで動いているとみなす状態 */
+const HANDED_OFF_LIVE: SessionStatus[] = ['starting', 'running', 'awaiting_approval', 'awaiting_input', 'idle'];
 
 /** リポジトリ / worktree プール側への問い合わせ(RepoManager が実装する) */
 export interface RepoHooks {
@@ -129,7 +139,18 @@ export class SessionManager {
   /** PTY が動いている、または起動準備中か(worktree の解放可否の判定に使う) */
   isRunning(id: string): boolean {
     const e = this.sessions.get(id);
-    return !!e && (e.preparing || !!e.host?.alive);
+    return !!e && (e.preparing || e.handingOff || !!e.host?.alive || this.handedOffLive(e));
+  }
+
+  /** PowerShell に移したセッションがまだ向こうで動いているか(SessionEnd が届くまで) */
+  private handedOffLive(e: Entry): boolean {
+    return !!e.info.handedOff && !e.info.managed && HANDED_OFF_LIVE.includes(e.info.status);
+  }
+
+  /** PowerShell に移したまま動いているセッションか(解放できない理由の表示用) */
+  isHandedOffLive(id: string): boolean {
+    const e = this.sessions.get(id);
+    return !!e && this.handedOffLive(e);
   }
 
   /** --resume に使う claude 側の session_id */
@@ -171,6 +192,9 @@ export class SessionManager {
       claudeId: null,
       preparing: false,
       trustAnswered: false,
+      handingOff: false,
+      handoffAt: null,
+      exitWaiters: [],
     };
   }
 
@@ -198,6 +222,7 @@ export class SessionManager {
       repoId: null,
       worktreeId: null,
       branch: null,
+      handedOff: false,
     };
   }
 
@@ -260,6 +285,7 @@ export class SessionManager {
       repoId: r.repo_id ?? null,
       worktreeId: r.worktree_id ?? null,
       branch: r.branch ?? null,
+      handedOff: !!r.handed_off && !r.managed,
     });
     return info;
   }
@@ -283,7 +309,7 @@ export class SessionManager {
       const e = existing ?? this.newEntry(info);
       // worktree のセッションは cwd を変えない
       const keepCwd = !!existing?.info.worktreeId;
-      Object.assign(info, { managed: true, cwd: keepCwd ? info.cwd : cwd, mode, status: 'starting', exitCode: null, approval: null, currentTool: null });
+      Object.assign(info, { managed: true, handedOff: false, cwd: keepCwd ? info.cwd : cwd, mode, status: 'starting', exitCode: null, approval: null, currentTool: null });
       if (req.name) info.name = name;
       e.endedAt = null;
       e.userStopped = false;
@@ -478,6 +504,7 @@ export class SessionManager {
     const msg = `\r\n\x1b[33m[claude が終了しました (code ${code})]\x1b[0m\r\n`;
     e.host?.writeLocal(msg);
     bus.term(info.id, { t: 'term.data', sid: info.id, data: msg });
+    for (const w of e.exitWaiters.splice(0)) w();
     if (this.shuttingDown) return; // デーモン終了時は状態を残す(次回起動時に自動再開)
     if (e.restartPending) {
       e.restartPending = false;
@@ -548,7 +575,7 @@ export class SessionManager {
     const e = this.require(id);
     if (e.preparing) throw new HttpError(409, 'worktree を準備中です。完了してから操作してください');
     if (action === 'remove') {
-      if (e.info.managed && e.info.worktreeId && this.repoHooks?.holdsWorktree(e.info)) {
+      if ((e.info.managed || e.info.handedOff) && e.info.worktreeId && this.repoHooks?.holdsWorktree(e.info)) {
         throw new HttpError(409, 'worktree を使用中のセッションです。先に停止して解放(release)してください');
       }
       if (e.host?.alive) {
@@ -630,6 +657,148 @@ export class SessionManager {
     }
     keys.forEach((k, i) => setTimeout(() => host.alive && host.write(k), i * 40));
     setTimeout(() => this.runDetect(e), keys.length * 40 + 400);
+  }
+
+  // ================================================================ PowerShell へ移す / CC Hub に戻す
+  /**
+   * 「PowerShell で開く」: CC Hub の PTY を止め、新しい PowerShell ウィンドウで claude --resume して続ける。
+   * 以後は managed=false / handedOff=true。状態は hooks(ヘッダー X-CC-Hub-Session = CC_HUB_SESSION)で追う。
+   * worktree は割り当てたまま(SessionEnd で stopped になってから解放できる)
+   */
+  async openTerminal(id: string): Promise<SessionInfo> {
+    const e = this.require(id);
+    const info = e.info;
+    if (info.handedOff && !info.managed) throw new HttpError(409, '既に PowerShell に移しています');
+    if (!info.managed) throw new HttpError(409, '外部セッションは PowerShell に移せません');
+    if (e.preparing) throw new HttpError(409, 'worktree を準備中です。完了してから操作してください');
+    if (e.handingOff) throw new HttpError(409, 'PowerShell に移している途中です');
+    if (info.worktreeId && this.repoHooks && !this.repoHooks.holdsWorktree(info)) {
+      throw new HttpError(409, 'このセッションの worktree は解放済みです');
+    }
+    const resumeId = this.resumeId(e);
+    if (!findTranscript(resumeId)) throw new HttpError(409, 'まだ再開できる会話がありません(最初の指示を送ってから移してください)');
+    if (!fs.existsSync(info.cwd)) throw new HttpError(400, `ディレクトリが存在しません: ${info.cwd}`);
+    const spec: TerminalSpec = {
+      name: info.name,
+      cwd: info.cwd,
+      claudePath: this.cfg.claudePath,
+      resumeId,
+      extraArgs: ['--permission-mode', this.cfg.permissionMode, ...this.cfg.claudeArgs],
+    };
+    // 引用できないパスなどは PTY を止める前に弾く
+    buildTerminalArgv(spec);
+    e.handingOff = true;
+    try {
+      if (e.host?.alive) {
+        // 画面を保存してから止める(CC Hub 側では「移す前の最後の画面」を見せる)
+        const host = e.host;
+        await new Promise<void>((r) => host.snapshot((d) => (saveScreen(info.id, d), r())));
+        await this.stopPty(e);
+      }
+      const msg = '\r\n\x1b[36m[CC Hub] PowerShell のウィンドウで続きを開きます\x1b[0m\r\n';
+      e.host?.writeLocal(msg);
+      bus.term(id, { t: 'term.data', sid: id, data: msg });
+      let launched: { file: string; args: string[] };
+      try {
+        launched = await launchTerminal(this.cfg.terminalLauncher, spec, info.id);
+      } catch (err) {
+        // ウィンドウを開けなかった: CC Hub のセッション(停止済み)のまま残す
+        info.lastMessage = `PowerShell を開けませんでした: ${(err as Error).message}`.slice(0, 200);
+        this.touch(e);
+        throw new HttpError(500, info.lastMessage);
+      }
+      console.log(`[session] PowerShell に移しました: ${info.name} (${info.id}) ${launched.file} ${launched.args.join(' ').slice(0, 300)}`);
+      const now = Date.now();
+      Object.assign(info, { managed: false, handedOff: true, status: 'starting' as SessionStatus, exitCode: null, approval: null, currentTool: null, lastEventAt: now });
+      e.endedAt = null;
+      e.handoffAt = now;
+      e.detected = null;
+      e.statusBeforeApproval = null;
+      this.touch(e);
+      return { ...info };
+    } finally {
+      e.handingOff = false;
+    }
+  }
+
+  /** PTY を止めて終了を待つ(Ctrl+C を 2 回 → 4 秒で終わらなければ kill。最大 10 秒) */
+  private stopPty(e: Entry): Promise<void> {
+    const host = e.host;
+    if (!host?.alive) return Promise.resolve();
+    e.userStopped = true;
+    e.restartPending = false;
+    return new Promise<void>((resolve) => {
+      let done = false;
+      const timers: NodeJS.Timeout[] = [];
+      const finish = () => {
+        if (done) return;
+        done = true;
+        timers.forEach(clearTimeout);
+        resolve();
+      };
+      e.exitWaiters.push(finish);
+      host.write('\x03');
+      timers.push(setTimeout(() => host.alive && host.write('\x03'), 250));
+      timers.push(setTimeout(() => host.alive && host.kill(), 4000));
+      timers.push(setTimeout(finish, 10_000));
+    });
+  }
+
+  /**
+   * 「CC Hub に戻す」: 外部セッション / PowerShell に移したセッションを、CC Hub の PTY で --resume して引き取る。
+   * 相手が実行中(running / awaiting_approval)なら force なしは 409。外部セッションは同じ ID のまま managed に変える
+   */
+  takeover(id: string, force: boolean): SessionInfo {
+    const e = this.require(id);
+    const info = e.info;
+    if (info.managed) throw new HttpError(409, '既に CC Hub で動いています');
+    if (e.handingOff) throw new HttpError(409, 'PowerShell に移している途中です');
+    if ((info.status === 'running' || info.status === 'awaiting_approval') && !force) {
+      throw new HttpError(409, '元のウィンドウで動作中です。止めてから引き取るか、強制してください');
+    }
+    if (info.worktreeId && this.repoHooks && !this.repoHooks.holdsWorktree(info)) {
+      throw new HttpError(409, 'このセッションの worktree は解放済みです');
+    }
+    const resumeId = this.resumeId(e);
+    if (!findTranscript(resumeId)) throw new HttpError(409, '再開できる会話(transcript)が見つかりません');
+    let isDir = false;
+    try {
+      isDir = !!info.cwd && fs.statSync(info.cwd).isDirectory();
+    } catch {
+      isDir = false;
+    }
+    if (!isDir) throw new HttpError(400, `ディレクトリが存在しません: ${info.cwd || '(不明)'}`);
+    const wasExternal = !info.handedOff;
+    const before = { ...info };
+    Object.assign(info, {
+      managed: true,
+      handedOff: false,
+      mode: wasExternal ? 'plain' : info.mode,
+      status: 'starting' as SessionStatus,
+      exitCode: null,
+      approval: null,
+      currentTool: null,
+      cols: info.cols || DEFAULT_COLS,
+      rows: info.rows || DEFAULT_ROWS,
+    });
+    e.endedAt = null;
+    e.userStopped = false;
+    e.handoffAt = null;
+    e.detected = null;
+    e.statusBeforeApproval = null;
+    // 外部セッションの claude 側 ID は info.id そのもの。以後 /clear などで変われば trackClaudeId が追う
+    const msg = `\r\n\x1b[36m[CC Hub] ${wasExternal ? '外部セッション' : 'PowerShell のセッション'}を引き取って再開します${force ? '(強制)' : ''}\x1b[0m\r\n`;
+    e.host?.writeLocal(msg);
+    try {
+      this.spawn(e, { resume: true });
+    } catch (err) {
+      Object.assign(info, before);
+      throw new HttpError(500, `claude の起動に失敗しました: ${(err as Error).message}`);
+    }
+    bus.term(id, { t: 'term.data', sid: id, data: msg });
+    console.log(`[session] 引き取りました: ${info.name} (${info.id}) resume=${resumeId}${force ? ' force' : ''}`);
+    this.touch(e);
+    return { ...info };
   }
 
   // ================================================================ 画面解析
@@ -739,7 +908,8 @@ export class SessionManager {
     const now = Date.now();
     info.lastEventAt = now;
     if (typeof b.permission_mode === 'string') info.permissionMode = b.permission_mode;
-    if (!info.managed && typeof b.cwd === 'string' && b.cwd) info.cwd = b.cwd;
+    // 外部セッションは hooks の cwd を使う(PowerShell に移した worktree のセッションは cwd を変えない)
+    if (!info.managed && !info.worktreeId && typeof b.cwd === 'string' && b.cwd) info.cwd = b.cwd;
 
     this.agents.handleHook(info.id, b);
 
@@ -819,6 +989,8 @@ export class SessionManager {
           this.setStatus(e, 'error');
           break;
         case 'SessionEnd':
+          // PowerShell に移す時に止めた PTY の SessionEnd が遅れて届いたものは無視する
+          if (info.handedOff && e.handoffAt && now - e.handoffAt < 3000) break;
           if (!info.managed) {
             info.currentTool = null;
             info.approval = null;
@@ -828,7 +1000,7 @@ export class SessionManager {
           }
           break;
         case 'CwdChanged':
-          if (typeof b.new_cwd === 'string') info.cwd = b.new_cwd;
+          if (typeof b.new_cwd === 'string' && !(info.handedOff && info.worktreeId)) info.cwd = b.new_cwd;
           break;
       }
     }
@@ -841,7 +1013,8 @@ export class SessionManager {
    */
   private trackClaudeId(e: Entry, b: any): void {
     const sid = typeof b.session_id === 'string' ? b.session_id : '';
-    if (!e.info.managed || !UUID_RE.test(sid)) return;
+    // PowerShell に移したセッションも追跡する(戻すときの --resume に使う)
+    if (!(e.info.managed || e.info.handedOff) || !UUID_RE.test(sid)) return;
     const cur = e.claudeId || e.info.id;
     if (sid === cur) return;
     if (e.claudeId) this.aliases.delete(e.claudeId);
@@ -875,6 +1048,11 @@ export class SessionManager {
     const e = this.sessions.get(id);
     if (!e) return cb('\x1b[31m[セッションが見つかりません]\x1b[0m\r\n', DEFAULT_COLS, DEFAULT_ROWS);
     if (!e.host || !e.host.alive) {
+      if (e.info.handedOff && !e.info.managed) {
+        const saved = loadScreen(id);
+        const note = '\x1b[90m[PowerShell のウィンドウに移しました。「CC Hub に戻す」でここに引き取れます]\x1b[0m';
+        return cb(saved ? `${saved}\x1b[999;1H\r\n${note}` : `${note}\r\n`, e.host?.cols || DEFAULT_COLS, e.host?.rows || DEFAULT_ROWS);
+      }
       if (!e.info.managed) return cb('\x1b[90m[外部セッション: ターミナルは表示できません]\x1b[0m\r\n', DEFAULT_COLS, DEFAULT_ROWS);
       // 生きている PTY が無い: 区切りごとに保存しておいた最後の画面を出す
       const saved = loadScreen(id);

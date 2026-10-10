@@ -1,15 +1,17 @@
-// モバイルレイアウト(幅 900px 未満): 下タブ セッション / 承認 / PR / リポジトリ / ゲーム
+// モバイルレイアウト(幅 900px 未満): 下タブ セッション / 承認 / PR / リポジトリ / その他(スキル・MCP・ゲーム)
 import { useState } from 'react';
-import { useHub } from '../store';
-import { SessionList } from './SessionList';
+import { type MoreView, useHub } from '../store';
+import { SessionList, SortControl } from './SessionList';
 import { SessionPane } from './SessionPane';
 import { ApprovalList, useApprovalSessions } from './Approval';
 import { GameView } from './GameView';
 import { AgentTree } from './AgentTree';
 import { SessionDetails } from './SessionDetails';
-import { StatusDot } from './common';
+import { SkillsView } from './Skills';
+import { McpView } from './Mcp';
+import { mcpCounts, useMcp, useScopeCwd } from '../ext';
 import { ConnDot, UsageMeters } from './TopBar';
-import { STATUS_LABEL } from '../util';
+import { STATUS_ICON, STATUS_LABEL } from '../util';
 import { RegisterRepoForm, RepoListPage, RepoPage } from './Repos';
 import { PrDetailPage, PrListPage, RefreshPrsButton } from './Prs';
 import { SessionGit } from './SessionGit';
@@ -133,12 +135,11 @@ function SessionDetailView() {
             <button className="icon-btn back" onClick={() => setDetail(false)} aria-label="一覧へ戻る">
               ‹
             </button>
-            <StatusDot status={session.status} />
             <span className="m-title">
               {session.name}
               <span className={`m-sub st-${session.status}`}>
-                {STATUS_LABEL[session.status]}
-                {!session.managed && ' · 読み取り専用'}
+                <span aria-hidden="true">{STATUS_ICON[session.status]}</span> {STATUS_LABEL[session.status]}
+                {!session.managed && (session.handedOff ? ' · PowerShell で実行中' : ' · 外部セッション')}
               </span>
             </span>
             {fontCtl}
@@ -164,9 +165,82 @@ function SessionDetailView() {
   );
 }
 
+const MORE_ITEMS: { v: Exclude<MoreView, 'menu'>; label: string; ico: string; desc: string }[] = [
+  { v: 'skills', label: 'スキル', ico: '✦', desc: '使えるスキルとコマンドの一覧。タップで入力欄に入れる' },
+  { v: 'mcp', label: 'MCP の接続状況', ico: '⛁', desc: 'MCP サーバーがつながっているか' },
+  { v: 'game', label: 'ゲームキャプチャ', ico: '▶', desc: 'PC のウィンドウを見ながら操作' },
+];
+
+/** 「その他」タブ: メニュー → スキル / MCP / ゲーム */
+function MoreScreen() {
+  const view = useHub((s) => s.moreView);
+  const openMore = useHub((s) => s.openMore);
+  const cwd = useScopeCwd();
+  const mcp = useMcp(cwd);
+  if (view === 'game') {
+    return (
+      <div className="m-screen">
+        <div className="m-head">
+          <button className="icon-btn back" onClick={() => openMore('menu')} aria-label="その他へ戻る">
+            ‹
+          </button>
+          <span className="m-title">ゲームキャプチャ</span>
+        </div>
+        <GameView />
+      </div>
+    );
+  }
+  if (view === 'skills' || view === 'mcp') {
+    return (
+      <div className="m-screen">
+        <div className="m-head">
+          <button className="icon-btn back" onClick={() => openMore('menu')} aria-label="その他へ戻る">
+            ‹
+          </button>
+          <span className="m-title">{view === 'skills' ? 'スキル' : 'MCP の接続状況'}</span>
+        </div>
+        <div className="m-scroll">{view === 'skills' ? <SkillsView cwd={cwd} compact /> : <McpView cwd={cwd} compact />}</div>
+      </div>
+    );
+  }
+  const c = mcpCounts(mcp.data?.servers ?? []);
+  return (
+    <div className="m-screen">
+      <div className="m-head">
+        <span className="m-title">その他</span>
+      </div>
+      <div className="m-scroll">
+        <ul className="more-list">
+          {MORE_ITEMS.map((it) => (
+            <li key={it.v}>
+              <button className="more-item" onClick={() => openMore(it.v)}>
+                <span className="more-ico" aria-hidden="true">
+                  {it.ico}
+                </span>
+                <span className="more-main">
+                  <span className="more-label">{it.label}</span>
+                  <span className="more-desc">
+                    {it.v === 'mcp' && mcp.data
+                      ? `${c.connected}/${c.total} 接続${c.failed ? ` · 失敗 ${c.failed}` : ''}${c.needs_auth ? ` · 要認証 ${c.needs_auth}` : ''}`
+                      : it.desc}
+                  </span>
+                </span>
+                <span className="more-go" aria-hidden="true">
+                  ›
+                </span>
+              </button>
+            </li>
+          ))}
+        </ul>
+      </div>
+    </div>
+  );
+}
+
 export function MobileApp() {
   const tab = useHub((s) => s.mobileTab);
   const setTab = useHub((s) => s.setMobileTab);
+  const openMore = useHub((s) => s.openMore);
   const detail = useHub((s) => s.mobileDetail);
   const open = useHub((s) => s.open);
   const setNew = useHub((s) => s.setNewSessionOpen);
@@ -192,6 +266,9 @@ export function MobileApp() {
           <div className="m-usage">
             <UsageMeters compact />
           </div>
+          <div className="m-sort">
+            <SortControl />
+          </div>
           <SessionList onPick={open} />
         </div>
       </div>
@@ -212,34 +289,29 @@ export function MobileApp() {
   } else if (tab === 'repos') {
     body = <RepoScreen />;
   } else {
-    body = (
-      <div className="m-screen">
-        <GameView />
-      </div>
-    );
+    body = <MoreScreen />;
   }
+
+  const tabBtn = (t: typeof tab, label: string, badge?: React.ReactNode) => (
+    <button
+      className={tab === t ? 'active' : ''}
+      aria-current={tab === t ? 'page' : undefined}
+      onClick={() => (t === 'more' && tab === 'more' ? openMore('menu') : setTab(t))}
+    >
+      {label}
+      {badge}
+    </button>
+  );
 
   return (
     <div className="mobile">
       <div className="m-body">{body}</div>
-      <nav className="tabbar">
-        <button className={tab === 'sessions' ? 'active' : ''} onClick={() => setTab('sessions')}>
-          セッション
-        </button>
-        <button className={tab === 'approvals' ? 'active' : ''} onClick={() => setTab('approvals')}>
-          承認
-          {approvals.length > 0 && <span className="tab-badge">{approvals.length}</span>}
-        </button>
-        <button className={tab === 'prs' ? 'active' : ''} onClick={() => setTab('prs')}>
-          PR
-          {prBadge > 0 && <span className="tab-badge pr">{prBadge}</span>}
-        </button>
-        <button className={tab === 'repos' ? 'active' : ''} onClick={() => setTab('repos')}>
-          リポジトリ
-        </button>
-        <button className={tab === 'game' ? 'active' : ''} onClick={() => setTab('game')}>
-          ゲーム
-        </button>
+      <nav className="tabbar" aria-label="画面の切り替え">
+        {tabBtn('sessions', 'セッション')}
+        {tabBtn('approvals', '承認', approvals.length > 0 && <span className="tab-badge">{approvals.length}</span>)}
+        {tabBtn('prs', 'PR', prBadge > 0 && <span className="tab-badge pr">{prBadge}</span>)}
+        {tabBtn('repos', 'リポジトリ')}
+        {tabBtn('more', 'その他')}
       </nav>
     </div>
   );

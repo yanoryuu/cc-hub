@@ -12,6 +12,17 @@ export const STATUS_LABEL: Record<SessionStatus, string> = {
   stopped: '停止',
 };
 
+/** 状態のアイコン(色が見分けにくくても形で分かるように、ラベルと必ず一緒に出す) */
+export const STATUS_ICON: Record<SessionStatus, string> = {
+  starting: '◌',
+  running: '●',
+  awaiting_approval: '⏸︎', // 絵文字表示にならないようテキスト表示を指定
+  awaiting_input: '✎',
+  idle: '◔',
+  error: '✕',
+  stopped: '■',
+};
+
 export const AGENT_STATUS_LABEL: Record<AgentStatus, string> = {
   running: '実行中',
   done: '完了',
@@ -29,6 +40,17 @@ export function projectLabel(p: string): string {
   const last = parts[parts.length - 1] || p;
   if (parts.length >= 2 && (/^\./.test(last) || /^wt-\d+$/i.test(last))) return `${parts[parts.length - 2]}/${last}`;
   return last;
+}
+
+/** 相対時刻: "たった今" / "5 分前" / "3 時間前" / "2 日前" */
+export function fmtAgo(ms: number, now = Date.now()): string {
+  const s = Math.max(0, Math.floor((now - ms) / 1000));
+  if (s < 45) return 'たった今';
+  const m = Math.round(s / 60);
+  if (m < 60) return `${m} 分前`;
+  const h = Math.round(m / 60);
+  if (h < 24) return `${h} 時間前`;
+  return `${Math.round(h / 24)} 日前`;
 }
 
 /** ミリ秒 → "1:05:09" / "5:09" / "9s" */

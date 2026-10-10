@@ -1,5 +1,5 @@
 // REST ヘルパー。401 を受けたら PIN 画面を出し、ログイン成功後に同じリクエストを再試行する。
-import type { BranchInfo, HubState, MergeMethod, PrDetail, RegisterRepoRequest, ReleaseMode, RepoInfo, SessionMode } from '@cc-hub/shared';
+import type { BranchInfo, HubState, McpServerInfo, MergeMethod, PrDetail, RegisterRepoRequest, ReleaseMode, RepoInfo, SessionMode, SkillInfo } from '@cc-hub/shared';
 
 export class AuthError extends Error {
   constructor() {
@@ -105,6 +105,34 @@ export const sessionApi = {
     api(`/api/sessions/${encodeURIComponent(id)}/control`, { action }),
   approve: (id: string, option: string) => api(`/api/sessions/${encodeURIComponent(id)}/approve`, { option }),
   rename: (id: string, name: string) => api(`/api/sessions/${encodeURIComponent(id)}/rename`, { name }),
+  /** CC Hub の PTY を止めて、PowerShell の新しいウィンドウで続きを開く */
+  openTerminal: (id: string) => api(`/api/sessions/${encodeURIComponent(id)}/open-terminal`, {}),
+  /** 外部 / PowerShell のセッションを CC Hub で引き取る。相手が実行中なら force なしは 409 */
+  takeover: (id: string, force = false) =>
+    api(`/api/sessions/${encodeURIComponent(id)}/takeover`, force ? { force: true } : {}),
+  /** 画像などを cwd\.cc-hub\attachments\ に保存し、cwd からの相対パスを返す */
+  attach: async (id: string, file: { name: string; mime: string; dataBase64: string }): Promise<string> => {
+    const r = await api(`/api/sessions/${encodeURIComponent(id)}/attach`, file);
+    const p = pick<string>(r, 'path');
+    if (typeof p !== 'string' || !p) throw new Error('保存先のパスが返りませんでした');
+    return p;
+  },
+};
+
+// ---------------------------------------------------------------- スキル / MCP
+
+const cwdQuery = (cwd: string | null | undefined) => (cwd ? `cwd=${encodeURIComponent(cwd)}` : '');
+
+export const extApi = {
+  skills: async (cwd: string | null): Promise<SkillInfo[]> =>
+    pick<SkillInfo[]>(await api(`/api/skills?${cwdQuery(cwd)}`), 'skills') ?? [],
+  mcp: async (cwd: string | null, refresh = false): Promise<{ servers: McpServerInfo[]; checkedAt: number | null }> => {
+    const q = [cwdQuery(cwd), refresh ? 'refresh=1' : ''].filter(Boolean).join('&');
+    const r = await api(`/api/mcp${q ? `?${q}` : ''}`);
+    const servers = pick<McpServerInfo[]>(r, 'servers') ?? [];
+    const checkedAt = (r && (r.checkedAt ?? r.data?.checkedAt)) as number | undefined;
+    return { servers: Array.isArray(servers) ? servers : [], checkedAt: typeof checkedAt === 'number' ? checkedAt : null };
+  },
 };
 
 // ---------------------------------------------------------------- フェーズ 2: リポジトリ / worktree プール

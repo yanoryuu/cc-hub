@@ -30,6 +30,13 @@ export interface HubConfig {
   ghPath: string;
   /** PR 一覧の取得間隔(秒) */
   prPollSeconds: number;
+  // ---- 指示・PowerShell
+  /**
+   * 「PowerShell で開く」に使うランチャー。'' = 既定(cmd.exe /c start で新しい PowerShell ウィンドウを開く)。
+   * 実行ファイルのパスを指定すると、既定で実行するはずのコマンド(cmd.exe /c start ...)を引数として渡して実行する。
+   * .js / .cjs は node で実行する(検証用: 引数を記録するだけの偽ランチャー)
+   */
+  terminalLauncher: string;
 }
 
 // プロジェクトごとに D:\WorkTree\<name>\(.base + wt-NN)を作る。C ドライブの空きが少ないため D に統一
@@ -83,6 +90,7 @@ function createConfig(file: string): HubConfig {
     minFreeDiskGB: 20,
     ghPath: 'gh',
     prPollSeconds: 90,
+    terminalLauncher: '',
   };
   fs.writeFileSync(file, JSON.stringify(cfg, null, 2));
   console.log(`[config] ${file} を作成しました(PIN は config.json を参照)`);
@@ -137,6 +145,7 @@ export function loadConfig(): LoadedConfig {
     minFreeDiskGB: numOr(raw.minFreeDiskGB, 20, 0, 1e6),
     ghPath: String(raw.ghPath || 'gh'),
     prPollSeconds: numOr(raw.prPollSeconds, 90, 10, 3600),
+    terminalLauncher: typeof raw.terminalLauncher === 'string' ? raw.terminalLauncher.trim() : '',
   };
   return {
     dir,

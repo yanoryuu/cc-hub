@@ -2,10 +2,11 @@
 import { useState } from 'react';
 import type { SessionInfo } from '@cc-hub/shared';
 import { errText, isConflict, sessionApi } from '../api';
-import { fmtCost, fmtDate } from '../util';
+import { fmtCost, fmtDate, useMediaQuery } from '../util';
 import { useHub } from '../store';
 import { WT_STATE_LABEL, useSessionWorktree } from '../repo';
-import { StatusBadge } from './common';
+import { StatusBadge, WhereTag } from './common';
+import { PowerShellButton, TakeoverButton } from './Handoff';
 
 export function SessionControls({ session, onDone }: { session: SessionInfo; onDone?: () => void }) {
   const [busy, setBusy] = useState(false);
@@ -32,6 +33,8 @@ export function SessionControls({ session, onDone }: { session: SessionInfo; onD
   };
 
   const stopped = session.status === 'stopped';
+  // PowerShell はこの PC にウィンドウを開くので、デスクトップ(PC の画面)でだけ出す
+  const desktop = useMediaQuery('(min-width: 900px)');
 
   if (renaming) {
     return (
@@ -57,6 +60,11 @@ export function SessionControls({ session, onDone }: { session: SessionInfo; onD
 
   return (
     <div>
+      {(!session.managed || desktop) && (
+        <div className="ctl-row handoff-row">
+          {session.managed ? <PowerShellButton session={session} /> : <TakeoverButton session={session} className="btn primary" />}
+        </div>
+      )}
       <div className="ctl-row">
         {session.managed && (
           <>
@@ -118,8 +126,7 @@ export function SessionDetails({ session }: { session: SessionInfo }) {
       <dl className="kv">
         <dt>状態</dt>
         <dd>
-          <StatusBadge status={session.status} />
-          {!session.managed && <span className="ro-tag">読み取り専用</span>}
+          <StatusBadge status={session.status} /> <WhereTag session={session} />
         </dd>
         <dt>作業ディレクトリ</dt>
         <dd className="mono break" title={session.cwd}>

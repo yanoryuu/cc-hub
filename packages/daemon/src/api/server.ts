@@ -12,6 +12,9 @@ import { cleanupBranches, listBranches } from '../repo/branches';
 import { generateSlug } from '../repo/slug';
 import { listProjects, scanSessions } from '../history';
 import { handleGame } from '../game/capture';
+import { listSkills } from '../skills';
+import { listMcp } from '../mcp';
+import { ATTACH_MAX_BYTES, saveAttachment } from '../session/attach';
 import { HttpError, json, readBody } from '../util';
 
 // packages/web/dist。バンドルの出力先(dist / dist-test など)に依らないよう、daemon パッケージのルートを探してから辿る
@@ -67,6 +70,14 @@ export interface ServerDeps {
   getState: () => HubState;
   onIngestHook: (body: any, hubHeader: string | undefined) => void;
   onIngestStatusline: (body: any) => void;
+}
+
+function isDir(p: string): boolean {
+  try {
+    return fs.statSync(p).isDirectory();
+  } catch {
+    return false;
+  }
 }
 
 function serveStatic(res: http.ServerResponse, pathname: string): void {
@@ -277,6 +288,42 @@ async function handle(d: ServerDeps, req: http.IncomingMessage, res: http.Server
     if (!wm[2] && method === 'DELETE') {
       await d.repos.removeWorktree(id);
       return json(res, 200, { ok: true });
+    }
+  }
+
+  // ------------------------------------------------ 指示・PowerShell・スキル・MCP
+  if (p === '/api/skills' && method === 'GET') {
+    const cwd = url.searchParams.get('cwd') || '';
+    if (cwd && !isDir(cwd)) throw new HttpError(400, `ディレクトリが存在しません: ${cwd}`);
+    return json(res, 200, { ok: true, skills: listSkills(cwd ? path.resolve(cwd) : null) });
+  }
+
+  if (p === '/api/mcp' && method === 'GET') {
+    // cwd 省略時はホーム(ユーザースコープの MCP だけが見える)
+    const cwd = url.searchParams.get('cwd') || process.env.USERPROFILE || require('node:os').homedir();
+    if (!isDir(cwd)) throw new HttpError(400, `ディレクトリが存在しません: ${cwd}`);
+    const refresh = /^(1|true)$/i.test(url.searchParams.get('refresh') || '');
+    const r = await listMcp(d.claudePath, path.resolve(cwd), refresh);
+    return json(res, r.ok ? 200 : 502, r);
+  }
+
+  const sx = /^\/api\/sessions\/([^/]+)\/(open-terminal|takeover|attach)$/.exec(p);
+  if (sx && method === 'POST') {
+    const id = decodeURIComponent(sx[1]);
+    switch (sx[2]) {
+      case 'open-terminal':
+        return json(res, 200, { ok: true, session: await d.sessions.openTerminal(id) });
+      case 'takeover': {
+        const body = await readBody(req);
+        return json(res, 200, { ok: true, session: d.sessions.takeover(id, body.force === true) });
+      }
+      case 'attach': {
+        const info = d.sessions.info(id);
+        if (!info) throw new HttpError(404, 'セッションが見つかりません');
+        // base64 は元の 4/3 倍 + JSON の分
+        const body = await readBody(req, Math.ceil((ATTACH_MAX_BYTES * 4) / 3) + 64 * 1024);
+        return json(res, 200, { ok: true, path: await saveAttachment(info.cwd, body) });
+      }
     }
   }
 

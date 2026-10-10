@@ -8,8 +8,9 @@
     "start": "npm run build && node dist/main.js",
     "typecheck": "tsc -p tsconfig.json",
     "build:test": "esbuild src/main.ts --bundle --platform=node --target=node20 --format=cjs --outfile=dist-test/main.js --external:@lydell/node-pty --external:better-sqlite3 --external:@xterm/headless --external:@xterm/addon-serialize --external:ws --sourcemap",
-    "test": "esbuild test/approval.test.ts test/pr.test.ts --bundle --platform=node --target=node20 --format=cjs --outdir=dist-test --external:better-sqlite3 && node dist-test/approval.test.js && node dist-test/pr.test.js",
-    "build:p3": "esbuild src/main.ts --bundle --platform=node --target=node20 --format=cjs --outfile=dist-p3/main.js --external:@lydell/node-pty --external:better-sqlite3 --external:@xterm/headless --external:@xterm/addon-serialize --external:ws --sourcemap"
+    "test": "esbuild test/approval.test.ts test/pr.test.ts test/tools.test.ts --bundle --platform=node --target=node20 --format=cjs --outdir=dist-test --external:better-sqlite3 && node dist-test/approval.test.js && node dist-test/pr.test.js && node dist-test/tools.test.js",
+    "build:p3": "esbuild src/main.ts --bundle --platform=node --target=node20 --format=cjs --outfile=dist-p3/main.js --external:@lydell/node-pty --external:better-sqlite3 --external:@xterm/headless --external:@xterm/addon-serialize --external:ws --sourcemap",
+    "build:p4": "esbuild src/main.ts --bundle --platform=node --target=node20 --format=cjs --outfile=dist-p4/main.js --external:@lydell/node-pty --external:better-sqlite3 --external:@xterm/headless --external:@xterm/addon-serialize --external:ws --sourcemap"
   },
   "dependencies": {
     "@cc-hub/shared": "0.1.0",

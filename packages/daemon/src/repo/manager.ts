@@ -370,6 +370,9 @@ export class RepoManager {
     const info = this.sessions.info(sessionId);
     if (!info) throw new HttpError(404, 'セッションが見つかりません');
     if (!info.worktreeId) throw new HttpError(400, 'worktree で動いているセッションではありません');
+    if (this.sessions.isHandedOffLive(sessionId)) {
+      throw new HttpError(409, 'PowerShell のウィンドウで動作中です。claude を終了するか、CC Hub に戻して停止してから解放してください');
+    }
     if (this.sessions.isRunning(sessionId)) throw new HttpError(409, 'セッションが実行中です。先に停止してください');
     const w = await this.pool.release(info.worktreeId, mode, sessionId);
     this.sessions.markReleased(sessionId, mode);

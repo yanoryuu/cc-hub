@@ -28,10 +28,10 @@ interface Props {
 }
 
 const THEME = {
-  background: '#0d0f13',
-  foreground: '#d4d7de',
-  cursor: '#d4d7de',
-  cursorAccent: '#0d0f13',
+  background: '#13161c',
+  foreground: '#eceef2',
+  cursor: '#eceef2',
+  cursorAccent: '#13161c',
   selectionBackground: '#3b4a6b',
   black: '#1b1e25',
   red: '#f0717d',
@@ -40,8 +40,8 @@ const THEME = {
   blue: '#6ea8fe',
   magenta: '#c49cff',
   cyan: '#5fd4d4',
-  white: '#c8ccd4',
-  brightBlack: '#5c6370',
+  white: '#d5d9e0',
+  brightBlack: '#8a92a2', // 薄い文字(dim)も読めるように明るめ
   brightRed: '#ff8b95',
   brightGreen: '#9be3a5',
   brightYellow: '#f2c86d',
@@ -100,6 +100,9 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
       fontSize,
       fontFamily: '"Cascadia Mono", Consolas, "BIZ UDGothic", "Courier New", monospace',
       theme: THEME,
+      // 薄い色(dim など)の文字も背景とのコントラスト比 4.5 以上に自動で持ち上げる
+      minimumContrastRatio: 4.5,
+      lineHeight: 1.1,
       scrollback: 5000,
       allowProposedApi: true,
       cursorBlink: false,

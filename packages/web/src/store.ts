@@ -1,12 +1,30 @@
 // アプリ全体の状態(zustand)。デーモンが唯一の正なので、ここはその写し + UI 状態だけ。
 import { create } from 'zustand';
-import type { AgentNode, HubState, NotifyEvent, PrInfo, RepoInfo, SessionInfo, Usage, WorktreeInfo } from '@cc-hub/shared';
+import type { AgentNode, HubState, NotifyEvent, PrInfo, RepoInfo, SessionInfo, SessionStatus, Usage, WorktreeInfo } from '@cc-hub/shared';
 import { resolveNotifyPr } from './pr';
+import { readLocal, writeLocal } from './util';
 
 export type AuthState = 'checking' | 'need_pin' | 'ok';
-export type MobileTab = 'sessions' | 'approvals' | 'prs' | 'repos' | 'game';
+export type MobileTab = 'sessions' | 'approvals' | 'prs' | 'repos' | 'more';
+/** モバイル「その他」タブの中身 */
+export type MoreView = 'menu' | 'skills' | 'mcp' | 'game';
 /** デスクトップ中央の表示 */
-export type DeskView = 'session' | 'game' | 'repos' | 'prs';
+export type DeskView = 'session' | 'game' | 'repos' | 'prs' | 'skills' | 'mcp';
+/** デスクトップ右パネルのタブ */
+export type RightTab = 'details' | 'skills' | 'mcp';
+/** セッション一覧の並び順 */
+export type SortMode = 'attention' | 'recent' | 'created' | 'name';
+export interface SortOptions {
+  sort: SortMode;
+  /** true = リポジトリ(なければ cwd)ごとにまとめる */
+  group: boolean;
+}
+export const SORT_LABEL: Record<SortMode, string> = {
+  attention: '要対応順',
+  recent: '最近の動き順',
+  created: '作成順',
+  name: '名前順',
+};
 /** リポジトリ画面の表示(一覧 / 登録フォーム / リポジトリ詳細) */
 export type RepoRoute = { page: 'list' } | { page: 'register' } | { page: 'repo'; id: string };
 /** PR 画面の表示(一覧 / 詳細)。id = PrInfo.id("<repoId>#<number>") */
@@ -36,6 +54,9 @@ interface Store {
   repoRoute: RepoRoute;
   prRoute: PrRoute;
   mobileTab: MobileTab;
+  moreView: MoreView;
+  rightTab: RightTab;
+  sortOpts: SortOptions;
   /** モバイルでセッション詳細を開いているか */
   mobileDetail: boolean;
   approvalDrawer: boolean;
@@ -67,6 +88,10 @@ interface Store {
   /** PR 画面を開く(id を渡すと詳細) */
   openPr(id?: string | null): void;
   setMobileTab(t: MobileTab): void;
+  /** モバイル「その他」の中身を開く(タブも切り替える) */
+  openMore(v: MoreView): void;
+  setRightTab(t: RightTab): void;
+  setSortOpts(o: Partial<SortOptions>): void;
   setMobileDetail(v: boolean): void;
   setApprovalDrawer(v: boolean): void;
   setNewSessionOpen(v: boolean, repoId?: string | null): void;
@@ -93,6 +118,9 @@ export const useHub = create<Store>((set, get) => ({
   repoRoute: { page: 'list' },
   prRoute: { page: 'list' },
   mobileTab: 'sessions',
+  moreView: 'menu',
+  rightTab: readRightTab(),
+  sortOpts: readSortOpts(),
   mobileDetail: false,
   approvalDrawer: false,
   newSessionOpen: false,
@@ -104,7 +132,7 @@ export const useHub = create<Store>((set, get) => ({
   applyFull: (s) =>
     set((st) => {
       const selectedId =
-        st.selectedId && s.sessions[st.selectedId] ? st.selectedId : firstSessionId(s.sessions, s.repos ?? {});
+        st.selectedId && s.sessions[st.selectedId] ? st.selectedId : firstSessionId(s.sessions, s.repos ?? {}, st.sortOpts);
       // 古いデーモン(フェーズ 1)は repos / worktrees を返さない
       const repos = s.repos ?? {};
       const repoRoute: RepoRoute =
@@ -138,7 +166,7 @@ export const useHub = create<Store>((set, get) => ({
       return {
         sessions,
         agents,
-        selectedId: wasSelected ? firstSessionId(sessions, st.repos) : st.selectedId,
+        selectedId: wasSelected ? firstSessionId(sessions, st.repos, st.sortOpts) : st.selectedId,
         mobileDetail: wasSelected ? false : st.mobileDetail,
       };
     }),
@@ -184,6 +212,17 @@ export const useHub = create<Store>((set, get) => ({
   openRepos: (repoRoute) => set({ repoRoute, deskView: 'repos', mobileTab: 'repos' }),
   openPr: (id) => set({ prRoute: id ? { page: 'pr', id } : { page: 'list' }, deskView: 'prs', mobileTab: 'prs' }),
   setMobileTab: (mobileTab) => set({ mobileTab }),
+  openMore: (moreView) => set({ moreView, mobileTab: 'more' }),
+  setRightTab: (rightTab) => {
+    writeLocal('cchub_right_tab', rightTab);
+    set({ rightTab });
+  },
+  setSortOpts: (o) =>
+    set((st) => {
+      const sortOpts = { ...st.sortOpts, ...o };
+      writeLocal('cchub_sort', JSON.stringify(sortOpts));
+      return { sortOpts };
+    }),
   setMobileDetail: (mobileDetail) => set({ mobileDetail }),
   setApprovalDrawer: (approvalDrawer) => set({ approvalDrawer }),
   setNewSessionOpen: (newSessionOpen, repoId = null) => set({ newSessionOpen, newSessionRepo: repoId }),
@@ -216,12 +255,34 @@ export const useHub = create<Store>((set, get) => ({
   dismissToast: (id) => set((st) => ({ toasts: st.toasts.filter((t) => t.id !== id) })),
 }));
 
-function firstSessionId(sessions: Record<string, SessionInfo>, repos: Record<string, RepoInfo>): string | null {
-  return orderedSessions(sessions, repos)[0]?.id ?? null;
+function firstSessionId(
+  sessions: Record<string, SessionInfo>,
+  repos: Record<string, RepoInfo>,
+  opts?: SortOptions,
+): string | null {
+  return orderedSessions(sessions, repos, {}, opts)[0]?.id ?? null;
+}
+
+function readSortOpts(): SortOptions {
+  const def: SortOptions = { sort: 'attention', group: true };
+  try {
+    const o = JSON.parse(readLocal('cchub_sort', '{}')) as Partial<SortOptions>;
+    return {
+      sort: o.sort && o.sort in SORT_LABEL ? o.sort : def.sort,
+      group: typeof o.group === 'boolean' ? o.group : def.group,
+    };
+  } catch {
+    return def;
+  }
+}
+
+function readRightTab(): RightTab {
+  const v = readLocal('cchub_right_tab', 'details');
+  return v === 'skills' || v === 'mcp' ? v : 'details';
 }
 
 export interface SessionGroup {
-  /** グループのキー("repo:<id>" / "cwd:<path>") */
+  /** グループのキー("repo:<id>" / "cwd:<path>" / "all") */
   key: string;
   /** リポジトリのグループなら repoId */
   repoId: string | null;
@@ -233,23 +294,47 @@ export interface SessionGroup {
   sessions: SessionInfo[];
 }
 
-/** cwd でグループ化(グループはパス順、グループ内は作成順) */
-export function groupByCwd(list: SessionInfo[]): { cwd: string; sessions: SessionInfo[] }[] {
-  const sorted = [...list].sort((a, b) => a.cwd.localeCompare(b.cwd) || a.createdAt - b.createdAt);
-  const groups = new Map<string, SessionInfo[]>();
-  for (const s of sorted) {
-    const g = groups.get(s.cwd);
-    if (g) g.push(s);
-    else groups.set(s.cwd, [s]);
+/** 要対応順の優先度(小さいほど上): 承認待ち → 入力待ち → エラー → 実行中 → アイドル → 起動中 → 停止 */
+const ATTENTION_RANK: Record<SessionStatus, number> = {
+  awaiting_approval: 0,
+  awaiting_input: 1,
+  error: 2,
+  running: 3,
+  idle: 4,
+  starting: 5,
+  stopped: 6,
+};
+
+/** セッションの比較関数(並び順ごと) */
+export function sessionComparator(sort: SortMode): (a: SessionInfo, b: SessionInfo) => number {
+  switch (sort) {
+    case 'attention':
+      return (a, b) => ATTENTION_RANK[a.status] - ATTENTION_RANK[b.status] || b.lastEventAt - a.lastEventAt;
+    case 'recent':
+      return (a, b) => b.lastEventAt - a.lastEventAt || a.createdAt - b.createdAt;
+    case 'name':
+      return (a, b) => a.name.localeCompare(b.name, 'ja') || a.createdAt - b.createdAt;
+    case 'created':
+    default:
+      return (a, b) => a.createdAt - b.createdAt;
   }
-  return [...groups.entries()].map(([cwd, sessions]) => ({ cwd, sessions }));
 }
 
 /**
- * セッションのグループ化: repoId があればリポジトリごと(worktree が違っても 1 グループ)、
- * なければ従来どおり cwd ごと。リポジトリのグループを先に、それぞれ名前順、グループ内は作成順。
+ * セッションのグループ化: repoId があればリポジトリごと(worktree が違っても 1 グループ)、なければ cwd ごと。
+ * opts.group=false なら 1 グループ(key "all")にまとめる。グループ内は opts.sort の順。
+ * グループの順: 要対応順 = いちばん対応が必要なセッションのあるグループが上 / 最近の動き順 = 最後に動いたグループが上 /
+ * 作成順・名前順 = リポジトリのグループを先に、それぞれ名前順
  */
-export function groupSessions(list: SessionInfo[], repos: Record<string, RepoInfo>): SessionGroup[] {
+export function groupSessions(
+  list: SessionInfo[],
+  repos: Record<string, RepoInfo>,
+  opts: SortOptions = { sort: 'created', group: true },
+): SessionGroup[] {
+  const cmp = sessionComparator(opts.sort);
+  if (!opts.group) {
+    return [{ key: 'all', repoId: null, cwd: null, label: '', sub: '', sessions: [...list].sort(cmp) }];
+  }
   const byKey = new Map<string, SessionGroup>();
   for (const s of list) {
     const key = s.repoId ? `repo:${s.repoId}` : `cwd:${s.cwd}`;
@@ -266,11 +351,17 @@ export function groupSessions(list: SessionInfo[], repos: Record<string, RepoInf
     g.sessions.push(s);
   }
   const groups = [...byKey.values()];
-  for (const g of groups) g.sessions.sort((a, b) => a.createdAt - b.createdAt);
-  groups.sort((a, b) => {
+  for (const g of groups) g.sessions.sort(cmp);
+  const byName = (a: SessionGroup, b: SessionGroup) => {
     if (!!a.repoId !== !!b.repoId) return a.repoId ? -1 : 1;
     return (a.repoId ?? a.cwd ?? '').localeCompare(b.repoId ?? b.cwd ?? '');
-  });
+  };
+  if (opts.sort === 'attention' || opts.sort === 'recent') {
+    // グループ内は並べ済みなので先頭が代表
+    groups.sort((a, b) => cmp(a.sessions[0], b.sessions[0]) || byName(a, b));
+  } else {
+    groups.sort(byName);
+  }
   return groups;
 }
 
@@ -284,12 +375,13 @@ export function isFinished(s: SessionInfo, worktrees: Record<string, WorktreeInf
   return !(w && w.state === 'assigned' && w.sessionId === s.id);
 }
 
-/** 表示順に並べたセッション一覧(Ctrl+1..9 用。終了済みは含めない) */
+/** 表示順に並べたセッション一覧(Ctrl+1..9 用。終了済みは含めない)。opts は一覧の並び順の設定 */
 export function orderedSessions(
   sessions: Record<string, SessionInfo>,
   repos: Record<string, RepoInfo> = {},
   worktrees: Record<string, WorktreeInfo> = {},
+  opts: SortOptions = { sort: 'attention', group: true },
 ): SessionInfo[] {
   const live = Object.values(sessions).filter((s) => !isFinished(s, worktrees));
-  return groupSessions(live, repos).flatMap((g) => g.sessions);
+  return groupSessions(live, repos, opts).flatMap((g) => g.sessions);
 }

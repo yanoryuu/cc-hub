@@ -1,13 +1,16 @@
-// セッションの操作面: ターミナル + クイックキー + 入力バー(読み取り専用セッションは情報表示のみ)
+// セッションの操作面: ターミナル + 指示の入力欄(Composer)+ クイックキー(畳める)
+// 外部 / PowerShell に移したセッションは、説明と「引き継ぐ」ボタン + 引き継いで送る入力欄
 import { useEffect, useRef, useState } from 'react';
 import type { SessionInfo } from '@cc-hub/shared';
 import { TerminalView, type TerminalHandle } from './TerminalView';
 import { ApprovalBanner } from './Approval';
 import { ReleaseBanner } from './ReleaseBanner';
-import { StatusBadge, toolText } from './common';
+import { Composer } from './Composer';
+import { ConflictDialog, TakeoverPanel, useTakeover } from './Handoff';
 import { sessionApi } from '../api';
+import { flushPendingSend, usePendingSend } from '../composer';
 import { useSessionWorktree } from '../repo';
-import { fmtElapsed, readLocal, useNow, writeLocal } from '../util';
+import { readLocal, writeLocal } from '../util';
 
 const QUICK_KEYS: { label: string; title?: string; key?: string; cmd?: string; scroll?: -1 | 1 }[] = [
   { label: '▲上', title: '上へスクロール', scroll: -1 },
@@ -33,14 +36,16 @@ const QUICK_KEYS: { label: string; title?: string; key?: string; cmd?: string; s
 
 function useFontSize(): [number, (d: number) => void] {
   const [size, setSize] = useState(() => {
-    const def = window.matchMedia('(min-width: 900px)').matches ? '13' : '12';
-    const n = parseInt(readLocal('cchub_font', def), 10);
-    return Number.isFinite(n) ? n : 13;
+    const def = window.matchMedia('(min-width: 900px)').matches ? '14' : '13';
+    // 旧既定(13 / 12)のままの人は新しい既定に上げる(読みやすさの改善。A−/A+ で変えた値はそのまま)
+    const saved = readLocal('cchub_font2', '') || def;
+    const n = parseInt(saved, 10);
+    return Number.isFinite(n) ? n : 14;
   });
   const change = (d: number) =>
     setSize((s) => {
-      const next = Math.max(8, Math.min(24, s + d));
-      writeLocal('cchub_font', String(next));
+      const next = Math.max(9, Math.min(26, s + d));
+      writeLocal('cchub_font2', String(next));
       return next;
     });
   return [size, change];
@@ -48,7 +53,7 @@ function useFontSize(): [number, (d: number) => void] {
 
 export function QuickKeys({ session, termRef }: { session: SessionInfo; termRef: React.RefObject<TerminalHandle> }) {
   return (
-    <div className="quick-keys" role="toolbar" aria-label="クイックキー">
+    <div className="quick-keys" role="toolbar" aria-label="クイックキー(ターミナルに直接送るキー)">
       {QUICK_KEYS.map((q) => (
         <button
           key={q.label}
@@ -72,93 +77,18 @@ export function QuickKeys({ session, termRef }: { session: SessionInfo; termRef:
   );
 }
 
-export function InputBar({
-  session,
-  desktop,
-  onSent,
-}: {
-  session: SessionInfo;
-  desktop: boolean;
-  onSent?: () => void;
-}) {
-  const [text, setText] = useState('');
-  const [busy, setBusy] = useState(false);
-  const taRef = useRef<HTMLTextAreaElement>(null);
-
-  // 高さを内容に合わせる(最大 160px)
-  useEffect(() => {
-    const ta = taRef.current;
-    if (!ta) return;
-    ta.style.height = 'auto';
-    // border-box なので枠線 2px 分を足す(足さないとスクロールバーが出る)
-    ta.style.height = Math.min(ta.scrollHeight + 2, 160) + 'px';
-  }, [text]);
-
-  const send = async () => {
-    const v = text.trim();
-    if (!v || busy) return;
-    setBusy(true);
-    try {
-      await sessionApi.input(session.id, v, true);
-      setText('');
-      onSent?.();
-    } catch {
-      /* 失敗時は入力を残す */
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  return (
-    <div className="input-bar">
-      <textarea
-        ref={taRef}
-        rows={1}
-        value={text}
-        placeholder={desktop ? '指示を入力(Enter で送信 / Shift+Enter で改行)' : '指示を入力'}
-        onChange={(e) => setText(e.target.value)}
-        onKeyDown={(e) => {
-          // デスクトップ: Enter 送信 / Shift+Enter 改行。IME 変換中の Enter は無視
-          if (desktop && e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
-            e.preventDefault();
-            void send();
-          }
-        }}
-      />
-      <button className="btn primary send-btn" disabled={busy || !text.trim()} onClick={() => void send()}>
-        送信
-      </button>
-    </div>
-  );
-}
-
-/** 外部セッション(読み取り専用)の情報表示 */
-function ReadOnlyView({ session }: { session: SessionInfo }) {
-  const now = useNow(1000);
-  return (
-    <div className="readonly-view">
-      <div className="ro-note">外部で起動されたセッションです(読み取り専用)。ターミナルは表示できません。</div>
-      <dl className="kv">
-        <dt>状態</dt>
-        <dd>
-          <StatusBadge status={session.status} />
-        </dd>
-        <dt>実行中のツール</dt>
-        <dd className="mono">
-          {session.currentTool ? (
-            <>
-              {toolText(session)}{' '}
-              <span className="muted">({fmtElapsed(now - session.currentTool.since)})</span>
-            </>
-          ) : (
-            <span className="muted">なし</span>
-          )}
-        </dd>
-        <dt>直近のメッセージ</dt>
-        <dd className="ro-msg">{session.lastMessage || <span className="muted">なし</span>}</dd>
-      </dl>
-    </div>
-  );
+/** クイックキーの開閉(既定: デスクトップは閉じる / スマホは開く。開閉は保存) */
+function useQuickKeysOpen(desktop: boolean): [boolean, () => void] {
+  const key = desktop ? 'cchub_qk_desk' : 'cchub_qk_mob';
+  const [open, setOpen] = useState(() => readLocal(key, desktop ? '0' : '1') === '1');
+  return [
+    open,
+    () =>
+      setOpen((v) => {
+        writeLocal(key, v ? '0' : '1');
+        return !v;
+      }),
+  ];
 }
 
 export function SessionPane({
@@ -173,18 +103,43 @@ export function SessionPane({
 }) {
   const termRef = useRef<TerminalHandle>(null);
   const [fontSize, changeFont] = useFontSize();
+  const [qkOpen, toggleQk] = useQuickKeysOpen(desktop);
   const live = session.managed && session.status !== 'stopped';
+  const takeover = useTakeover(session);
+  const pending = usePendingSend(session.id);
+
+  // 「引き継いで送信」: CC Hub 管理下になって入力待ちになったら、預かっていた指示を送る
+  useEffect(() => {
+    if (pending && session.managed && (session.status === 'awaiting_input' || session.status === 'idle')) {
+      void flushPendingSend(session.id).then(() => termRef.current?.scrollToBottom());
+    }
+  }, [pending, session.managed, session.status, session.id]);
 
   const fontCtl = session.managed ? (
-    <span className="font-ctl">
+    <span className="font-ctl" role="group" aria-label="ターミナルの文字サイズ">
       <button className="icon-btn" onClick={() => changeFont(-1)} title="文字を小さく" aria-label="文字を小さく">
         A−
       </button>
+      <span className="font-num" aria-live="polite">
+        {fontSize}
+      </span>
       <button className="icon-btn" onClick={() => changeFont(1)} title="文字を大きく" aria-label="文字を大きく">
         A+
       </button>
     </span>
   ) : null;
+
+  const qkToggle = (
+    <button
+      type="button"
+      className={`tool-btn ${qkOpen ? 'on' : ''}`}
+      aria-expanded={qkOpen}
+      onClick={toggleQk}
+      title="Esc / ↑↓ / 1 2 3 などをターミナルに直接送るキー"
+    >
+      <span aria-hidden="true">⌨</span> キー {qkOpen ? '▾' : '▸'}
+    </button>
+  );
 
   return (
     <div className="session-pane">
@@ -201,16 +156,27 @@ export function SessionPane({
             interactive={live}
           />
           {live ? (
-            <>
-              <QuickKeys session={session} termRef={termRef} />
-              <InputBar session={session} desktop={desktop} onSent={() => termRef.current?.scrollToBottom()} />
-            </>
+            <div className="composer-dock">
+              {qkOpen && <QuickKeys session={session} termRef={termRef} />}
+              <Composer
+                session={session}
+                desktop={desktop}
+                onSent={() => termRef.current?.scrollToBottom()}
+                toolbarExtra={qkToggle}
+              />
+            </div>
           ) : (
             <StoppedBar session={session} />
           )}
         </>
       ) : (
-        <ReadOnlyView session={session} />
+        <>
+          <TakeoverPanel session={session} ctl={takeover} />
+          <div className="composer-dock">
+            <Composer session={session} desktop={desktop} mode="takeover" onTakeoverSend={(t) => takeover.start(t)} />
+          </div>
+          <ConflictDialog ctl={takeover} session={session} />
+        </>
       )}
     </div>
   );

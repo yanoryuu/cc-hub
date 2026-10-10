@@ -1,18 +1,23 @@
 // デスクトップレイアウト(幅 900px 以上): 上部バー / 左サイドバー / 中央ターミナル / 右パネル
-// 中央はセッション / ゲーム / リポジトリ(リポジトリ表示中は右パネルを畳んで中央を広げる)
+// 中央はセッション / ゲーム / リポジトリ / PR / スキル / MCP(セッション以外の表示中は右パネルを畳んで中央を広げる)
 import { useEffect } from 'react';
-import { orderedSessions, useHub } from '../store';
+import type { SessionInfo } from '@cc-hub/shared';
+import { type RightTab, orderedSessions, useHub } from '../store';
 import { TopBar } from './TopBar';
-import { SessionList } from './SessionList';
+import { SessionList, SortControl } from './SessionList';
 import { SessionPane } from './SessionPane';
 import { AgentTree } from './AgentTree';
 import { SessionDetails } from './SessionDetails';
 import { ApprovalList } from './Approval';
-import { StatusBadge } from './common';
+import { StatusBadge, WhereTag } from './common';
 import { GameView } from './GameView';
 import { RegisterRepoForm, RepoListPage, RepoPage, SidebarRepos } from './Repos';
 import { PrScreen, SidebarPrs } from './Prs';
 import { SessionGit } from './SessionGit';
+import { SkillsView } from './Skills';
+import { McpView } from './Mcp';
+import { PowerShellButton, TakeoverButton } from './Handoff';
+import { useScopeCwd } from '../ext';
 
 function ApprovalDrawer() {
   const open = useHub((s) => s.approvalDrawer);
@@ -56,6 +61,71 @@ function ApprovalDrawer() {
   );
 }
 
+const RIGHT_TABS: { id: RightTab; label: string }[] = [
+  { id: 'details', label: '詳細' },
+  { id: 'skills', label: 'スキル' },
+  { id: 'mcp', label: 'MCP' },
+];
+
+/** 右パネル: 詳細(エージェント / ブランチ / セッション)・スキル・MCP のタブ */
+function RightPanel({ session }: { session: SessionInfo }) {
+  const tab = useHub((s) => s.rightTab);
+  const setTab = useHub((s) => s.setRightTab);
+  return (
+    <>
+      <div className="rp-tabs" role="tablist" aria-label="右パネル">
+        {RIGHT_TABS.map((t) => (
+          <button
+            key={t.id}
+            role="tab"
+            aria-selected={tab === t.id}
+            className={`rp-tab ${tab === t.id ? 'on' : ''}`}
+            onClick={() => setTab(t.id)}
+          >
+            {t.label}
+          </button>
+        ))}
+      </div>
+      {tab === 'skills' ? (
+        <SkillsView cwd={session.cwd} compact />
+      ) : tab === 'mcp' ? (
+        <McpView cwd={session.cwd} compact />
+      ) : (
+        <>
+          <AgentTree session={session} />
+          <SessionGit session={session} />
+          <SessionDetails session={session} />
+        </>
+      )}
+    </>
+  );
+}
+
+/** サイドバー下部のナビ(スキル / MCP / ゲーム) */
+function SideNav() {
+  const view = useHub((s) => s.deskView);
+  const setView = useHub((s) => s.setDeskView);
+  const item = (v: 'skills' | 'mcp' | 'game', label: string, ico: string) => (
+    <button
+      className={`side-nav-btn ${view === v ? 'on' : ''}`}
+      aria-current={view === v ? 'page' : undefined}
+      onClick={() => setView(view === v ? 'session' : v)}
+    >
+      <span className="side-nav-ico" aria-hidden="true">
+        {ico}
+      </span>
+      {label}
+    </button>
+  );
+  return (
+    <nav className="sidebar-foot side-nav" aria-label="その他の画面">
+      {item('skills', 'スキル', '✦')}
+      {item('mcp', 'MCP', '⛁')}
+      {item('game', 'ゲーム', '▶')}
+    </nav>
+  );
+}
+
 export function DesktopApp() {
   const selectedId = useHub((s) => s.selectedId);
   const session = useHub((s) => (s.selectedId ? s.sessions[s.selectedId] : undefined));
@@ -63,16 +133,16 @@ export function DesktopApp() {
   const loaded = useHub((s) => s.loaded);
   const openSession = useHub((s) => s.open);
   const view = useHub((s) => s.deskView);
-  const setView = useHub((s) => s.setDeskView);
   const repoRoute = useHub((s) => s.repoRoute);
+  const scopeCwd = useScopeCwd();
 
-  // Ctrl+1..9: セッション切替 / Ctrl+Shift+A: 承認キュー
+  // Ctrl+1..9: セッション切替(一覧に表示している順) / Ctrl+Shift+A: 承認キュー
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (!e.ctrlKey || e.altKey || e.metaKey) return;
       if (/^[1-9]$/.test(e.key) && !e.shiftKey) {
         const st = useHub.getState();
-        const s = orderedSessions(st.sessions, st.repos, st.worktrees)[parseInt(e.key, 10) - 1];
+        const s = orderedSessions(st.sessions, st.repos, st.worktrees, st.sortOpts)[parseInt(e.key, 10) - 1];
         if (s) {
           e.preventDefault();
           e.stopPropagation();
@@ -89,26 +159,38 @@ export function DesktopApp() {
     return () => window.removeEventListener('keydown', onKey, true);
   }, []);
 
-  // リポジトリ / PR 表示中は右パネルを畳んで中央を広げる
-  const wide = view === 'repos' || view === 'prs';
+  // セッション以外(リポジトリ / PR / スキル / MCP)の表示中は右パネルを畳んで中央を広げる
+  const wide = view === 'repos' || view === 'prs' || view === 'skills' || view === 'mcp';
 
   return (
     <div className="desk">
       <TopBar />
       <div className={`desk-body ${wide ? 'wide' : ''}`}>
         <aside className="sidebar">
+          <div className="side-head">
+            <span className="side-head-title">セッション</span>
+            <SortControl />
+          </div>
           <SessionList onPick={openSession} activeOnlyInSessionView={view !== 'session'} />
           <SidebarPrs />
           <SidebarRepos />
-          <div className="sidebar-foot">
-            <button className={`btn ghost ${view === 'game' ? 'on' : ''}`} onClick={() => setView(view === 'game' ? 'session' : 'game')}>
-              ゲームキャプチャ
-            </button>
-          </div>
+          <SideNav />
         </aside>
         <main className="center">
           {view === 'game' ? (
             <GameView />
+          ) : view === 'skills' ? (
+            <div className="repo-scroll">
+              <div className="repo-page ext-page">
+                <SkillsView cwd={scopeCwd} />
+              </div>
+            </div>
+          ) : view === 'mcp' ? (
+            <div className="repo-scroll">
+              <div className="repo-page ext-page">
+                <McpView cwd={scopeCwd} />
+              </div>
+            </div>
           ) : view === 'prs' ? (
             <div className="repo-scroll">
               <PrScreen />
@@ -130,19 +212,27 @@ export function DesktopApp() {
               desktop
               header={(fontCtl) => (
                 <div className="pane-head">
-                  <span className="pane-name">{session.name}</span>
+                  <span className="pane-name" title={session.name}>
+                    {session.name}
+                  </span>
                   <StatusBadge status={session.status} />
-                  {!session.managed && <span className="ro-tag">読み取り専用</span>}
-                  {session.branch && (
-                    <span className="pane-branch mono" title={repo ? `${repo.id} / ${session.branch}` : session.branch}>
+                  <WhereTag session={session} />
+                  {session.branch ? (
+                    <span className="pane-branch mono" title={`${repo ? `${repo.id} / ` : ''}${session.branch}\n${session.cwd}`}>
                       {repo && <span className="pane-repo">{repo.name}</span>}
                       {session.branch}
                     </span>
+                  ) : (
+                    <span className="pane-cwd mono" title={session.cwd}>
+                      {session.cwd}
+                    </span>
                   )}
-                  <span className="pane-cwd mono" title={session.cwd}>
-                    {session.cwd}
-                  </span>
                   <span className="spacer" />
+                  {session.managed ? (
+                    <PowerShellButton session={session} className="btn ghost sm head-act" />
+                  ) : (
+                    <TakeoverButton session={session} className="btn primary sm head-act" />
+                  )}
                   {fontCtl}
                 </div>
               )}
@@ -153,17 +243,7 @@ export function DesktopApp() {
             </div>
           )}
         </main>
-        {!wide && (
-          <aside className="rightpanel">
-            {session && view === 'session' ? (
-              <>
-                <AgentTree session={session} />
-                <SessionGit session={session} />
-                <SessionDetails session={session} />
-              </>
-            ) : null}
-          </aside>
-        )}
+        {!wide && <aside className="rightpanel">{session && view === 'session' ? <RightPanel session={session} /> : null}</aside>}
       </div>
       <ApprovalDrawer />
     </div>

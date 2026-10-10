@@ -40,6 +40,7 @@ function mkSession(p) {
     repoId: null,
     worktreeId: null,
     branch: null,
+    handedOff: false,
     ...p,
   };
 }
@@ -124,7 +125,25 @@ const s5 = mkSession({
   createdAt: now - 20 * MIN,
   lastMessage: '検索ボックスを追加しました。PR を作りますか?',
 });
-for (const s of [s1, s2, s3, s4, s5]) sessions[s.id] = s;
+// PowerShell に移したセッション(handedOff。worktree は保持したまま)
+const s6 = mkSession({
+  name: 'checkout-flow',
+  cwd: 'D:\\WorkTree\\shop-web\\wt-08',
+  managed: false,
+  handedOff: true,
+  status: 'awaiting_input',
+  branch: 'feat/checkout-flow',
+  repoId: REPO_WEB,
+  worktreeId: `${REPO_WEB}#wt-08`,
+  contextPct: 41,
+  costUsd: 1.02,
+  createdAt: now - 50 * MIN,
+  lastEventAt: now - 8 * MIN,
+  lastMessage: '決済画面の入力チェックを追加しました。PowerShell 側で手動確認中です。',
+  cols: 0,
+  rows: 0,
+});
+for (const s of [s1, s2, s3, s4, s5, s6]) sessions[s.id] = s;
 
 // ---------------------------------------------------------------- リポジトリ / worktree プール
 const repos = {};
@@ -184,6 +203,7 @@ for (const w of [
   mkWt(rWeb, 2, { state: 'assigned', branch: s2.branch, sessionId: s2.id, lastUsedAt: now - 30 * MIN }),
   mkWt(rWeb, 3, { state: 'assigned', branch: s4.branch, sessionId: s4.id, lastUsedAt: now - 90 * MIN }),
   mkWt(rWeb, 4, { state: 'assigned', branch: s5.branch, sessionId: s5.id, lastUsedAt: now - 20 * MIN }),
+  mkWt(rWeb, 8, { state: 'assigned', branch: s6.branch, sessionId: s6.id, lastUsedAt: now - 50 * MIN }),
   mkWt(rWeb, 7, { state: 'idle', lastUsedAt: now - 300 * MIN }),
   mkWt(rWeb, 5, { state: 'warming', progress: 'npm ci 実行中(312/840 パッケージ)', lastUsedAt: now - 2 * MIN }),
   mkWt(rWeb, 6, { state: 'broken', error: 'git worktree remove に失敗: ファイルがロックされています (node_modules\\.bin\\esbuild.exe)', lastUsedAt: now - 600 * MIN }),
@@ -510,6 +530,7 @@ worktrees[`${REPO_WEB}#wt-01`].git = mkGit({ changed: 3, insertions: 120, deleti
 worktrees[`${REPO_WEB}#wt-02`].git = mkGit({ changed: 7, insertions: 310, deletions: 188, ahead: 2, behind: 0, unpushed: 2, pushed: true });
 worktrees[`${REPO_WEB}#wt-04`].git = mkGit({ changed: 1, insertions: 64, deletions: 5, ahead: 2, behind: 1, unpushed: 2, pushed: false });
 worktrees[`${REPO_WEB}#wt-03`].git = mkGit({ changed: 0, insertions: 35, deletions: 1, ahead: 3, behind: 0, unpushed: 0, pushed: true });
+worktrees[`${REPO_WEB}#wt-08`].git = mkGit({ changed: 2, insertions: 88, deletions: 12, ahead: 1, behind: 0, unpushed: 1, pushed: false });
 
 // ブランチ一覧(固定の追加分 + 使用中の worktree のブランチ)
 const deletedBranches = new Set(); // "<repoId>|<name>"
@@ -581,6 +602,91 @@ function branchList(repo) {
     });
   }
   return out;
+}
+
+// ---------------------------------------------------------------- スキル / MCP(モックのデータ)
+const HOME = 'C:\\Users\\yanor';
+function sk(name, description, source, p = {}) {
+  const kind = p.kind || 'skill';
+  const plugin = p.plugin;
+  const base =
+    source === 'plugin'
+      ? `${HOME}\\.claude\\plugins\\cache\\${plugin}\\${kind === 'skill' ? 'skills' : 'commands'}`
+      : source === 'project'
+        ? `${p.cwd || 'C:\\proj'}\\.claude\\${kind === 'skill' ? 'skills' : 'commands'}`
+        : `${HOME}\\.claude\\${kind === 'skill' ? 'skills' : 'commands'}`;
+  const bare = name.includes(':') ? name.split(':')[1] : name;
+  return {
+    name,
+    description,
+    source,
+    kind,
+    ...(plugin ? { plugin } : {}),
+    path: kind === 'skill' ? `${base}\\${bare}\\SKILL.md` : `${base}\\${bare}.md`,
+  };
+}
+function skillsFor(cwd) {
+  const list = [
+    sk('hub-commander', '任意リポジトリ向けの司令官モード。複数タスクを分解し、難易度で opus/sonnet/haiku に振り分けて並列実行する', 'user'),
+    sk('cc-remote-recover', 'CC Remote / CC Hub に接続できない時の診断と復旧', 'user'),
+    sk('claude-auto-resume', 'トークン上限に達したら次のリセットまで待機して claude -c で再開しつづける', 'user'),
+    sk('design-flow', 'UI をゼロから作るときに、デザイン系スキルを「固める → 作る → 見直す」の順で回す', 'user'),
+    sk('pbakaus-critique', 'UX スコアリング・ペルソナチェックでデザイン品質を評価する', 'user'),
+    sk('web-design-guidelines', 'UI コードを Web Interface Guidelines に照らしてレビューする', 'user'),
+    sk('review-pr', '開いている PR の差分を読んで、指摘をまとめる', 'user', { kind: 'command' }),
+    sk('standup', '今日やったことを git log からまとめる', 'user', { kind: 'command' }),
+    sk('unity:ui-ugui', 'Unity uGUI(Canvas)の UI を理解・編集・生成する', 'plugin', { plugin: 'unity' }),
+    sk('unity:ui-uitk', 'Unity UI Toolkit(UXML / USS)の UI を作る', 'plugin', { plugin: 'unity' }),
+    sk('unity:localization', 'Unity Localization の設定(ロケール・テーブル・CJK フォント)', 'plugin', { plugin: 'unity' }),
+    sk('unity:urp-postprocessing', 'URP のポストプロセス(Bloom / Tonemapping など)を設定する', 'plugin', { plugin: 'unity' }),
+    sk('unity:2d-pixel-perfect', 'ピクセルパーフェクトな 2D 描画を設定・修正する', 'plugin', { plugin: 'unity' }),
+    sk('unity:build-live-game', 'Unity Services でライブゲーム(リーダーボード・クラウドセーブ等)を作る', 'plugin', { plugin: 'unity' }),
+    sk('unity:unity-cli', 'Unity CLI でエディタの操作・プロジェクト作成・ビルドを行う', 'plugin', { plugin: 'unity', kind: 'command' }),
+  ];
+  // プロジェクトのスキル(cc-hub / shop-web の worktree)
+  if (/cc-hub|shop-web|WorkTree/i.test(cwd)) {
+    list.push(
+      sk('commander', 'このリポジトリ用の司令官。タスクを分解してサブエージェントに振り、結果を検証して統合する', 'project', { cwd }),
+      sk('release-notes', 'main との差分からリリースノートの下書きを作る', 'project', { cwd, kind: 'command' }),
+      // 同名のユーザースキルより優先される(重複は UI 側で除く)
+      sk('review-pr', 'このリポジトリのレビュー観点(セキュリティ / i18n)で PR を確認する', 'project', { cwd, kind: 'command' }),
+    );
+  }
+  return list;
+}
+
+let mcpCheckedAt = 0;
+let mcpRound = 0;
+/** claude mcp list の実際の出力をもとにしたデータ。再確認のたびに 1 つ揺らす */
+function mcpServers() {
+  const c = (name, target, status, statusText) => ({
+    name,
+    target,
+    status,
+    statusText,
+    origin: name.startsWith('claude.ai ') ? 'claude.ai' : 'local',
+  });
+  const NA = 'Needs authentication';
+  return [
+    c('claude.ai Claude Docs', 'https://docs.mcp.claude.ai/mcp', 'connected', 'Connected'),
+    c('claude.ai Sentry', 'https://mcp.sentry.dev/mcp', 'needs_auth', NA),
+    c('claude.ai Google Drive', 'https://drivemcp.googleapis.com/mcp/v1', 'connected', 'Connected'),
+    c('claude.ai Gmail', 'https://gmail.mcp.claude.com/mcp', 'connected', 'Connected'),
+    c('claude.ai Google Calendar', 'https://gcal.mcp.claude.com/mcp', 'connected', 'Connected'),
+    c('claude.ai Notion', 'https://mcp.notion.com/mcp', 'connected', 'Connected'),
+    c('claude.ai Slack', 'https://mcp.slack.com/mcp', 'needs_auth', NA),
+    c('claude.ai Linear', 'https://mcp.linear.app/mcp', 'needs_auth', NA),
+    c('claude.ai Figma', 'https://mcp.figma.com/mcp', 'needs_auth', NA),
+    c('claude.ai Asana', 'https://mcp.asana.com/sse', 'needs_auth', NA),
+    c('claude.ai Atlassian', 'https://mcp.atlassian.com/v1/sse', 'needs_auth', NA),
+    c('claude.ai Box', 'https://mcp.box.com', 'needs_auth', NA),
+    c('claude.ai Canva', 'https://mcp.canva.com/mcp', 'needs_auth', NA),
+    c('claude.ai HubSpot', 'https://app.hubspot.com/mcp/v1/http', 'needs_auth', NA),
+    c('image-gen', 'node C:\\Users\\yanor\\mcp\\image-gen\\dist\\index.js', 'connected', 'Connected'),
+    c('touchdesigner', 'npx -y touchdesigner-mcp-server@latest --stdio', 'connected', 'Connected'),
+    c('unity-editor-mcp', 'node D:\\Unity\\Tools\\unity-editor-mcp\\build\\index.js', mcpRound % 2 ? 'connected' : 'connected', 'Connected'),
+    c('playwright', 'npx @playwright/mcp@latest', mcpRound % 3 === 2 ? 'connected' : 'failed', mcpRound % 3 === 2 ? 'Connected' : 'Failed to connect'),
+  ];
 }
 
 // ---------------------------------------------------------------- WS
@@ -1024,6 +1130,75 @@ const server = http.createServer(async (req, res) => {
       upsertPr(pr);
       return json(res, 200, { ok: true });
     }
+  }
+  // ---------------- 指示・PowerShell・スキル・MCP
+  const hm = p.match(/^\/api\/sessions\/([^/]+)\/(open-terminal|takeover|attach)$/);
+  if (hm && req.method === 'POST') {
+    const s = sessions[hm[1]];
+    if (!s) return json(res, 404, { ok: false, error: 'session not found' });
+    const b = await readBody(req).catch(() => ({}));
+    if (hm[2] === 'attach') {
+      const name = String(b.name || 'file').replace(/[\\/:*?"<>|]/g, '_');
+      const bytes = Math.floor((String(b.dataBase64 || '').length * 3) / 4);
+      console.log('[attach]', s.name, name, b.mime, `${bytes} bytes`);
+      await sleep(400);
+      return json(res, 200, { ok: true, path: `.cc-hub/attachments/${name}` });
+    }
+    if (hm[2] === 'open-terminal') {
+      if (!s.managed) return json(res, 409, { ok: false, error: 'CC Hub で動いているセッションではありません' });
+      termWrite(s.id, `\r\n${C.yellow}--- PowerShell の新しいウィンドウで続きを開きました(mock) ---${C.reset}\r\n`);
+      s.managed = false;
+      s.handedOff = true;
+      s.status = 'running';
+      s.approval = null;
+      s.currentTool = { name: 'Thinking', target: '', since: Date.now() };
+      upsertSession(s);
+      setTimeout(() => {
+        if (!sessions[s.id] || s.managed) return;
+        s.status = 'awaiting_input';
+        s.currentTool = null;
+        upsertSession(s);
+      }, 2500);
+      return json(res, 200, { ok: true });
+    }
+    // takeover
+    if (s.managed) return json(res, 409, { ok: false, error: 'すでに CC Hub で動いています' });
+    if (!b.force && (s.status === 'running' || s.status === 'awaiting_approval'))
+      return json(res, 409, {
+        ok: false,
+        error: `${s.handedOff ? 'PowerShell' : '元のウィンドウ'}でまだ実行中です(${s.currentTool ? s.currentTool.name : '応答の生成中'})`,
+      });
+    s.managed = true;
+    s.handedOff = false;
+    s.status = 'starting';
+    s.currentTool = null;
+    s.cols = 120;
+    s.rows = 32;
+    termBuf[s.id] =
+      (termBuf[s.id] || '') +
+      `${C.dim}(mock) claude --resume ${s.id.slice(0, 8)}… で CC Hub に引き継ぎました${b.force ? '(強制)' : ''}${C.reset}\r\n`;
+    upsertSession(s);
+    setTimeout(() => {
+      if (!sessions[s.id]) return;
+      s.status = 'awaiting_input';
+      upsertSession(s);
+      termWrite(s.id, `${C.green}●${C.reset} 会話を再開しました。続きの指示をどうぞ。\r\n> `);
+    }, 1500);
+    return json(res, 200, { ok: true, session: s });
+  }
+  if (p === '/api/skills') {
+    const cwd = url.searchParams.get('cwd') || '';
+    await sleep(250);
+    return json(res, 200, { ok: true, skills: skillsFor(cwd) });
+  }
+  if (p === '/api/mcp') {
+    const refresh = url.searchParams.get('refresh') === '1';
+    if (refresh || !mcpCheckedAt) {
+      await sleep(refresh ? 3000 : 600);
+      mcpCheckedAt = Date.now();
+      mcpRound++;
+    }
+    return json(res, 200, { ok: true, servers: mcpServers(), checkedAt: mcpCheckedAt });
   }
   const cm = p.match(/^\/api\/sessions\/([^/]+)\/create-pr$/);
   if (cm && req.method === 'POST') {
