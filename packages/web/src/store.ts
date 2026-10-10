@@ -61,6 +61,7 @@ export type ProjectTab =
   | 'history'
   | 'instructions'
   | 'publish'
+  | 'firebase'
   | 'settings';
 
 /** アップロードのダイアログ(サーバーのカード / 管理画面の「公開」/ 承認カードから開く) */
@@ -73,6 +74,8 @@ export interface DeployDialogState {
   deployId: string | null;
   /** 管理画面の「公開」から開いたときのプロジェクトのフォルダ(アップロード元の初期値に使う) */
   projectPath: string | null;
+  /** Firebase へのデプロイ(このフォルダの firebase.json)を設定から始める */
+  firebaseCwd: string | null;
 }
 
 export interface Toast {
@@ -327,7 +330,7 @@ export const useHub = create<Store>((set, get) => ({
   openDeployDialog: (d) =>
     set({
       deployDialog: d
-        ? { serverId: d.serverId ?? null, localDir: d.localDir ?? null, deployId: d.deployId ?? null, projectPath: d.projectPath ?? null }
+        ? { serverId: d.serverId ?? null, localDir: d.localDir ?? null, deployId: d.deployId ?? null, projectPath: d.projectPath ?? null, firebaseCwd: d.firebaseCwd ?? null }
         : null,
     }),
   openApprovals: () => {

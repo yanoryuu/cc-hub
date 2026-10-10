@@ -17,18 +17,19 @@ import {
   useServerList,
 } from '../ops';
 import { fmtSize } from '../project';
+import { firebaseStateLabel } from '../firebase';
 import { fmtAgo, fmtDate, useNow } from '../util';
 import { ConfirmModal, Spinner } from './RepoCommon';
 import { FolderInput } from './FolderPicker';
 
 // ---------------------------------------------------------------- 小さな部品
 
-export function DeployBadge({ d }: { d: Pick<DeployJob, 'state'> }) {
+export function DeployBadge({ d }: { d: Pick<DeployJob, 'state'> & { firebase?: DeployJob['firebase'] } }) {
   const busy = d.state === 'planning' || d.state === 'uploading';
   return (
     <span className={`dbadge ds-${d.state}`}>
       {busy ? <Spinner /> : <span aria-hidden="true">{DEPLOY_STATE_ICON[d.state]}</span>}
-      {DEPLOY_STATE_LABEL[d.state]}
+      {(d.firebase && firebaseStateLabel(d.state)) || DEPLOY_STATE_LABEL[d.state]}
     </span>
   );
 }
@@ -38,7 +39,7 @@ export function ProtocolBadge({ p }: { p: ServerInfo['protocol'] }) {
 }
 
 /** 申請者の表示: あなた / Claude(セッション名) */
-function Requester({ d }: { d: DeployJob }) {
+export function Requester({ d }: { d: DeployJob }) {
   const open = useHub((s) => s.open);
   const sessions = useHub((s) => s.sessions);
   if (d.requestedBy.kind === 'user') return <span>あなた</span>;
@@ -156,7 +157,7 @@ export function DeployProgress({ d }: { d: DeployJob }) {
   );
 }
 
-function LogTail({ log, lines = 8 }: { log: string[]; lines?: number }) {
+export function LogTail({ log, lines = 8 }: { log: string[]; lines?: number }) {
   if (!log.length) return null;
   return (
     <pre className="dlog" aria-label="ログ(末尾)">
@@ -509,7 +510,7 @@ function DeployDialogInner() {
 
 // ---------------------------------------------------------------- Claude からの申請(承認キュー)
 
-function DeployRequestButtons({ d, compact = false }: { d: DeployJob; compact?: boolean }) {
+export function DeployRequestButtons({ d, compact = false, approveLabel = '承認してアップロード' }: { d: DeployJob; compact?: boolean; approveLabel?: string }) {
   const [busy, setBusy] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [rejecting, setRejecting] = useState(false);
@@ -548,7 +549,7 @@ function DeployRequestButtons({ d, compact = false }: { d: DeployJob; compact?: 
       ) : (
         <div className="appr-buttons">
           <button className="btn approve" disabled={busy !== null} onClick={() => void run('approve', () => deployApi.approve(d.id))}>
-            {busy === 'approve' ? '承認中…' : '承認してアップロード'}
+            {busy === 'approve' ? '承認中…' : approveLabel}
           </button>
           <button className="btn deny" disabled={busy !== null} onClick={() => setRejecting(true)}>
             却下

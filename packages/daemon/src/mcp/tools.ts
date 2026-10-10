@@ -4,12 +4,18 @@
 import path from 'node:path';
 import type { DeployJob, ServerInfo, SessionInfo } from '@cc-hub/shared';
 import type { DeployService } from '../deploy/service';
+import type { FirebaseInfoService } from '../firebase/info';
+import { infoSummary } from '../firebase/info';
+import { FIREBASE_TARGETS } from '../firebase/config';
 import type { InstructionsService, ProjectKey } from '../project/instructions';
 import { HttpError } from '../util';
 
 export class ToolInputError extends Error {}
 
-type PropSpec = { type: 'string'; description: string; maxLength?: number };
+type PropSpec =
+  | { type: 'string'; description: string; maxLength?: number }
+  | { type: 'boolean'; description: string }
+  | { type: 'array'; description: string; items: string[] };
 
 export interface ToolDef {
   name: string;
@@ -57,10 +63,11 @@ export const TOOLS: ToolDef[] = [
   {
     name: 'get_deploy_status',
     description:
-      'request_deploy で出したアップロードの状態を返します。state: pending_approval(承認待ち)/ planning(ビルド・差分計算中)/ ' +
-      'uploading / done(完了。url が公開 URL)/ failed(error に理由)/ rejected(却下)/ cancelled。' +
+      'request_deploy / request_firebase_deploy で出したデプロイの状態を返します。state: pending_approval(承認待ち)/ planning(ビルド・差分計算中)/ ' +
+      'uploading / preview_ready(Firebase: プレビュー URL に公開済み。ユーザーが本番に反映するのを待っています)/ done(完了。url が公開 URL)/ ' +
+      'failed(error に理由)/ rejected(却下)/ cancelled。' +
       '承認待ちのあいだ短い間隔で何度も呼ばないでください。',
-    props: { deployId: { type: 'string', description: 'request_deploy が返した deployId', maxLength: 100 } },
+    props: { deployId: { type: 'string', description: 'request_deploy / request_firebase_deploy が返した deployId', maxLength: 100 } },
     required: ['deployId'],
     readOnly: true,
   },
@@ -78,6 +85,35 @@ export const TOOLS: ToolDef[] = [
     props: { id: { type: 'string', description: 'セッション ID(list_sessions の id)', maxLength: 100 } },
     required: ['id'],
     readOnly: true,
+  },
+  {
+    name: 'firebase_status',
+    description:
+      'cwd のフォルダ(または上位)にある Firebase のプロジェクトの状況を返します: プロジェクト ID(.firebaserc の default)・ログイン中のアカウント・' +
+      'firebase.json に設定のあるサービス(デプロイできる対象)・Hosting の本番 URL・公開中のプレビューチャンネルの URL・Functions の一覧。読み取りのみです。' +
+      'request_firebase_deploy の前に、対象とプロジェクトを確認するのに使ってください。error があればその内容をユーザーに伝えてください(例: firebase login が必要)。',
+    props: { cwd: CWD_PROP },
+    required: ['cwd'],
+    readOnly: true,
+  },
+  {
+    name: 'request_firebase_deploy',
+    description:
+      'Firebase へのデプロイを申請します(承認制)。このツールはすぐにはデプロイしません。CC Hub の承認キューに申請が入り、ユーザーが承認すると実行されます。\n' +
+      '- Hosting は、承認後まずプレビューチャンネル(7 日で消える一時的な URL)に公開されます。本番(live)への反映は、ユーザーがプレビューを確認してから CC Hub で行います\n' +
+      '- Hosting と functions などを一緒に申請した場合、functions などは本番に反映するときにまとめてデプロイされます\n' +
+      '- Hosting 以外だけ(functions / firestore:rules / firestore:indexes / storage)の申請や preview: false は、承認後すぐ本番にデプロイされます\n' +
+      '呼び出した後は「CC Hub で承認してください」とユーザーに伝え、必要なら get_deploy_status で状態(preview_ready ならプレビュー URL)を確認してください。' +
+      'ビルドが必要なら申請の前に自分でビルドしておいてください(firebase.json の predeploy は CLI が実行します)。同じ内容の申請を何度も出さないでください。' +
+      'note には何を・なぜデプロイするのかを日本語で 1〜3 文で書いてください。',
+    props: {
+      cwd: CWD_PROP,
+      targets: { type: 'array', items: [...FIREBASE_TARGETS], description: `デプロイする対象(1 つ以上): ${FIREBASE_TARGETS.join(' / ')}。firebase.json に設定のあるものだけ` },
+      note: { type: 'string', description: '申請理由(必須)。例: 「お知らせページを追加したので公開します」', maxLength: 2000 },
+      preview: { type: 'boolean', description: 'Hosting をまずプレビューに出すか(既定 true。false は本番へ直接。特に理由が無ければ省略してください)' },
+    },
+    required: ['cwd', 'targets', 'note'],
+    readOnly: false,
   },
   {
     name: 'get_project_instructions',
@@ -116,7 +152,11 @@ export function listToolsResult(): { tools: unknown[] } {
       inputSchema: {
         type: 'object',
         properties: Object.fromEntries(
-          Object.entries(t.props).map(([k, p]) => [k, { type: p.type, description: p.description, ...(p.maxLength ? { maxLength: p.maxLength } : {}) }]),
+          Object.entries(t.props).map(([k, p]) => {
+            if (p.type === 'array') return [k, { type: 'array', description: p.description, items: { type: 'string', enum: p.items }, minItems: 1, uniqueItems: true }];
+            if (p.type === 'boolean') return [k, { type: 'boolean', description: p.description }];
+            return [k, { type: p.type, description: p.description, ...(p.maxLength ? { maxLength: p.maxLength } : {}) }];
+          }),
         ),
         required: t.required,
         additionalProperties: false,
@@ -126,23 +166,39 @@ export function listToolsResult(): { tools: unknown[] } {
   };
 }
 
-/** 入力の検証。未知の引数・型違い・必須の欠け・長すぎる値はエラー */
-export function validateArgs(name: string, args: unknown): Record<string, string> {
+/** 検証済みの引数(文字列 / 真偽値 / 文字列の配列) */
+export type ToolArgs = Record<string, any>;
+
+/** 入力の検証。未知の引数・型違い・必須の欠け・長すぎる値・選べない値はエラー */
+export function validateArgs(name: string, args: unknown): ToolArgs {
   const t = TOOLS.find((x) => x.name === name);
   if (!t) throw new ToolInputError(`不明なツールです: ${name}`);
   const a = args == null ? {} : args;
   if (typeof a !== 'object' || Array.isArray(a)) throw new ToolInputError('引数はオブジェクトで指定してください');
-  const out: Record<string, string> = {};
+  const out: ToolArgs = {};
   for (const [k, v] of Object.entries(a as Record<string, unknown>)) {
     const p = t.props[k];
     if (!p) throw new ToolInputError(`不明な引数です: ${k}(使える引数: ${Object.keys(t.props).join(', ') || 'なし'})`);
     if (v == null) continue;
+    if (p.type === 'boolean') {
+      if (typeof v !== 'boolean') throw new ToolInputError(`${k} は true / false で指定してください`);
+      out[k] = v;
+      continue;
+    }
+    if (p.type === 'array') {
+      if (!Array.isArray(v) || v.some((x) => typeof x !== 'string')) throw new ToolInputError(`${k} は文字列の配列で指定してください(例: ["hosting"])`);
+      const bad = v.find((x) => !p.items.includes(x));
+      if (bad !== undefined) throw new ToolInputError(`${k} に使えない値です: ${bad}(使えるもの: ${p.items.join(', ')})`);
+      out[k] = [...new Set(v as string[])];
+      continue;
+    }
     if (typeof v !== 'string') throw new ToolInputError(`${k} は文字列で指定してください`);
     if (p.maxLength && v.length > p.maxLength) throw new ToolInputError(`${k} が長すぎます(${p.maxLength} 文字まで)`);
     out[k] = v;
   }
   for (const k of t.required) {
-    if (!out[k] || !out[k].trim()) throw new ToolInputError(`${k} を指定してください`);
+    const v = out[k];
+    if (v == null || (typeof v === 'string' && !v.trim()) || (Array.isArray(v) && !v.length)) throw new ToolInputError(`${k} を指定してください`);
   }
   if (out.cwd != null && !path.isAbsolute(out.cwd)) throw new ToolInputError('cwd は絶対パスで指定してください');
   return out;
@@ -151,6 +207,8 @@ export function validateArgs(name: string, args: unknown): Record<string, string
 // ------------------------------------------------------------ 処理
 export interface McpDeps {
   deploy: DeployService;
+  /** Firebase の状況(無ければ firebase_status はエラー) */
+  firebase?: FirebaseInfoService | null;
   sessions: () => Record<string, SessionInfo>;
   instructions: InstructionsService;
   /** cwd がプールのリポジトリ(.base / worktree)なら repoId */
@@ -204,6 +262,19 @@ function deploySummary(j: DeployJob) {
     plan: j.plan ? { upload: j.plan.upload.length, delete: j.plan.delete.length, unchanged: j.plan.unchanged, totalBytes: j.plan.totalBytes } : null,
     progress: j.progress,
     logTail: j.log.slice(-10),
+    ...(j.firebase
+      ? {
+          firebase: {
+            projectId: j.firebase.projectId,
+            targets: j.firebase.targets,
+            preview: j.firebase.preview,
+            channel: j.firebase.channel,
+            previewUrl: j.firebase.previewUrl,
+            previewExpiresAt: j.firebase.previewExpiresAt ? new Date(j.firebase.previewExpiresAt).toISOString() : null,
+            promoted: j.firebase.promoted,
+          },
+        }
+      : {}),
   };
 }
 
@@ -259,6 +330,31 @@ export async function callTool(name: string, rawArgs: unknown, d: McpDeps, ctx: 
         message:
           'アップロードを申請しました。まだ送信されていません。ユーザーが CC Hub の画面で承認すると、ビルド → 差分計算 → 送信が自動で行われます。' +
           'ユーザーに「CC Hub で承認してください」と伝えてください。結果は get_deploy_status で確認できます。',
+      };
+    }
+    case 'firebase_status': {
+      if (!d.firebase) throw new ToolInputError('Firebase の機能は使えません');
+      return infoSummary(await d.firebase.get(a.cwd));
+    }
+    case 'request_firebase_deploy': {
+      const s = caller();
+      const job = d.deploy.requestFirebaseFromClaude({ cwd: a.cwd, targets: a.targets, note: a.note, preview: a.preview ?? null, sessionId: s?.id ?? null });
+      const fb = job.firebase!;
+      const previewFirst = fb.preview && fb.targets.includes('hosting');
+      return {
+        deployId: job.id,
+        state: job.state,
+        projectId: fb.projectId,
+        projectDir: fb.projectDir,
+        targets: fb.targets,
+        preview: previewFirst,
+        message:
+          'Firebase へのデプロイを申請しました。まだデプロイされていません。ユーザーに「CC Hub で承認してください」と伝えてください。' +
+          (previewFirst
+            ? '承認されると Hosting はまずプレビュー URL に公開されます(state: preview_ready)。本番への反映はユーザーがプレビューを確認してから CC Hub で行います' +
+              (fb.targets.length > 1 ? '(Hosting 以外の対象もそのときにデプロイされます)。' : '。')
+            : '承認されるとすぐ本番にデプロイされます。') +
+          '結果は get_deploy_status で確認できます。',
       };
     }
     case 'get_deploy_status': {

@@ -111,6 +111,7 @@ export class NotifyService {
         branch: meta.branch ?? info?.branch ?? null,
         prUrl: meta.prUrl ?? null,
         url: meta.url ?? null,
+        urlLabel: meta.urlLabel ?? null,
         failed: ev.kind === 'deploy' && /失敗/.test(ev.title),
       });
       void this.sendDiscord(t.id, payload).then((r) => {

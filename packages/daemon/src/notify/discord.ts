@@ -72,6 +72,8 @@ export interface EmbedContext {
   branch?: string | null;
   prUrl?: string | null;
   url?: string | null;
+  /** url のフィールド名(既定 "URL") */
+  urlLabel?: string | null;
   /** 失敗の通知か(アップロード失敗など。色を赤にする) */
   failed?: boolean;
 }
@@ -85,7 +87,7 @@ export function buildPayload(ev: NotifyEvent, ctx: EmbedContext): Record<string,
     fields.push({ name: 'リポジトリ / ブランチ', value: clip(v, FIELD_MAX), inline: true });
   }
   if (ctx.prUrl && /^https:\/\/github\.com\//.test(ctx.prUrl)) fields.push({ name: 'PR', value: clip(ctx.prUrl, FIELD_MAX) });
-  if (ctx.url && /^https?:\/\//.test(ctx.url)) fields.push({ name: 'URL', value: clip(ctx.url, FIELD_MAX) });
+  if (ctx.url && /^https?:\/\//.test(ctx.url)) fields.push({ name: clip(ctx.urlLabel || 'URL', 256), value: clip(ctx.url, FIELD_MAX) });
   const embed: Record<string, unknown> = {
     title: clip(redact(ev.title), TITLE_MAX),
     description: clip(redact(ev.body || ''), DESCRIPTION_MAX),

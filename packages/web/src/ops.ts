@@ -142,6 +142,7 @@ export const DEPLOY_STATE_LABEL: Record<DeployState, string> = {
   planning: '差分を確認中',
   ready: '確認待ち',
   uploading: 'アップロード中',
+  preview_ready: 'プレビュー確認待ち',
   done: '完了',
   failed: '失敗',
   rejected: '却下',
@@ -153,6 +154,7 @@ export const DEPLOY_STATE_ICON: Record<DeployState, string> = {
   planning: '…',
   ready: '◆',
   uploading: '↑',
+  preview_ready: '◎',
   done: '✓',
   failed: '✗',
   rejected: '⊘',
@@ -174,6 +176,8 @@ export const deployApi = {
   approve: (id: string) => api(`/api/deploys/${enc(id)}/approve`, {}),
   reject: (id: string, reason?: string) => api(`/api/deploys/${enc(id)}/reject`, reason ? { reason } : {}),
   cancel: (id: string) => api(`/api/deploys/${enc(id)}/cancel`, {}),
+  /** Firebase: preview_ready のプレビューを本番(live)へ */
+  promote: (id: string) => api(`/api/deploys/${enc(id)}/promote`, {}),
 };
 
 /** レスポンスに deploy があればストアに入れる(WS の deploy.upsert より先に画面を進めるため) */
@@ -187,6 +191,18 @@ export function usePendingDeploys(): DeployJob[] {
   const deploys = useHub((s) => s.deploys);
   return useMemo(
     () => Object.values(deploys).filter((d) => d.state === 'pending_approval').sort((a, b) => a.createdAt - b.createdAt),
+    [deploys],
+  );
+}
+
+/** あなたの対応待ち: Claude からの申請(承認待ち)+ Firebase のプレビュー確認待ち(本番に反映 / 破棄)。古い順 */
+export function useAttentionDeploys(): DeployJob[] {
+  const deploys = useHub((s) => s.deploys);
+  return useMemo(
+    () =>
+      Object.values(deploys)
+        .filter((d) => d.state === 'pending_approval' || d.state === 'preview_ready')
+        .sort((a, b) => a.createdAt - b.createdAt),
     [deploys],
   );
 }

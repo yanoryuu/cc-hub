@@ -13,7 +13,9 @@ import { CheckIcon } from './Prs';
 import { RegisterRepoForm } from './Repos';
 import { FolderInput } from './FolderPicker';
 import { InstructionsChip } from './Instructions';
-import { usePendingDeploys } from '../ops';
+import { useAttentionDeploys } from '../ops';
+import { firebaseCwdFor } from '../firebase';
+import { FirebaseChip } from './Firebase';
 
 // ---------------------------------------------------------------- ダイアログ(App 直下に置く)
 
@@ -139,7 +141,7 @@ function AttentionStrip({ mobile }: { mobile: boolean }) {
   const repos = useHub((s) => s.repos);
   const open = useHub((s) => s.open);
   const openApprovals = useHub((s) => s.openApprovals);
-  const deploys = usePendingDeploys();
+  const deploys = useAttentionDeploys();
   const list = useMemo(
     () =>
       Object.values(sessions)
@@ -156,14 +158,24 @@ function AttentionStrip({ mobile }: { mobile: boolean }) {
         {!mobile && <span className="muted small">(承認 {nApproval} / 入力 {list.length + deploys.length - nApproval})</span>}
       </span>
       <div className="attn-strip-list">
-        {deploys.map((d) => (
-          <button key={d.id} className="attn-chip st-deploy" onClick={openApprovals} title={`Claude がアップロードを申請しています: ${d.serverName}
-${d.localDir}`}>
-            <span className="attn-chip-ico" aria-hidden="true">↑</span>
-            <span className="attn-chip-name">アップロードの申請</span>
-            <span className="attn-chip-where">{d.serverName}</span>
-          </button>
-        ))}
+        {deploys.map((d) => {
+          const fb = d.firebase;
+          const preview = d.state === 'preview_ready';
+          const label = preview ? 'プレビュー確認待ち' : fb ? 'Firebase デプロイの申請' : 'アップロードの申請';
+          const where = fb ? fb.projectId : d.serverName;
+          const tip = preview
+            ? `プレビューを確認して本番に反映してください: ${where}`
+            : `Claude が${fb ? ' Firebase へのデプロイ' : 'アップロード'}を申請しています: ${where}\n${fb ? fb.projectDir : d.localDir}`;
+          return (
+            <button key={d.id} className={`attn-chip st-deploy ${fb ? 'is-fb' : ''}`} onClick={openApprovals} title={tip}>
+              <span className="attn-chip-ico" aria-hidden="true">
+                {fb ? '🔥' : '↑'}
+              </span>
+              <span className="attn-chip-name">{label}</span>
+              <span className="attn-chip-where">{where}</span>
+            </button>
+          );
+        })}
         {list.slice(0, mobile ? 4 : 8).map((s) => (
           <button key={s.id} className={`attn-chip st-${s.status}`} onClick={() => open(s.id)} title={`${STATUS_LABEL[s.status]}: ${s.name}\n${s.cwd}`}>
             <StatusDot status={s.status} />
@@ -244,6 +256,7 @@ function RepoCard({ d }: { d: RepoCardData }) {
         )}
         <Tokens total={d.tokensTotal} today={d.tokensToday} />
         <InstructionsChip project={{ repoId: r.id, cwd: null }} onOpen={() => openProject({ repoId: r.id }, 'instructions')} />
+        <FirebaseChip cwd={firebaseCwdFor(r, r.baseDir)} onOpen={() => openProject({ repoId: r.id }, 'firebase')} />
       </div>
       <div className="pcard-foot">
         <span className="muted small" title={d.lastActivity ? fmtDate(d.lastActivity) : undefined}>
@@ -285,6 +298,7 @@ function FolderCard({ d }: { d: FolderCardData }) {
       <div className="pcard-line small">
         <Tokens total={d.tokensTotal} today={d.tokensToday} />
         <InstructionsChip project={{ repoId: null, cwd: d.path }} onOpen={() => openProject({ cwd: d.path }, 'instructions')} />
+        <FirebaseChip cwd={d.path} onOpen={() => openProject({ cwd: d.path }, 'firebase')} />
       </div>
       <div className="pcard-foot">
         <span className="muted small" title={d.lastActivity ? fmtDate(d.lastActivity) : undefined}>

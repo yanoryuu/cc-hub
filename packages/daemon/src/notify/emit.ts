@@ -14,6 +14,8 @@ export interface NotifyMeta {
   prUrl?: string | null;
   /** アップロード完了時の公開 URL など */
   url?: string | null;
+  /** url の表示名(Discord のフィールド名。既定 "URL"。例: プレビュー URL / 本番 URL) */
+  urlLabel?: string | null;
   /** 申請者のセッション名など、セッション一覧に無い場合の表示名 */
   sessionName?: string | null;
 }

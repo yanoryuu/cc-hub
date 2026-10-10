@@ -23,6 +23,7 @@ import { fmtDate } from '../util';
 import { ConfirmModal, Spinner } from './RepoCommon';
 import { FolderInput } from './FolderPicker';
 import { DeployHistory, ServerCard } from './Deploy';
+import { FirebaseMcpSection } from './Firebase';
 
 const SECTIONS: { id: SettingsTab; label: string }[] = [
   { id: 'notify', label: '通知' },
@@ -922,6 +923,7 @@ function McpSection() {
           Claude はサーバーのパスワードや Discord の URL を見ることはできません。アップロードは必ず承認キュー(上部の「承認待ち」/ スマホの「承認」タブ)であなたが承認してから実行されます。
         </p>
       </section>
+      <FirebaseMcpSection />
     </div>
   );
 }

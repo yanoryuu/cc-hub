@@ -23,7 +23,17 @@ function test(name: string, fn: () => void | Promise<void>): void {
 test('ツールの一覧は契約どおり', () => {
   assert.deepEqual(
     TOOLS.map((t) => t.name),
-    ['list_servers', 'request_deploy', 'get_deploy_status', 'list_sessions', 'get_session', 'get_project_instructions', 'update_project_instructions'],
+    [
+      'list_servers',
+      'request_deploy',
+      'get_deploy_status',
+      'list_sessions',
+      'get_session',
+      'firebase_status',
+      'request_firebase_deploy',
+      'get_project_instructions',
+      'update_project_instructions',
+    ],
   );
   const r = listToolsResult() as any;
   const rd = r.tools.find((t: any) => t.name === 'request_deploy');
@@ -51,6 +61,26 @@ test('validateArgs: 必須・型・未知の引数・長さ・cwd の絶対パ�
   assert.throws(() => validateArgs('nope', {}), ToolInputError);
   // null は省略扱い
   assert.deepEqual(validateArgs('request_deploy', { server: 'a', note: 'b', localDir: null }), { server: 'a', note: 'b' });
+});
+
+test('validateArgs: request_firebase_deploy(配列・真偽値・選べる値)', () => {
+  const ok = validateArgs('request_firebase_deploy', { cwd: 'D:\\site', targets: ['hosting', 'functions', 'hosting'], note: '公開', preview: false });
+  assert.deepEqual(ok, { cwd: 'D:\\site', targets: ['hosting', 'functions'], note: '公開', preview: false });
+  assert.throws(() => validateArgs('request_firebase_deploy', { cwd: 'D:\\s', targets: [], note: 'x' }), /targets を指定/);
+  assert.throws(() => validateArgs('request_firebase_deploy', { cwd: 'D:\\s', targets: 'hosting', note: 'x' }), /配列/);
+  assert.throws(() => validateArgs('request_firebase_deploy', { cwd: 'D:\\s', targets: ['database'], note: 'x' }), /使えない値です: database/);
+  assert.throws(() => validateArgs('request_firebase_deploy', { cwd: 'D:\\s', targets: ['hosting'], note: 'x', preview: 'no' }), /true \/ false/);
+  assert.throws(() => validateArgs('request_firebase_deploy', { targets: ['hosting'], note: 'x' }), /cwd を指定/);
+  assert.throws(() => validateArgs('firebase_status', { cwd: 'rel' }), /絶対パス/);
+  const r = listToolsResult() as any;
+  const fd = r.tools.find((t: any) => t.name === 'request_firebase_deploy');
+  assert.deepEqual(fd.inputSchema.required, ['cwd', 'targets', 'note']);
+  assert.equal(fd.inputSchema.properties.targets.type, 'array');
+  assert.deepEqual(fd.inputSchema.properties.targets.items.enum, ['hosting', 'functions', 'firestore:rules', 'firestore:indexes', 'storage']);
+  assert.equal(fd.inputSchema.properties.preview.type, 'boolean');
+  assert.match(fd.description, /承認/);
+  assert.match(fd.description, /プレビュー/);
+  assert.equal(r.tools.find((t: any) => t.name === 'firebase_status').annotations.readOnlyHint, true);
 });
 
 const S = (o: Partial<SessionInfo>): SessionInfo => ({ id: 'x', name: 'x', cwd: '', status: 'running', lastEventAt: 0, ...o }) as SessionInfo;

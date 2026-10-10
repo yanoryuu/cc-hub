@@ -12,6 +12,7 @@ import type { ProjectService } from '../project/service';
 import type { NotifyService } from '../notify/service';
 import type { DeployService } from '../deploy/service';
 import type { InstructionsService } from '../project/instructions';
+import type { FirebaseInfoService } from '../firebase/info';
 import { handleMcp, type McpHttpDeps } from '../mcp/server';
 import { cleanupBranches, listBranches } from '../repo/branches';
 import { generateSlug } from '../repo/slug';
@@ -75,6 +76,7 @@ export interface ServerDeps {
   project: ProjectService;
   notify: NotifyService;
   deploy: DeployService;
+  firebase: FirebaseInfoService;
   instructions: InstructionsService;
   /** /mcp(CC Hub 自身の MCP サーバー) */
   mcp: McpHttpDeps;
@@ -417,7 +419,7 @@ async function handle(d: ServerDeps, req: http.IncomingMessage, res: http.Server
     }
   }
   if (p === '/api/deploys' && method === 'POST') return json(res, 200, { ok: true, deploy: d.deploy.createUserJob(await readBody(req)) });
-  const dp = /^\/api\/deploys\/([^/]+)(?:\/(approve|reject|cancel|start))?$/.exec(p);
+  const dp = /^\/api\/deploys\/([^/]+)(?:\/(approve|reject|cancel|start|promote))?$/.exec(p);
   if (dp) {
     const id = decodeURIComponent(dp[1]);
     if (!dp[2] && method === 'GET') {
@@ -436,8 +438,20 @@ async function handle(d: ServerDeps, req: http.IncomingMessage, res: http.Server
           return json(res, 200, { ok: true, deploy: d.deploy.cancel(id) });
         case 'start':
           return json(res, 200, { ok: true, deploy: d.deploy.start(id) });
+        case 'promote':
+          return json(res, 200, { ok: true, deploy: d.deploy.promote(id) });
       }
     }
+  }
+
+  // ------------------------------------------------ Firebase
+  if (p === '/api/firebase' && method === 'GET') {
+    const cwd = (url.searchParams.get('cwd') ?? '').trim();
+    if (!cwd || !path.isAbsolute(cwd)) throw new HttpError(400, 'cwd(絶対パス)を指定してください');
+    return json(res, 200, { ok: true, info: await d.firebase.get(cwd, url.searchParams.get('refresh') === '1') });
+  }
+  if (p === '/api/firebase/deploy' && method === 'POST') {
+    return json(res, 200, { ok: true, deploy: d.deploy.createFirebaseUserJob(await readBody(req, 64 * 1024)) });
   }
 
   // ------------------------------------------------ プロジェクトの共通の指示

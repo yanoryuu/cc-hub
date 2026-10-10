@@ -28,6 +28,8 @@ import { TokenTotals, TokensTab } from './ProjectTokens';
 import { HistoryView } from './History';
 import { InstructionsTab } from './Instructions';
 import { PublishTab } from './Deploy';
+import { FirebaseTab } from './Firebase';
+import { deployInProject, firebaseCwdFor, useFirebaseInfo } from '../firebase';
 import { lineTone, useInstructionsLines } from '../ops';
 
 const TABS: { id: ProjectTab; label: string }[] = [
@@ -41,6 +43,7 @@ const TABS: { id: ProjectTab; label: string }[] = [
   { id: 'history', label: '履歴' },
   { id: 'instructions', label: '共通の指示' },
   { id: 'publish', label: '公開' },
+  { id: 'firebase', label: 'Firebase' },
   { id: 'settings', label: '設定' },
 ];
 
@@ -105,9 +108,15 @@ function ProjectDashboard({ route, mobile }: { route: ProjectRoute; mobile: bool
     setGitTarget((withChanges ?? data.targets[0]).id);
   }, [data, gitTarget]);
 
+  // Firebase: リポジトリはベースのクローン(.base)で firebase.json を探す。情報は 5 分キャッシュ
+  const fbCwd = route.repoId ? firebaseCwdFor(repo, path) : route.cwd ?? path;
+  const fbInfo = useFirebaseInfo(fbCwd).info;
+  const fbWaiting = useHub((s) => (fbInfo ? Object.values(s.deploys).filter((d) => d.state === 'preview_ready' && deployInProject(d, fbInfo)).length : 0));
+
   const tabs = TABS.filter((t) => t.id !== 'settings' || !!route.repoId);
   const badge = (id: ProjectTab): string | null => {
     if (id === 'instructions') return insLines ? String(insLines) : null;
+    if (id === 'firebase') return fbWaiting ? String(fbWaiting) : null;
     if (!data) return null;
     if (id === 'sessions') return String(active.length);
     if (id === 'artifacts') return String(data.artifacts.length);
@@ -150,7 +159,9 @@ function ProjectDashboard({ route, mobile }: { route: ProjectRoute; mobile: bool
             onClick={() => setTab(t.id)}
           >
             {t.label}
-            {b !== null && <span className={`pj-tab-n ${t.id === 'instructions' && insLines ? `ins-n t-${lineTone(insLines)}` : ''}`}>{b}</span>}
+            {b !== null && (
+              <span className={`pj-tab-n ${t.id === 'instructions' && insLines ? `ins-n t-${lineTone(insLines)}` : ''} ${t.id === 'firebase' ? 'fb-n' : ''}`}>{b}</span>
+            )}
           </button>
         );
       })}
@@ -165,6 +176,8 @@ function ProjectDashboard({ route, mobile }: { route: ProjectRoute; mobile: bool
     body = <InstructionsTab route={route} mobile={mobile} />;
   } else if (tab === 'publish') {
     body = <PublishTab path={repo?.baseDir ?? path} />;
+  } else if (tab === 'firebase') {
+    body = <FirebaseTab cwd={fbCwd} mobile={mobile} />;
   } else if (tab === 'settings' && route.repoId) {
     body = <RepoPage id={route.repoId} mobile={mobile} embedded />;
   } else if (!data) {

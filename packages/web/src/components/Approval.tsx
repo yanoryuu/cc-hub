@@ -1,11 +1,17 @@
 // 承認カード(承認キュー / モバイル承認タブ / セッション詳細の承認バナーで共用)
 import { useState } from 'react';
-import type { SessionInfo } from '@cc-hub/shared';
+import type { DeployJob, SessionInfo } from '@cc-hub/shared';
 import { sessionApi } from '../api';
 import { optionTone, optionValue } from '../util';
 import { useHub } from '../store';
-import { usePendingDeploys } from '../ops';
+import { useAttentionDeploys } from '../ops';
 import { DeployRequestCard, useClaudeDeploysInFlight } from './Deploy';
+import { FirebaseJobCard } from './Firebase';
+
+/** アップロード / Firebase のカードを出し分ける */
+function DeployCard({ d }: { d: DeployJob }) {
+  return d.firebase ? <FirebaseJobCard d={d} /> : <DeployRequestCard d={d} />;
+}
 
 export function ApprovalButtons({ session }: { session: SessionInfo }) {
   const [busy, setBusy] = useState<string | null>(null);
@@ -94,29 +100,39 @@ export function useApprovalSessions(): SessionInfo[] {
     .sort((a, b) => a.lastEventAt - b.lastEventAt);
 }
 
-/** 承認待ちの件数(セッションの承認 + Claude からのアップロード申請) */
+/** 承認待ちの件数(セッションの承認 + Claude からのアップロード / Firebase の申請 + Firebase のプレビュー確認待ち) */
 export function useApprovalCount(): number {
-  return useApprovalSessions().length + usePendingDeploys().length;
+  return useApprovalSessions().length + useAttentionDeploys().length;
 }
 
 export function ApprovalList({ onOpen }: { onOpen: (id: string) => void }) {
   const list = useApprovalSessions();
-  const deploys = usePendingDeploys();
+  const attention = useAttentionDeploys();
+  const deploys = attention.filter((d) => d.state === 'pending_approval');
+  const previews = attention.filter((d) => d.state === 'preview_ready');
   const running = useClaudeDeploysInFlight();
-  if (list.length === 0 && deploys.length === 0 && running.length === 0) return <div className="empty">承認待ちはありません</div>;
+  if (list.length === 0 && attention.length === 0 && running.length === 0) return <div className="empty">承認待ちはありません</div>;
   return (
     <div className="appr-list">
       {deploys.map((d) => (
-        <DeployRequestCard key={d.id} d={d} />
+        <DeployCard key={d.id} d={d} />
       ))}
+      {previews.length > 0 && (
+        <>
+          <h3 className="sec-title appr-sub">本番への反映待ち(Firebase のプレビュー)</h3>
+          {previews.map((d) => (
+            <DeployCard key={d.id} d={d} />
+          ))}
+        </>
+      )}
       {list.map((s) => (
         <ApprovalCard key={s.id} session={s} onOpen={() => onOpen(s.id)} />
       ))}
       {running.length > 0 && (
         <>
-          <h3 className="sec-title appr-sub">承認したアップロード</h3>
+          <h3 className="sec-title appr-sub">承認したアップロード・デプロイ</h3>
           {running.map((d) => (
-            <DeployRequestCard key={d.id} d={d} />
+            <DeployCard key={d.id} d={d} />
           ))}
         </>
       )}

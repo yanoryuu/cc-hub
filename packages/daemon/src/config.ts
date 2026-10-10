@@ -37,6 +37,12 @@ export interface HubConfig {
    * .js / .cjs は node で実行する(検証用: 引数を記録するだけの偽ランチャー)
    */
   terminalLauncher: string;
+  // ---- Firebase
+  /**
+   * firebase CLI のパス。'' = 自動(npm のグローバルの firebase-tools を node で直接実行 → PATH の firebase.cmd の隣 → cmd /c firebase)。
+   * .cmd はその隣の firebase-tools 本体を node で実行する(シェルを通さない)。.js / .cjs は node で実行する(検証用の偽 firebase CLI)
+   */
+  firebasePath: string;
 }
 
 // プロジェクトごとに D:\WorkTree\<name>\(.base + wt-NN)を作る。C ドライブの空きが少ないため D に統一
@@ -91,6 +97,7 @@ function createConfig(file: string): HubConfig {
     ghPath: 'gh',
     prPollSeconds: 90,
     terminalLauncher: '',
+    firebasePath: '',
   };
   fs.writeFileSync(file, JSON.stringify(cfg, null, 2));
   console.log(`[config] ${file} を作成しました(PIN は config.json を参照)`);
@@ -148,6 +155,7 @@ export function loadConfig(): LoadedConfig {
     ghPath: String(raw.ghPath || 'gh'),
     prPollSeconds: numOr(raw.prPollSeconds, 90, 10, 3600),
     terminalLauncher: typeof raw.terminalLauncher === 'string' ? raw.terminalLauncher.trim() : '',
+    firebasePath: typeof raw.firebasePath === 'string' ? raw.firebasePath.trim() : '',
   };
   return {
     dir,

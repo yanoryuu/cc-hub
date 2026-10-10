@@ -6,11 +6,16 @@
 // - 同じサーバーへのビルド・送信は同時に 1 本だけ
 // - 進捗(deploy.upsert)は 1 秒に 4 回まで
 // - ジョブは最近 50 件を保存(申請中・実行中は消さない)
+// - Firebase(job.firebase あり。serverId は ''):
+//           ユーザーから(POST /api/firebase/deploy)= planning(ビルド)→ uploading(firebase CLI)→ preview_ready / done
+//           Claude から(MCP request_firebase_deploy)= pending_approval → approve → 同上
+//           preview_ready → promote(POST /api/deploys/:id/promote)→ uploading → done。手順は firebase/pipeline.ts
+//           同じ projectId の Firebase ジョブは同時に 1 本だけ
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { spawn } from 'node:child_process';
-import type { DeployJob, DeployPlan, ServerInfo, ServerProtocol } from '@cc-hub/shared';
+import type { DeployJob, DeployPlan, FirebaseDeploy, FirebaseTarget, ServerInfo, ServerProtocol } from '@cc-hub/shared';
 import { bus } from '../bus';
 import type { Store } from '../store/db';
 import type { SecretBox } from '../dpapi';
@@ -30,6 +35,22 @@ import {
   walkLocal,
 } from './plan';
 import { createRemote, explainError, listRecursive, uploadAtomic, type Remote } from './remote';
+import { showArgs, type FirebaseRunner } from '../firebase/cli';
+import type { FirebaseInfoService } from '../firebase/info';
+import {
+  PROJECT_ID_RE,
+  checkChannel,
+  defaultChannelName,
+  explainFirebaseError,
+  findProjectDir,
+  hostingSites,
+  normalizeTargets,
+  extractJson,
+  parseChannelDeploy,
+  readProjectConfig,
+  targetConfigured,
+} from '../firebase/config';
+import { planFirebase, stepArgs, stepLabel, type FbStep } from '../firebase/pipeline';
 
 const KEEP_JOBS = 50;
 const LOG_LINES = 200;
@@ -37,7 +58,7 @@ const BUILD_TIMEOUT_MS = 15 * 60_000;
 const PROGRESS_INTERVAL_MS = 250;
 const MANIFEST_MAX = 5 * 1024 * 1024;
 const ACTIVE: DeployJob['state'][] = ['planning', 'uploading'];
-const OPEN: DeployJob['state'][] = ['pending_approval', 'planning', 'ready', 'uploading'];
+const OPEN: DeployJob['state'][] = ['pending_approval', 'planning', 'ready', 'uploading', 'preview_ready'];
 const PROTOCOLS: ServerProtocol[] = ['ftp', 'ftps', 'sftp'];
 
 interface Rt {
@@ -54,7 +75,12 @@ export interface DeployDeps {
   secrets: SecretBox;
   /** Claude の申請のセッション名(通知・表示用) */
   sessionName?: (id: string) => string | null;
+  /** Firebase(firebase CLI の実行器と、状況の取得。既定サイト名・キャッシュの破棄に使う) */
+  firebase?: { run: FirebaseRunner; info: FirebaseInfoService | null };
 }
+
+/** 保存する Firebase の情報。sites = プレビューを出したサイト(promote で使う。共有の型には無い内部用) */
+type FbState = FirebaseDeploy & { sites?: string[] };
 
 /** ビルドを実行するフォルダ: localDir から上に辿って最初に package.json があるフォルダ(無ければ localDir) */
 export function projectRootFor(localDir: string): string {
@@ -460,6 +486,7 @@ export class DeployService {
   approve(id: string): DeployJob {
     const r = this.requireJob(id);
     if (r.job.state !== 'pending_approval') throw new HttpError(409, `承認待ちではありません(${r.job.state})`);
+    if (r.job.firebase) return this.approveFirebase(r);
     if (this.busy(r.job.serverId, id)) throw new HttpError(409, 'このサーバーへのアップロードが進行中です。終わってから承認してください');
     this.requireServer(r.job.serverId);
     r.job.state = 'planning';
@@ -504,7 +531,6 @@ export class DeployService {
   // ================================================================ 実行
   private fail(r: Rt, message: string): void {
     if (r.cancelled) return;
-    const s = this.servers.get(r.job.serverId);
     r.job.state = 'failed';
     r.job.error = message;
     r.job.finishedAt = Date.now();
@@ -516,6 +542,7 @@ export class DeployService {
 
   private notifyDone(r: Rt): void {
     const j = r.job;
+    if (j.firebase) return this.notifyFirebase(r);
     const ok = j.state === 'done';
     const body = ok
       ? `${j.plan?.upload.length ?? 0} ファイルを送信${j.plan?.delete.length ? `、${j.plan.delete.length} ファイルを削除` : ''}${j.url ? `\n${j.url}` : ''}`
@@ -678,5 +705,331 @@ export class DeployService {
     } finally {
       await remote?.close();
     }
+  }
+
+  // ================================================================ Firebase
+  private fbRunner(): FirebaseRunner {
+    const f = this.d.firebase;
+    if (!f) throw new HttpError(503, 'Firebase のデプロイは使えません(firebase CLI の設定がありません)');
+    return f.run;
+  }
+
+  /** cwd から Firebase のプロジェクトを決め、対象が firebase.json に設定されているかを確かめる */
+  private fbContext(cwdRaw: unknown, targetsRaw: unknown): { projectDir: string; projectId: string; targets: FirebaseTarget[] } {
+    const cwd = str(cwdRaw, 1000);
+    if (!cwd) throw new HttpError(400, 'cwd(Firebase のプロジェクトのフォルダ)を指定してください');
+    if (!path.isAbsolute(cwd)) throw new HttpError(400, `cwd は絶対パスで指定してください: ${cwd}`);
+    if (!isDir(cwd)) throw new HttpError(400, `フォルダが存在しません: ${cwd}`);
+    const projectDir = findProjectDir(cwd);
+    if (!projectDir) throw new HttpError(400, `firebase.json が見つかりません: ${cwd}(firebase init が必要です)`);
+    let cfg: ReturnType<typeof readProjectConfig>;
+    try {
+      cfg = readProjectConfig(projectDir);
+    } catch (e) {
+      throw new HttpError(400, (e as Error).message);
+    }
+    const projectId = cfg.rc.default;
+    if (!projectId) throw new HttpError(400, '.firebaserc に default のプロジェクトがありません(firebase use --add で設定してください)');
+    if (!PROJECT_ID_RE.test(projectId)) throw new HttpError(400, `.firebaserc のプロジェクト ID が不正です: ${projectId}`);
+    let targets: FirebaseTarget[];
+    try {
+      targets = normalizeTargets(targetsRaw);
+    } catch (e) {
+      throw new HttpError(400, (e as Error).message);
+    }
+    const missing = targets.filter((t) => !targetConfigured(cfg.json, t));
+    if (missing.length) throw new HttpError(400, `firebase.json に設定がありません: ${missing.join(', ')}`);
+    return { projectDir, projectId, targets };
+  }
+
+  /** 同じプロジェクトへの Firebase のジョブが実行中か */
+  private fbBusy(projectId: string, except?: string): boolean {
+    for (const r of this.jobs.values()) {
+      if (r.job.firebase?.projectId === projectId && r.job.id !== except && ACTIVE.includes(r.job.state)) return true;
+    }
+    return false;
+  }
+
+  /**
+   * 既定のチャンネル名が、まだ本番に反映していない同じプロジェクトのプレビューと重ならないようにする(同じ分に 2 回出すと -2, -3 …)。
+   * 重なると、先のプレビューを promote したときに後の内容が本番に出てしまうため
+   */
+  private freeChannel(projectId: string, base: string, except?: string): string {
+    const used = new Set<string>();
+    for (const r of this.jobs.values()) {
+      const fb = r.job.firebase;
+      if (fb?.projectId === projectId && fb.channel && r.job.id !== except && OPEN.includes(r.job.state)) used.add(fb.channel);
+    }
+    let name = base;
+    for (let i = 2; used.has(name); i++) name = `${base}-${i}`;
+    return name;
+  }
+
+  private newFbJob(
+    ctx: { projectDir: string; projectId: string; targets: FirebaseTarget[] },
+    o: { preview: boolean; channel: string | null; buildCommand: string | null; note: string | null; requestedBy: DeployJob['requestedBy']; state: DeployJob['state'] },
+  ): DeployJob {
+    const usesPreview = o.preview && ctx.targets.includes('hosting');
+    const firebase: FbState = {
+      projectId: ctx.projectId,
+      projectDir: ctx.projectDir,
+      targets: ctx.targets,
+      preview: o.preview,
+      channel: usesPreview ? o.channel : null,
+      previewUrl: null,
+      previewExpiresAt: null,
+      promoted: false,
+    };
+    return {
+      id: crypto.randomUUID(),
+      serverId: '',
+      serverName: `Firebase: ${ctx.projectId}`,
+      localDir: ctx.projectDir,
+      requestedBy: o.requestedBy,
+      note: o.note,
+      state: o.state,
+      buildCommand: o.buildCommand,
+      plan: null,
+      progress: null,
+      log: [],
+      error: null,
+      createdAt: Date.now(),
+      finishedAt: null,
+      url: null,
+      firebase,
+    };
+  }
+
+  /** POST /api/firebase/deploy(ユーザーから)。すぐ始める。Hosting + preview は preview_ready で止まる */
+  createFirebaseUserJob(body: any): DeployJob {
+    this.fbRunner();
+    const ctx = this.fbContext(body?.cwd, body?.targets);
+    const preview = body?.preview !== false;
+    let channel: string;
+    if (body?.channel != null && String(body.channel).trim()) {
+      try {
+        channel = checkChannel(body.channel);
+      } catch (e) {
+        throw new HttpError(400, (e as Error).message);
+      }
+    } else {
+      channel = this.freeChannel(ctx.projectId, defaultChannelName());
+    }
+    const buildCommand = str(body?.buildCommand, 1000) || null;
+    if (this.fbBusy(ctx.projectId)) throw new HttpError(409, `プロジェクト ${ctx.projectId} へのデプロイが進行中です`);
+    const job = this.newFbJob(ctx, { preview, channel, buildCommand, note: null, requestedBy: { kind: 'user' }, state: 'planning' });
+    const r = this.newRt(job, false);
+    this.jobs.set(job.id, r);
+    this.prune();
+    this.emit(r);
+    void this.runFirebase(r, 'first');
+    return this.pubJob(job);
+  }
+
+  /** MCP request_firebase_deploy(Claude から)。承認待ちで止める(ビルドコマンドは受け付けない) */
+  requestFirebaseFromClaude(o: { cwd: string; targets: unknown; note: string; preview?: boolean | null; sessionId: string | null }): DeployJob {
+    this.fbRunner();
+    const ctx = this.fbContext(o.cwd, o.targets);
+    const note = str(o.note, 2000);
+    if (!note) throw new HttpError(400, 'note(申請理由)を指定してください');
+    const preview = o.preview !== false;
+    const sessionName = o.sessionId ? (this.d.sessionName?.(o.sessionId) ?? null) : null;
+    const job = this.newFbJob(ctx, {
+      preview,
+      channel: null, // 承認したときの時刻で名前を付ける
+      buildCommand: null,
+      note,
+      requestedBy: { kind: 'claude', sessionId: o.sessionId, sessionName },
+      state: 'pending_approval',
+    });
+    const r = this.newRt(job, false);
+    this.jobs.set(job.id, r);
+    this.prune();
+    this.emit(r);
+    const how = preview && ctx.targets.includes('hosting') ? '(Hosting はまずプレビュー URL に公開)' : '(承認後すぐ本番にデプロイ)';
+    emitNotify(
+      {
+        kind: 'deploy',
+        sessionId: o.sessionId ?? '',
+        title: `Firebase デプロイの申請: ${ctx.projectId}`,
+        body: `${note}\n${ctx.targets.join(', ')} ${how}`,
+        ts: Date.now(),
+      },
+      { topic: 'deploy_request', sessionName },
+    );
+    return this.pubJob(job);
+  }
+
+  private approveFirebase(r: Rt): DeployJob {
+    this.fbRunner();
+    const fb = r.job.firebase!;
+    if (this.fbBusy(fb.projectId, r.job.id)) throw new HttpError(409, `プロジェクト ${fb.projectId} へのデプロイが進行中です。終わってから承認してください`);
+    if (fb.preview && fb.targets.includes('hosting') && !fb.channel) fb.channel = this.freeChannel(fb.projectId, defaultChannelName(), r.job.id);
+    r.job.state = 'planning';
+    pushLog(r.job.log, '承認されました');
+    this.emit(r);
+    void this.runFirebase(r, 'first');
+    return this.pubJob(r.job);
+  }
+
+  /** POST /api/deploys/:id/promote: プレビューを本番(live)に反映する(Hosting 以外の対象もここでデプロイ) */
+  promote(id: string): DeployJob {
+    const r = this.requireJob(id);
+    const fb = r.job.firebase;
+    if (!fb) throw new HttpError(409, 'Firebase のデプロイではありません');
+    if (r.job.state !== 'preview_ready') throw new HttpError(409, `プレビューの確認待ちではありません(${r.job.state})`);
+    this.fbRunner();
+    if (this.fbBusy(fb.projectId, id)) throw new HttpError(409, `プロジェクト ${fb.projectId} へのデプロイが進行中です`);
+    r.job.state = 'uploading';
+    pushLog(r.job.log, '本番への反映を始めます');
+    this.emit(r);
+    void this.runFirebase(r, 'promote');
+    return this.pubJob(r.job);
+  }
+
+  /** 手順を順に実行する。phase: first = 承認後(ユーザーの依頼なら直後)/ promote = 本番に反映 */
+  private async runFirebase(r: Rt, phase: 'first' | 'promote'): Promise<void> {
+    const fb = r.job.firebase as FbState;
+    try {
+      const plan = planFirebase({ targets: fb.targets, preview: fb.preview, channel: fb.channel ?? defaultChannelName(), buildCommand: r.job.buildCommand });
+      const steps = phase === 'first' ? plan.first : plan.onPromote;
+      r.job.progress = { done: 0, total: steps.length, bytes: 0, current: null };
+      for (const step of steps) {
+        if (r.cancelled) return;
+        r.job.state = step.kind === 'build' ? 'planning' : 'uploading';
+        r.job.progress.current = stepLabel(step);
+        pushLog(r.job.log, `== ${stepLabel(step)}`);
+        this.emit(r);
+        const err = await this.runFbStep(r, step);
+        if (r.cancelled) return;
+        if (err) return this.fail(r, err);
+        r.job.progress.done++;
+      }
+      r.job.progress.current = null;
+      this.d.firebase?.info?.invalidate(fb.projectDir);
+      if (phase === 'first' && plan.stopAtPreview) {
+        r.job.state = 'preview_ready';
+        pushLog(r.job.log, `プレビューを公開しました: ${fb.previewUrl}(確認して問題なければ「本番に反映」)`);
+        this.emit(r);
+        console.log(`[firebase] プレビュー: ${fb.projectId} ${fb.previewUrl}`);
+        this.notifyFirebase(r);
+        return;
+      }
+      if (fb.targets.includes('hosting')) {
+        fb.promoted = true;
+        r.job.url = `https://${(await this.fbSites(fb))[0]}.web.app`;
+      } else {
+        r.job.url = null;
+      }
+      r.job.state = 'done';
+      r.job.finishedAt = Date.now();
+      pushLog(r.job.log, `完了しました${r.job.url ? `: ${r.job.url}` : ''}`);
+      this.emit(r);
+      console.log(`[firebase] 完了: ${fb.projectId} ${fb.targets.join(',')}`);
+      this.notifyFirebase(r);
+    } catch (e) {
+      this.fail(r, (e as Error).message);
+    }
+  }
+
+  /** Hosting のサイト名(プレビューを出したサイト → firebase.json と .firebaserc から) */
+  private async fbSites(fb: FbState): Promise<string[]> {
+    if (fb.sites?.length) return fb.sites;
+    const cfg = readProjectConfig(fb.projectDir);
+    const def = (await this.d.firebase?.info?.defaultSite(fb.projectId, fb.projectDir)) ?? fb.projectId;
+    const sites = hostingSites(cfg.json, cfg.rc, fb.projectId, def);
+    if (!sites.length) throw new Error('Hosting のサイト名を決められません(firebase.json の hosting を確認してください)');
+    return sites;
+  }
+
+  /** 1 手順を実行する。失敗ならエラー文、成功なら null */
+  private async runFbStep(r: Rt, step: FbStep): Promise<string | null> {
+    const fb = r.job.firebase as FbState;
+    if (step.kind === 'build') {
+      const code = await this.runBuild(r, step.command, fb.projectDir);
+      return code === 0 ? null : `ビルドに失敗しました (code ${code})`;
+    }
+    if (step.kind === 'clone') {
+      for (const site of await this.fbSites(fb)) {
+        const res = await this.fbExec(r, stepArgs(step, fb.projectId, site), fb.projectDir);
+        if (res.err || r.cancelled) return res.err;
+      }
+      return null;
+    }
+    const res = await this.fbExec(r, stepArgs(step, fb.projectId), fb.projectDir);
+    if (res.err) return res.err;
+    if (step.kind === 'channel') {
+      try {
+        const list = parseChannelDeploy(res.stdout);
+        fb.sites = [...new Set(list.map((x) => x.site))];
+        fb.previewUrl = list[0].url;
+        fb.previewExpiresAt = list[0].expireAt;
+        r.job.url = fb.previewUrl;
+        for (const x of list) pushLog(r.job.log, `プレビュー URL(${x.site}): ${x.url}${x.expireAt ? `(期限 ${new Date(x.expireAt).toLocaleString('ja-JP')})` : ''}`);
+      } catch (e) {
+        return (e as Error).message;
+      }
+    }
+    return null;
+  }
+
+  /** firebase CLI を実行する(出力はログへ。15 分で打ち切り。cancel で止める) */
+  private async fbExec(r: Rt, args: string[], cwd: string): Promise<{ err: string | null; stdout: string }> {
+    pushLog(r.job.log, `$ ${showArgs(args)}  (${cwd})`);
+    this.emit(r);
+    console.log(`[firebase] ${showArgs(args)}`);
+    const run = this.fbRunner()(args, {
+      cwd,
+      timeoutMs: BUILD_TIMEOUT_MS,
+      onLine: (line) => {
+        pushLog(r.job.log, line);
+        this.emit(r, true);
+      },
+    });
+    r.kill = run.kill;
+    const res = await run.done;
+    r.kill = null;
+    if (res.timedOut) return { err: `firebase がタイムアウトしました(${BUILD_TIMEOUT_MS / 60000} 分)`, stdout: res.stdout };
+    if (res.code !== 0) return { err: explainFirebaseError(`${res.stdout}\n${res.stderr}`), stdout: res.stdout };
+    // --json では終了コード 0 でも status: error を返すことがある
+    if (args.includes('--json')) {
+      const j = extractJson(res.stdout);
+      if (j?.status === 'error') return { err: explainFirebaseError(String(j.error ?? '')), stdout: res.stdout };
+    }
+    return { err: null, stdout: res.stdout };
+  }
+
+  private notifyFirebase(r: Rt): void {
+    const j = r.job;
+    const fb = j.firebase!;
+    const sessionId = j.requestedBy.kind === 'claude' ? (j.requestedBy.sessionId ?? '') : '';
+    const sessionName = j.requestedBy.kind === 'claude' ? j.requestedBy.sessionName : null;
+    if (j.state === 'preview_ready') {
+      const others = fb.targets.filter((t) => t !== 'hosting');
+      emitNotify(
+        {
+          kind: 'deploy',
+          sessionId,
+          title: `プレビューを公開しました: ${fb.projectId}`,
+          body:
+            `${fb.previewUrl}\n確認して問題なければ CC Hub で「本番に反映」を押してください` +
+            (others.length ? `(${others.join(', ')} は本番に反映するときにデプロイします)` : ''),
+          ts: Date.now(),
+        },
+        { topic: 'deploy_done', url: fb.previewUrl, urlLabel: 'プレビュー URL', sessionName },
+      );
+      return;
+    }
+    const ok = j.state === 'done';
+    emitNotify(
+      {
+        kind: 'deploy',
+        sessionId,
+        title: `Firebase デプロイ${ok ? '完了' : '失敗'}: ${fb.projectId}`,
+        body: ok ? `${fb.targets.join(', ')} を本番に反映しました${j.url ? `\n${j.url}` : ''}` : (j.error ?? ''),
+        ts: Date.now(),
+      },
+      { topic: 'deploy_done', url: ok ? j.url : null, urlLabel: '本番 URL', sessionName },
+    );
   }
 }

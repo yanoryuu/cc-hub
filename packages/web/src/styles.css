@@ -1996,6 +1996,10 @@ kbd {
   --warn-bg: #2a2210;
   --warn-border: #6b5420;
   --warn-fg: #f5d48a;
+  /* Firebase(オレンジ系) */
+  --fb: #ffae63;
+  --fb-bg: #2c1d10;
+  --fb-border: #7a4b22;
 }
 .dim {
   color: var(--dim);
@@ -7580,5 +7584,441 @@ th[aria-sort='descending'] .th-arrow {
   .dhist-by,
   .dhist-n {
     display: none;
+  }
+}
+
+/* ---------- Firebase ---------- */
+.fb-ico {
+  flex: none;
+  line-height: 1;
+}
+.fb-ico.big {
+  font-size: 26px;
+}
+.fb-targets {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  vertical-align: middle;
+}
+.fb-target {
+  padding: 0 7px;
+  border-radius: 4px;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.6;
+  color: var(--fb);
+  background: var(--fb-bg);
+  border: 1px solid var(--fb-border);
+  white-space: nowrap;
+}
+.fb-direct {
+  color: var(--warn-fg);
+  font-weight: 600;
+}
+.fb-err-main {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+  flex: 1;
+}
+.fb-err .mcp-cmd {
+  margin-top: 2px;
+  color: var(--fg);
+}
+.dbadge.ds-preview_ready {
+  color: var(--fb);
+  border-color: var(--fb-border);
+  background: var(--fb-bg);
+}
+
+/* プレビュー確認のパネル */
+.fb-preview {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px 14px;
+  border-radius: 10px;
+  background: var(--fb-bg);
+  border: 1px solid var(--fb-border);
+  border-left: 4px solid var(--fb);
+  min-width: 0;
+}
+.fb-preview-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--fg);
+}
+.fb-preview-ico {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: var(--fb);
+  color: #241304;
+  font-weight: 800;
+  flex: none;
+}
+.fb-preview-url {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 14px;
+  border-radius: 8px;
+  background: var(--bg);
+  border: 1px solid var(--fb-border);
+  color: var(--accent);
+  text-decoration: none;
+  min-width: 0;
+}
+.fb-preview-url .mono {
+  flex: 1;
+  min-width: 0;
+  font-size: 17px;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+.fb-preview-url:hover {
+  background: var(--hover);
+}
+.fb-preview-open {
+  flex: none;
+  padding: 3px 10px;
+  border-radius: var(--radius);
+  background: var(--primary);
+  color: #fff;
+  font-size: 13px;
+  font-weight: 600;
+}
+.fb-preview-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 16px;
+  color: var(--fg-2);
+}
+.fb-preview-meta b {
+  color: var(--fb);
+}
+.fb-preview-p {
+  color: var(--fg-2);
+  line-height: 1.6;
+}
+.fb-preview-btns {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.fb-confirm-urls {
+  list-style: none;
+  margin: 8px 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  overflow-wrap: anywhere;
+}
+.fb-live {
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+
+/* ダイアログ */
+.fb-field {
+  border: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+.fb-field legend {
+  font-size: 13px;
+  color: var(--fg-2);
+  margin-bottom: 6px;
+}
+.fb-checks {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 6px;
+}
+.fb-check.on {
+  border-color: var(--fb-border);
+  background: var(--fb-bg);
+}
+.fb-check.off {
+  cursor: default;
+  color: var(--dim);
+}
+.fb-check.off .hint {
+  color: var(--dim);
+}
+.fb-explain {
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: var(--panel-2);
+  border: 1px solid var(--border-2);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.fb-explain ol {
+  padding-left: 1.4em;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  color: var(--fg-2);
+  line-height: 1.6;
+}
+
+/* 承認キューのカード */
+.deploy-card.fb-card.is-waiting {
+  border-color: var(--fb-border);
+  border-left-color: var(--fb);
+}
+.dreq-ico.fb,
+.deploy-card.is-running .dreq-ico.fb {
+  background: var(--fb-bg);
+  border: 1px solid var(--fb-border);
+  font-size: 12px;
+}
+.deploy-card.fb-card.is-waiting .dreq-title {
+  color: var(--fb);
+}
+
+/* 管理画面の「Firebase」タブ */
+.fb-tab {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  min-width: 0;
+}
+.fb-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 14px;
+  border-radius: 10px;
+  background: var(--panel);
+  border: 1px solid var(--border-2);
+  min-width: 0;
+}
+.fb-head-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.fb-head-title {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px 10px;
+}
+.fb-pid {
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--fg);
+}
+.fb-alias {
+  padding: 0 8px;
+  border-radius: 999px;
+  font-size: 12px;
+  color: var(--fg-2);
+  background: var(--panel-3);
+  border: 1px solid var(--border-2);
+}
+.fb-alias .mono {
+  font-size: 12px;
+}
+.fb-head-sub {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 14px;
+  color: var(--fg-2);
+  min-width: 0;
+}
+.fb-dir {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 100%;
+  font-size: 12px;
+}
+.fb-warn-text {
+  color: var(--warn-fg);
+  font-weight: 600;
+}
+.fb-head-btns {
+  display: flex;
+  gap: 6px;
+  flex: none;
+}
+.fb-svcs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.fb-svc {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 10px;
+  border-radius: 999px;
+  font-size: 13px;
+  font-weight: 600;
+  border: 1px solid var(--border-2);
+}
+.fb-svc.on {
+  color: var(--fb);
+  background: var(--fb-bg);
+  border-color: var(--fb-border);
+}
+.fb-svc.off {
+  color: var(--muted);
+  background: var(--panel);
+  font-weight: 400;
+}
+.fb-sites {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.fb-site {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  padding: 8px 12px;
+  border-radius: 8px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  min-width: 0;
+}
+.fb-site-name {
+  flex: none;
+  font-weight: 600;
+}
+.fb-table td {
+  font-size: 13px;
+  white-space: nowrap;
+}
+.fb-url-cell {
+  max-width: 340px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.fb-soon {
+  color: var(--warn-fg);
+}
+.fb-fstate.ok {
+  color: var(--st-input);
+}
+.fb-fstate.ng {
+  color: var(--st-error);
+}
+.dhist-row.fb-hist-row {
+  padding: 0;
+  flex-wrap: wrap;
+  gap: 0;
+}
+.dhist-row.fb-hist-row:hover {
+  background: var(--panel);
+}
+.fb-hist-open {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  text-align: left;
+}
+.fb-hist-open:hover {
+  background: var(--hover);
+}
+.fb-hist-url {
+  padding: 0 12px 0 4px;
+  max-width: 320px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.fb-none p + p {
+  margin-top: 6px;
+}
+.fb-none .btn {
+  margin-top: 10px;
+}
+
+/* ホームのカードの小さな表示 / 対応待ち */
+.fb-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 1px 8px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--fb);
+  background: var(--fb-bg);
+  border: 1px solid var(--fb-border);
+}
+.fb-chip:hover {
+  background: var(--hover);
+}
+.fb-chip-n {
+  min-width: 16px;
+  padding: 0 4px;
+  border-radius: 999px;
+  background: var(--fb);
+  color: #241304;
+  font-size: 11px;
+  text-align: center;
+}
+.fb-chip-slot {
+  display: inline-block;
+  width: 1px;
+  height: 1px;
+}
+.attn-chip.st-deploy.is-fb {
+  border-color: var(--fb-border);
+}
+.pj-tab-n.fb-n {
+  color: #241304;
+  background: var(--fb);
+}
+.fb-mcp .set-h .fb-ico {
+  font-size: 16px;
+}
+
+@media (max-width: 720px) {
+  .fb-head {
+    flex-wrap: wrap;
+  }
+  .fb-head-btns {
+    width: 100%;
+  }
+  .fb-head-btns .btn {
+    flex: 1;
+  }
+  .fb-site {
+    flex-direction: column;
+    gap: 2px;
+  }
+  .fb-url-cell {
+    max-width: 200px;
+  }
+  .fb-hist-url {
+    max-width: 100%;
+    padding: 0 12px 8px;
+  }
+  .fb-preview-url .mono {
+    font-size: 15px;
   }
 }

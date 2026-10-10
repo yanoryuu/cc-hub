@@ -21,6 +21,8 @@ import { NotifyService } from './notify/service';
 import { DeployService } from './deploy/service';
 import { InstructionsService } from './project/instructions';
 import { isInside } from './project/parse';
+import { createRunner } from './firebase/cli';
+import { FirebaseInfoService } from './firebase/info';
 
 const VERSION = '0.1.0';
 
@@ -45,7 +47,15 @@ function main(): void {
   // プロジェクトの共通の指示: CC Hub が起動するセッションに --append-system-prompt-file で渡す
   const instructions = new InstructionsService(store, dir, config.claudePath);
   sessions.setInstructionsResolver((info) => instructions.fileForSession(info));
-  const deploy = new DeployService({ store, secrets: dpapi, sessionName: (id) => sessions.info(id)?.name ?? null });
+  // Firebase: firebase CLI(config.firebasePath)で状況の取得とデプロイ(デプロイのジョブは DeployService が持つ)
+  const firebaseRun = createRunner(config.firebasePath);
+  const firebaseInfo = new FirebaseInfoService(firebaseRun);
+  const deploy = new DeployService({
+    store,
+    secrets: dpapi,
+    sessionName: (id) => sessions.info(id)?.name ?? null,
+    firebase: { run: firebaseRun, info: firebaseInfo },
+  });
   // ws は後で作るので、デスクトップアプリの接続数は遅延参照する
   let ws: WsHub | null = null;
   const notify = new NotifyService({
@@ -82,12 +92,14 @@ function main(): void {
     project,
     notify,
     deploy,
+    firebase: firebaseInfo,
     instructions,
     mcp: {
       auth,
       mcpToken,
       version: VERSION,
       deploy,
+      firebase: firebaseInfo,
       instructions,
       sessions: () => sessions.all(),
       repoIdForCwd,

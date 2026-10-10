@@ -10,7 +10,7 @@ import { MobileApp } from './components/MobileApp';
 import { NewSessionDialog } from './components/NewSessionDialog';
 import { Toasts } from './components/Toasts';
 import { CloneRepoModal } from './components/Home';
-import { DeployDialog } from './components/Deploy';
+import { DeployDialogs } from './components/Firebase';
 
 // 401 を受けたら PIN 画面へ
 setNeedAuthHandler(() => useHub.getState().setAuth('need_pin'));
@@ -96,7 +96,7 @@ export function App() {
       {desktop ? <DesktopApp /> : <MobileApp />}
       <NewSessionDialog />
       <CloneRepoModal />
-      <DeployDialog />
+      <DeployDialogs />
       <Toasts />
     </>
   );

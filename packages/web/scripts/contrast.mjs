@@ -77,6 +77,11 @@ for (const c of ['diff-add', 'st-running', 'st-error', 'wt-warming', 'st-approva
 add('warn-fg', 'panel', 4.5, '未 push(管理画面)');
 add('dim', 'bg-term', 3, 'コードの行番号');
 for (const c of ['st-running', 'st-input', 'wt-warming']) add(c, 'bg', 3, 'トークンのグラフ(非テキスト)');
+// Firebase: 表示・バッジ・プレビューの枠
+add('fb', 'panel', 4.5, 'Firebase の表示');
+add('fb', 'panel-2', 4.5, 'Firebase の表示(カード)');
+add('fb', 'fb-bg', 4.5, 'Firebase のバッジ・チップ');
+add('fg', 'fb-bg', 4.5, 'プレビュー確認のパネル本文');
 add('border-input', 'bg', 3, '入力欄の枠(非テキスト)');
 add('border-input', 'panel', 3, '入力欄の枠(非テキスト)');
 

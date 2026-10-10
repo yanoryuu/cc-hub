@@ -21,7 +21,7 @@ export function Toasts() {
               if (t.event.kind === 'deploy') {
                 // アップロード: 申請があれば承認キュー、なければ最新のアップロードの詳細
                 const list = Object.values(st.deploys).sort((a, b) => b.createdAt - a.createdAt);
-                if (list.some((d) => d.state === 'pending_approval')) st.openApprovals();
+                if (list.some((d) => d.state === 'pending_approval' || d.state === 'preview_ready')) st.openApprovals();
                 else if (list[0]) st.openDeployDialog({ deployId: list[0].id });
                 else st.openSettings('servers');
               } else if (t.event.kind === 'pr') {

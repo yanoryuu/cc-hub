@@ -1,6 +1,7 @@
 // モック: 通知の設定 / アップロード先のサーバー / アップロード(Claude の申請を含む)/ プロジェクトの共通の指示
 // 契約は packages/shared/src/index.ts の「通知」「アップロード先のサーバー」「プロジェクトの共通の指示」に準拠。
 import crypto from 'node:crypto';
+import { createFirebaseMock } from './firebase.mjs';
 
 const MIN = 60_000;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -234,6 +235,9 @@ export function createOpsMock({ broadcast, sessions, json, readBody, REPO_WEB, r
   // 起動の数秒後に 1 件申請が届く
   setTimeout(() => claudeRequest(), 6000);
 
+  // ---------------------------------------------------------------- Firebase(firebase.mjs)
+  const firebase = createFirebaseMock({ deploys, upsertDeploy, notifyDeploy, log, sessions, requesterId, json, readBody });
+
   // ---------------------------------------------------------------- 共通の指示
   const instructions = {};
   function shopInstructions() {
@@ -406,7 +410,8 @@ export function createOpsMock({ broadcast, sessions, json, readBody, REPO_WEB, r
       } else if (act === 'approve') {
         if (d.state !== 'pending_approval') return json(res, 409, { ok: false, error: '承認待ちではありません' }), true;
         log(d, 'あなたが承認しました');
-        void runPlan(d, true);
+        if (d.firebase) void firebase.run(d);
+        else void runPlan(d, true);
       } else if (act === 'reject') {
         if (d.state !== 'pending_approval') return json(res, 409, { ok: false, error: '承認待ちではありません' }), true;
         d.state = 'rejected';
@@ -422,6 +427,7 @@ export function createOpsMock({ broadcast, sessions, json, readBody, REPO_WEB, r
       }
       return json(res, 200, { ok: true, deploy: d }), true;
     }
+    if (await firebase.handle(req, res, url)) return true;
     // 共通の指示
     if (p === '/api/project/instructions' && m === 'GET') {
       await sleep(200);
