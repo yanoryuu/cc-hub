@@ -60,11 +60,14 @@ export function buildTerminalArgv(o: TerminalSpec): string[] {
   return ['cmd.exe', '/c', 'start', windowTitle(o.name), 'powershell.exe', '-NoExit', '-Command', buildPsCommand(o)];
 }
 
-/** 起動する環境変数: CLAUDE* / CLAUDECODE を除き、CC_HUB_SESSION(hooks のヘッダーでハブのセッションに紐付く)を付ける */
+/**
+ * 起動する環境変数: CLAUDE* / CLAUDECODE と色を消す指定(NO_COLOR。Claude Code のシェルから再起動すると引き継がれる)を除き、
+ * CC_HUB_SESSION(hooks のヘッダーでハブのセッションに紐付く)を付ける
+ */
 export function terminalEnv(hubSessionId: string, base: NodeJS.ProcessEnv = process.env): Record<string, string> {
   const env: Record<string, string> = {};
   for (const [k, v] of Object.entries(base)) {
-    if (v == null || /^CLAUDE/i.test(k)) continue;
+    if (v == null || /^CLAUDE/i.test(k) || /^NO_COLOR$/i.test(k)) continue;
     env[k] = v;
   }
   env.CC_HUB_SESSION = hubSessionId;

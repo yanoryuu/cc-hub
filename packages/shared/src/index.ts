@@ -368,8 +368,13 @@ export interface ProjectOverview {
 }
 
 export interface RegisterRepoRequest {
-  /** https / git@ / "owner/name" のいずれか */
+  /** https / git@ / "owner/name" のいずれか(localPath を指定した場合は空でよい) */
   url: string;
+  /**
+   * クローン済みのフォルダ。指定すると origin の URL からリポジトリを判別し、
+   * そのフォルダからローカルで複製して CC Hub 用のクローンを作る(フォルダ自体には書き込まない)
+   */
+  localPath?: string;
   /** ユーザーが信頼を確認したか(false のままでは登録できない) */
   trusted: boolean;
   poolMin?: number;
@@ -691,6 +696,7 @@ export type ServerMessage =
 //   POST /api/slug                 {instruction}       → {ok, slug}   (ブランチ名の候補。"feat/" は含まない)
 //   GET  /api/repos                                     → {ok, repos: RepoInfo[], worktrees: WorktreeInfo[]}
 //   POST /api/repos                RegisterRepoRequest  → {ok, repo}   (クローンは非同期。進捗は repo.upsert で届く)
+//                                  localPath 指定時はそのフォルダから複製(Unity なら seedLibraryFrom にそのフォルダの Library を入れる)
 //   PATCH /api/repos/:id           Partial<Pick<RepoInfo,'poolMin'|'poolMax'|'installCmd'|'keepDirs'|'seedLibraryFrom'|'trusted'>>
 //   DELETE /api/repos/:id?purge=1  登録解除。待機 worktree を削除。purge=1 で .base も削除(使用中の worktree があれば 409)
 //   POST /api/repos/:id/refill     補充を即時実行

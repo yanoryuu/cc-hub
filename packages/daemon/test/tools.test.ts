@@ -5,6 +5,8 @@ import { parseMcpLine, parseMcpList } from '../src/mcp';
 import { firstTextLine, parseFrontmatter } from '../src/skills';
 import { buildPsCommand, buildTerminalArgv, launcherCommand, psArg, psQuote, terminalEnv, windowTitle } from '../src/session/terminal';
 import { isAllowedMime, sanitizeAttachmentName } from '../src/session/attach';
+import { activeBackgroundTasks } from '../src/util';
+import { overlaps } from '../src/repo/exec';
 
 let passed = 0;
 function test(name: string, fn: () => void): void {
@@ -149,7 +151,7 @@ test('ランチャー: 既定は cmd.exe /c start、偽ランチャーには同�
 });
 
 test('ランチャー: 環境変数(CLAUDE* を除き CC_HUB_SESSION を付ける)', () => {
-  const env = terminalEnv('hub-1', { PATH: 'p', CLAUDECODE: '1', CLAUDE_CODE_ENTRYPOINT: 'cli', claude_x: 'y', CC_HUB_SESSION: 'old' });
+  const env = terminalEnv('hub-1', { PATH: 'p', CLAUDECODE: '1', CLAUDE_CODE_ENTRYPOINT: 'cli', claude_x: 'y', CC_HUB_SESSION: 'old', NO_COLOR: '1' });
   assert.deepEqual(env, { PATH: 'p', CC_HUB_SESSION: 'hub-1' });
 });
 
@@ -175,6 +177,21 @@ test('添付: MIME の許可', () => {
   assert.ok(!isAllowedMime('application/x-msdownload'));
   assert.ok(!isAllowedMime('application/zip'));
   assert.ok(!isAllowedMime(''));
+});
+
+test('activeBackgroundTasks: 終わった状態のタスクは数えない', () => {
+  assert.equal(activeBackgroundTasks(undefined), 0);
+  assert.equal(activeBackgroundTasks([]), 0);
+  assert.equal(activeBackgroundTasks([{ id: 'a' }, 'x']), 2); // 状態が無いものは実行中とみなす
+  assert.equal(activeBackgroundTasks([{ status: 'running' }, { status: 'completed' }, { status: 'Failed' }, { status: 'killed' }]), 1);
+});
+
+test('overlaps: 同じフォルダか、片方がもう片方の中', () => {
+  assert.ok(overlaps('D:\\WorkTree\\game', 'd:/worktree/game/'));
+  assert.ok(overlaps('D:\\WorkTree\\game\\sub', 'D:\\WorkTree\\game'));
+  assert.ok(overlaps('D:\\WorkTree', 'D:\\WorkTree\\game'));
+  assert.ok(!overlaps('D:\\WorkTree\\game', 'D:\\WorkTree\\game-hub'));
+  assert.ok(!overlaps('D:\\Unity\\game', 'D:\\WorkTree\\game'));
 });
 
 console.log(`\n${passed} passed${process.exitCode ? ', some FAILED' : ''}`);

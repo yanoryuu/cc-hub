@@ -48,10 +48,14 @@ export interface FocusState {
   /** ウィンドウ(タブ)が前面か */
   focused: boolean;
   at: number;
+  /** 最後にユーザーが画面を操作した時刻(クリック・キー入力など。前面になった時も含む) */
+  activeAt?: number;
 }
 
 /** 表示中とみなす最長時間(報告が途絶えたクライアントの状態を信じ続けない) */
 export const FOCUS_TTL_MS = 30 * 60_000;
+/** Discord を止めるのは、表示中かつこの時間内に操作があったときだけ(画面を開いたまま席を離れても届くように) */
+export const ACTIVE_TTL_MS = 2 * 60_000;
 
 export interface RouteInput {
   event: NotifyEvent;
@@ -78,6 +82,12 @@ export function isViewing(focus: FocusState | null, sessionId: string, now: numb
   return !!focus && !!sessionId && focus.focused && focus.sessionId === sessionId && now - focus.at < FOCUS_TTL_MS;
 }
 
+/** 表示中で、しかも最近操作している(= 画面の前にいる)か */
+export function isAttending(focus: FocusState | null, sessionId: string, now: number): boolean {
+  const at = focus?.activeAt;
+  return isViewing(focus, sessionId, now) && at != null && now - at < ACTIVE_TTL_MS;
+}
+
 /**
  * 通知の振り分け。throttle は呼び出し側の Throttle で先に判定する(ここでは種類・リポジトリ・表示中の抑制のみ)。
  * 'test' はテスト送信用で、ここでは通常の通知として扱わない
@@ -86,14 +96,18 @@ export function route(r: RouteInput): RouteDecision {
   const none = (skipped: string): RouteDecision => ({ windows: null, discord: [], skipped });
   if (!r.topic) return none('対象外の種類');
   const s = r.settings;
-  if (s.windows.suppressWhenViewing && isViewing(r.focus, r.event.sessionId, r.now)) return none('表示中のセッション');
+  // 表示中の抑制: Windows は表示中なら止める。Discord は画面の前にいる(最近操作した)ときだけ止める
+  const viewing = s.windows.suppressWhenViewing && isViewing(r.focus, r.event.sessionId, r.now);
+  const attending = viewing && isAttending(r.focus, r.event.sessionId, r.now);
+  if (attending) return none('表示中のセッション');
   let windows: RouteDecision['windows'] = null;
-  if (s.windows.enabled && s.windows.topics.includes(r.topic)) windows = r.desktopConnected ? 'app' : 'daemon';
+  if (!viewing && s.windows.enabled && s.windows.topics.includes(r.topic)) windows = r.desktopConnected ? 'app' : 'daemon';
   const discord = s.discord
     .filter((t) => t.enabled && t.topics.includes(r.topic!))
     .filter((t) => t.repoIds.length === 0 || (!!r.repoId && t.repoIds.some((x) => x.toLowerCase() === r.repoId!.toLowerCase())))
     .map((t) => t.id);
-  return { windows, discord, skipped: windows || discord.length ? null : '送信先なし' };
+  if (!windows && !discord.length) return none(viewing ? '表示中のセッション' : '送信先なし');
+  return { windows, discord, skipped: null };
 }
 
 /** 同じセッション(PR)・同じ種類の通知の間引き */

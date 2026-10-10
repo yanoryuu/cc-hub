@@ -67,12 +67,15 @@ export class NotifyService {
   }
 
   // ================================================================ 表示中のセッション(抑制用)
-  /** POST /api/client/focus {sessionId?, focused?}。指定された項目だけ更新する */
+  /** POST /api/client/focus {sessionId?, focused?, active?}。指定された項目だけ更新する。active = 画面を操作した */
   setFocus(body: any): FocusState {
+    const now = Date.now();
     const cur = this.focus ?? { sessionId: null, focused: false, at: 0 };
-    const next: FocusState = { ...cur, at: Date.now() };
+    const next: FocusState = { ...cur, at: now };
     if (body && 'sessionId' in body) next.sessionId = typeof body.sessionId === 'string' && body.sessionId ? body.sessionId : null;
     if (body && 'focused' in body) next.focused = body.focused === true;
+    // 前面になった・セッションを開いた・操作した時を「画面の前にいる」とみなす
+    if (body?.active === true || (next.focused && (!cur.focused || next.sessionId !== cur.sessionId))) next.activeAt = now;
     this.focus = next;
     return { ...next };
   }

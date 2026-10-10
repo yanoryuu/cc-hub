@@ -1,5 +1,5 @@
 // プロジェクト一覧(ホーム): 起動時の画面。登録リポジトリとフォルダをカードで並べ、
-// 「GitHub からクローンして追加」「フォルダを開く」から始められるようにする。デスクトップ / モバイル共用
+// 「GitHub のリポジトリを追加」「フォルダを開く」から始められるようにする。デスクトップ / モバイル共用
 import { useEffect, useMemo, useState } from 'react';
 import type { SessionInfo } from '@cc-hub/shared';
 import { useHub } from '../store';
@@ -19,7 +19,7 @@ import { FirebaseChip } from './Firebase';
 
 // ---------------------------------------------------------------- ダイアログ(App 直下に置く)
 
-/** 「GitHub からクローンして追加」: 登録フォームをダイアログで */
+/** 「GitHub のリポジトリを追加」: 登録フォームをダイアログで */
 export function CloneRepoModal() {
   const open = useHub((s) => s.cloneOpen);
   const setOpen = useHub((s) => s.setCloneOpen);
@@ -34,7 +34,7 @@ export function CloneRepoModal() {
     <div className="modal-backdrop" onMouseDown={(e) => e.target === e.currentTarget && setOpen(false)}>
       <div className="modal" role="dialog" aria-modal="true" aria-labelledby="clone-title">
         <div className="modal-head">
-          <h2 id="clone-title">GitHub からクローンして追加</h2>
+          <h2 id="clone-title">GitHub のリポジトリを追加</h2>
           <button className="icon-btn" onClick={() => setOpen(false)} aria-label="閉じる">
             ✕
           </button>
@@ -330,7 +330,7 @@ export function HomeScreen({ mobile = false }: { mobile?: boolean }) {
   const actions = (
     <div className="home-actions">
       <button className="btn primary lg home-clone" onClick={() => setClone(true)}>
-        <span aria-hidden="true">⑂</span> GitHub からクローンして追加
+        <span aria-hidden="true">⑂</span> GitHub のリポジトリを追加
       </button>
       <button className="btn lg" onClick={() => setFolderOpen(true)}>
         <span aria-hidden="true">▤</span> フォルダを開く
@@ -377,7 +377,7 @@ export function HomeScreen({ mobile = false }: { mobile?: boolean }) {
                   <>
                     登録したリポジトリはありません。
                     <button className="link-btn" onClick={() => setClone(true)}>
-                      GitHub からクローンして追加
+                      GitHub のリポジトリを追加
                     </button>
                   </>
                 ) : (

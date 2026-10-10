@@ -61,15 +61,31 @@ export function App() {
       if (timer) clearTimeout(timer);
       timer = setTimeout(send, 300);
     };
+    // 操作したことも 30 秒に 1 回まで伝える(画面を開いたまま席を離れたら Discord は止めないため)
+    let lastActive = 0;
+    const onActive = () => {
+      const now = Date.now();
+      if (now - lastActive < 30_000 || !viewing || document.visibilityState !== 'visible') return;
+      lastActive = now;
+      void fetch('/api/client/focus', {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ active: true }),
+      }).catch(() => {});
+    };
+    const activity = ['pointerdown', 'keydown', 'wheel', 'touchstart'] as const;
     send();
     window.addEventListener('focus', schedule);
     window.addEventListener('blur', schedule);
     document.addEventListener('visibilitychange', schedule);
+    for (const t of activity) window.addEventListener(t, onActive, { passive: true, capture: true });
     return () => {
       if (timer) clearTimeout(timer);
       window.removeEventListener('focus', schedule);
       window.removeEventListener('blur', schedule);
       document.removeEventListener('visibilitychange', schedule);
+      for (const t of activity) window.removeEventListener(t, onActive, { capture: true });
     };
   }, [auth, viewing]);
 

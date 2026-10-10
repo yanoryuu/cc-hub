@@ -288,7 +288,7 @@ function RepoTab({ preset, busy, err, setErr, start, onClose }: TabProps & { pre
               openRepos({ page: 'register' });
             }}
           >
-            GitHub からクローンして追加
+            GitHub のリポジトリを追加
           </button>
         </span>
         {counts.idle === 0 ? (

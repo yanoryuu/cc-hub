@@ -62,6 +62,8 @@ if ($c) {
 $vbs = Join-Path $root 'scripts\cc-hub.vbs'
 Say "デーモンを起動: wscript //B $vbs"
 if (-not $WhatIf) {
+    # Claude Code のシェルから実行した場合の環境変数(CLAUDE* / NO_COLOR など)をデーモンに引き継がない
+    Get-ChildItem Env: | Where-Object { $_.Name -match '^(CLAUDE|NO_COLOR$)' } | ForEach-Object { Remove-Item "Env:$($_.Name)" }
     Start-Process wscript.exe -ArgumentList "//B `"$vbs`""
     $ok = $false
     for ($i = 0; $i -lt 30; $i++) {

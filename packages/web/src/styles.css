@@ -750,6 +750,51 @@ kbd {
   white-space: nowrap;
   min-width: 0;
 }
+/* 行の削除ボタン(マウスを乗せた時 / キーボードで行に来た時に出す。タッチ端末では常に薄く出す) */
+.srow-wrap {
+  position: relative;
+}
+.srow-del {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  width: 26px;
+  height: 26px;
+  display: grid;
+  place-items: center;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  color: var(--muted);
+  font-size: 15px;
+  line-height: 1;
+  opacity: 0;
+  pointer-events: none;
+}
+.srow-wrap:hover .srow-del,
+.srow-wrap:focus-within .srow-del {
+  opacity: 1;
+  pointer-events: auto;
+}
+.srow-del:hover,
+.srow-del:focus-visible {
+  color: var(--danger-fg);
+  background: var(--danger-bg);
+  border-color: var(--danger-border);
+}
+.srow-del:disabled {
+  opacity: 0.5;
+  cursor: progress;
+}
+@media (hover: none) {
+  .srow-del {
+    opacity: 0.6;
+    pointer-events: auto;
+  }
+  .srow-wrap .srow {
+    padding-right: 40px;
+  }
+}
 .srow {
   display: flex;
   align-items: center;

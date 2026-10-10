@@ -136,6 +136,13 @@ export function normPath(p: string): string {
   return path.resolve(p).replace(/\//g, '\\').replace(/\\+$/, '').toLowerCase();
 }
 
+/** 2 つのフォルダが同じか、片方がもう片方の中にあるか */
+export function overlaps(a: string, b: string): boolean {
+  const x = normPath(a);
+  const y = normPath(b);
+  return x === y || x.startsWith(`${y}\\`) || y.startsWith(`${x}\\`);
+}
+
 /** 直列化用のミューテックス(リポジトリごとの git 操作に使う) */
 export class Mutex {
   private last: Promise<unknown> = Promise.resolve();

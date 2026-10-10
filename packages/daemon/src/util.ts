@@ -58,6 +58,17 @@ export function clampInt(v: unknown, min: number, max: number): number {
 /** SessionInfo.task の最大長 */
 export const TASK_MAX = 300;
 
+const BG_FINISHED_RE = /^(completed?|done|finished|failed|error|killed|stopped|cancell?ed)$/i;
+
+/** Stop hook の background_tasks のうち、まだ終わっていないものの数(状態が無いものは実行中とみなす) */
+export function activeBackgroundTasks(tasks: unknown): number {
+  if (!Array.isArray(tasks)) return 0;
+  return tasks.filter((t) => {
+    const st = t && typeof t === 'object' ? (t as { status?: unknown }).status : undefined;
+    return !(typeof st === 'string' && BG_FINISHED_RE.test(st.trim()));
+  }).length;
+}
+
 /**
  * 指示 / 最初のプロンプトから「何の作業か」(SessionInfo.task)を作る。
  * 先頭のスラッシュコマンド名(/commander など)は取り除き、その後ろの本文を使う。本文が無い・システム由来("<" で始まる)なら null

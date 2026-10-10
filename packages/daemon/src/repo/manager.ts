@@ -7,7 +7,7 @@ import type { HubConfig } from '../config';
 import type { Store } from '../store/db';
 import type { SessionManager } from '../session/manager';
 import { HttpError, clampInt } from '../util';
-import { git, gitOk, normPath, tail } from './exec';
+import { git, gitOk, normPath, overlaps, tail } from './exec';
 import { ghRun } from '../github/gh';
 import { defaultKeepDirs, detectKind } from './kind';
 import { WorktreePool, baseOf, DISK_WARN_PREFIX } from './pool';
@@ -118,7 +118,8 @@ export class RepoManager {
 
   // ================================================================ 登録
   async register(req: RegisterRepoRequest): Promise<RepoInfo> {
-    const parsed = normalizeRepoUrl(req?.url);
+    const local = req?.localPath ? await this.inspectLocal(String(req.localPath)) : null;
+    const parsed = local ? local.parsed : normalizeRepoUrl(req?.url);
     if (!parsed) throw new HttpError(400, 'GitHub のリポジトリ URL(https / git@ / owner/name)を指定してください');
     if (req.trusted !== true) throw new HttpError(400, 'リポジトリを信頼することの確認(trusted: true)が必要です');
     let id = `${parsed.owner}/${parsed.name}`;
@@ -148,6 +149,8 @@ export class RepoManager {
       const root = kind === 'unity' ? this.cfg.worktreeRoots.unity : this.cfg.worktreeRoots.default;
       let baseDir = path.join(root, name);
       if ([...this.repos.values()].some((r) => normPath(r.baseDir) === normPath(baseDir))) baseDir = path.join(root, `${owner}-${name}`);
+      // 元のフォルダと置き場所が重なる(D:\WorkTree\name にクローン済みなど)なら別の名前にする
+      if (local && overlaps(local.dir, baseDir)) baseDir = path.join(root, `${name}-hub`);
       const poolMax = this.cfg.defaultPoolMax;
       const repo: RepoInfo = {
         id,
@@ -159,7 +162,8 @@ export class RepoManager {
         kind,
         installCmd: null,
         keepDirs: defaultKeepDirs(kind),
-        seedLibraryFrom: null,
+        // Unity: 元のフォルダの Library を worktree の初期データに使う(インポートの待ち時間を省く)
+        seedLibraryFrom: local && kind === 'unity' && fs.existsSync(path.join(local.dir, 'Library')) ? path.join(local.dir, 'Library') : null,
         poolMin: clampInt(req.poolMin ?? this.cfg.defaultPoolMin, 0, poolMax),
         poolMax,
         trusted: true,
@@ -169,16 +173,34 @@ export class RepoManager {
       };
       this.repos.set(id, repo);
       this.update(repo, {});
-      console.log(`[repo] 登録: ${id} (${kind}) → ${baseDir}`);
-      void this.clone(repo);
+      console.log(`[repo] 登録: ${id} (${kind}) → ${baseDir}${local ? `(複製元: ${local.dir})` : ''}`);
+      void this.clone(repo, local?.dir ?? null);
       return { ...repo };
     } finally {
       this.registering.delete(key);
     }
   }
 
-  /** gh repo clone(既に同じリポジトリのクローンがあれば取り込む)→ 種別判定 → ready → プール作成 */
-  private async clone(repo: RepoInfo): Promise<void> {
+  /** クローン済みのフォルダを調べる: git の作業ツリーで、origin が GitHub のリポジトリであること */
+  private async inspectLocal(input: string): Promise<{ dir: string; parsed: { owner: string; name: string } }> {
+    const p = input.trim().replace(/^"(.*)"$/, '$1');
+    if (!p || !path.isAbsolute(p)) throw new HttpError(400, 'クローン済みのフォルダを絶対パスで指定してください');
+    if (!fs.existsSync(p) || !fs.statSync(p).isDirectory()) throw new HttpError(400, `フォルダが見つかりません: ${p}`);
+    const top = await git(['-C', p, 'rev-parse', '--show-toplevel']);
+    if (top.code !== 0) throw new HttpError(400, `Git のリポジトリではありません: ${p}`);
+    const dir = path.normalize(top.stdout.trim());
+    const origin = await git(['-C', dir, 'remote', 'get-url', 'origin']);
+    if (origin.code !== 0) throw new HttpError(400, 'このフォルダには origin(GitHub のリモート)がありません');
+    const parsed = normalizeRepoUrl(origin.stdout.trim());
+    if (!parsed) throw new HttpError(400, `origin が GitHub のリポジトリではありません: ${origin.stdout.trim()}`);
+    return { dir, parsed };
+  }
+
+  /**
+   * gh repo clone(既に同じリポジトリのクローンがあれば取り込む)→ 種別判定 → ready → プール作成。
+   * localSource があればそこからローカルで複製し、origin を GitHub に向け直す(元のフォルダには書き込まない)
+   */
+  private async clone(repo: RepoInfo, localSource: string | null = null): Promise<void> {
     const base = baseOf(repo);
     const logFile = this.logFile(repo);
     this.update(repo, { status: 'cloning', error: null });
@@ -199,6 +221,20 @@ export class RepoManager {
       if (adopt) {
         console.log(`[repo] 既存のクローンを使います: ${base}`);
         await gitOk(['-C', base, 'fetch', 'origin', '--prune'], { logFile });
+      } else if (localSource) {
+        fs.mkdirSync(repo.baseDir, { recursive: true });
+        console.log(`[repo] クローン済みのフォルダから複製します: ${localSource} → ${base}`);
+        const r = await git(['clone', '--no-checkout', '-c', 'core.longpaths=true', localSource, base], { timeout: CLONE_TIMEOUT, logFile });
+        if (r.code !== 0) throw new Error(`フォルダからの複製に失敗しました: ${tail(r)}`);
+        await gitOk(['-C', base, 'remote', 'set-url', 'origin', `https://github.com/${repo.id}.git`]);
+        await gitOk(['-C', base, 'fetch', 'origin', '--prune'], { logFile, timeout: CLONE_TIMEOUT });
+        // 複製元の作業中のブランチではなく、既定ブランチを origin に合わせて置く(gh repo clone と同じ状態にする)
+        const cur = await git(['-C', base, 'symbolic-ref', '--short', 'HEAD']);
+        await gitOk(['-C', base, 'checkout', '-B', repo.defaultBranch, `origin/${repo.defaultBranch}`], { logFile });
+        await gitOk(['-C', base, 'branch', `--set-upstream-to=origin/${repo.defaultBranch}`], { logFile });
+        const prev = cur.code === 0 ? cur.stdout.trim() : '';
+        if (prev && prev !== repo.defaultBranch) await git(['-C', base, 'branch', '-D', prev]);
+        await git(['-C', base, 'remote', 'set-head', 'origin', '--auto']);
       } else {
         fs.mkdirSync(repo.baseDir, { recursive: true });
         const r = await ghRun(['repo', 'clone', repo.id, base, '--', '-c', 'core.longpaths=true'], { timeout: CLONE_TIMEOUT, logFile });

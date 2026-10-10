@@ -88,7 +88,7 @@ test('route: Windows はデスクトップアプリが接続中ならアプリ�
 });
 
 test('route: 前面で表示中のセッションは Windows / Discord とも出さない', () => {
-  const focus = { sessionId: 's1', focused: true, at: 1000 };
+  const focus = { sessionId: 's1', focused: true, at: 1000, activeAt: 1000 };
   const r = route({ event: ev({ kind: 'approval' }), topic: 'approval', repoId: null, settings: settings(), focus, desktopConnected: true, now: 2000 });
   assert.equal(r.windows, null);
   assert.deepEqual(r.discord, []);
@@ -103,6 +103,17 @@ test('route: 前面で表示中のセッションは Windows / Discord とも出
   assert.equal(route({ event: ev({ kind: 'approval' }), topic: 'approval', repoId: null, settings: s, focus, desktopConnected: true, now: 2000 }).windows, 'app');
   const stale = route({ event: ev({ kind: 'approval' }), topic: 'approval', repoId: null, settings: settings(), focus, desktopConnected: true, now: 1000 + 31 * 60_000 });
   assert.equal(stale.windows, 'app');
+});
+
+test('route: 表示中でも 2 分以上操作がなければ Discord は送る(Windows は出さない)', () => {
+  const focus = { sessionId: 's1', focused: true, at: 1000, activeAt: 1000 };
+  const away = route({ event: ev({ kind: 'approval' }), topic: 'approval', repoId: null, settings: settings(), focus, desktopConnected: true, now: 1000 + 3 * 60_000 });
+  assert.equal(away.windows, null);
+  assert.ok(away.discord.length > 0);
+  assert.equal(away.skipped, null);
+  // 操作の記録が無い(古いクライアント)場合も席を外しているとみなす
+  const noActive = route({ event: ev({ kind: 'approval' }), topic: 'approval', repoId: null, settings: settings(), focus: { sessionId: 's1', focused: true, at: 1000 }, desktopConnected: true, now: 2000 });
+  assert.ok(noActive.discord.length > 0);
 });
 
 test('Throttle: 同じセッション・種類は throttleSeconds 以内に 1 回', () => {

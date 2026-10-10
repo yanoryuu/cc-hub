@@ -8,6 +8,7 @@ import { fmtDate } from '../util';
 import { ConfirmModal, PoolChips, RepoStatusBadge, Spinner, WtBadge } from './RepoCommon';
 import { StatusDot } from './common';
 import { BranchSection } from './Branches';
+import { FolderInput } from './FolderPicker';
 
 // ---------------------------------------------------------------- URL の正規化(表示用プレビュー)
 
@@ -46,7 +47,7 @@ export function SidebarRepos() {
         >
           プロジェクト
         </button>
-        <button className="btn sm ghost side-add" title="GitHub からクローンして追加" onClick={() => setClone(true)}>
+        <button className="btn sm ghost side-add" title="GitHub のリポジトリを追加" onClick={() => setClone(true)}>
           ＋ 追加
         </button>
       </div>
@@ -140,23 +141,27 @@ function RepoCard({ repo, worktrees, onOpen }: { repo: RepoInfo; worktrees: Work
 
 // ---------------------------------------------------------------- 登録フォーム
 
-/** inModal = 「GitHub からクローンして追加」ダイアログの中身として使う(閉じるのは onClose) */
+/** inModal = 「GitHub のリポジトリを追加」ダイアログの中身として使う(閉じるのは onClose) */
 export function RegisterRepoForm({ mobile = false, inModal = false, onClose }: { mobile?: boolean; inModal?: boolean; onClose?: () => void }) {
   const openRepos = useHub((s) => s.openRepos);
   const setTopView = useHub((s) => s.setTopView);
   const upsertRepo = useHub((s) => s.upsertRepo);
   const repos = useHub((s) => s.repos);
+  const [source, setSource] = useState<'url' | 'local'>('url');
   const [url, setUrl] = useState('');
+  const [localPath, setLocalPath] = useState('');
   const [trusted, setTrusted] = useState(false);
   const [poolMin, setPoolMin] = useState('3');
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
-  const parsed = parseRepoUrl(url);
+  const local = source === 'local';
+  const parsed = local ? null : parseRepoUrl(url);
   const dup = parsed ? Object.values(repos).find((r) => r.id.toLowerCase() === parsed.toLowerCase()) : undefined;
   const n = parseInt(poolMin, 10);
   const poolOk = Number.isFinite(n) && n >= 0 && n <= 10;
-  const canSubmit = !!url.trim() && trusted && poolOk && !busy && !dup;
+  const filled = local ? !!localPath.trim() : !!url.trim();
+  const canSubmit = filled && trusted && poolOk && !busy && !dup;
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -164,7 +169,9 @@ export function RegisterRepoForm({ mobile = false, inModal = false, onClose }: {
     setBusy(true);
     setErr(null);
     try {
-      const req: RegisterRepoRequest = { url: url.trim(), trusted, poolMin: n };
+      const req: RegisterRepoRequest = local
+        ? { url: '', localPath: localPath.trim(), trusted, poolMin: n }
+        : { url: url.trim(), trusted, poolMin: n };
       const r = await repoApi.register(req);
       const repo = pick<RepoInfo>(r, 'repo');
       if (repo && repo.id) upsertRepo(repo);
@@ -189,9 +196,29 @@ export function RegisterRepoForm({ mobile = false, inModal = false, onClose }: {
       <form className={inModal ? 'modal-body form register-form' : 'rp-card form register-form'} onSubmit={submit}>
         {inModal && (
           <p className="muted small">
-            GitHub のリポジトリをクローンして CC Hub に登録します。待機用の worktree を用意しておくので、複数のセッションを並行して始められます。
+            GitHub のリポジトリを CC Hub に登録します。待機用の worktree を用意しておくので、複数のセッションを並行して始められます。
           </p>
         )}
+        <div className="field">
+          <span>登録のしかた</span>
+          <div className="seg small" role="group" aria-label="登録のしかた">
+            <button type="button" className={!local ? 'on' : ''} aria-pressed={!local} onClick={() => setSource('url')}>
+              GitHub からクローン
+            </button>
+            <button type="button" className={local ? 'on' : ''} aria-pressed={local} onClick={() => setSource('local')}>
+              クローン済みのフォルダ
+            </button>
+          </div>
+        </div>
+        {local ? (
+          <div className="field">
+            <span>クローン済みのフォルダ</span>
+            <FolderInput value={localPath} onChange={setLocalPath} label="クローン済みのフォルダ" placeholder="D:\Unity\MyGame" autoFocus={!mobile || inModal} />
+            <span className="hint">
+              origin の URL からリポジトリを判別し、このフォルダから複製して CC Hub 用のクローンを作ります。このフォルダ自体は変更しません(作業中の変更もそのまま)。Unity なら Library も初期データとして使います。
+            </span>
+          </div>
+        ) : (
         <label className="field">
           <span>GitHub のリポジトリ</span>
           <input
@@ -221,6 +248,7 @@ export function RegisterRepoForm({ mobile = false, inModal = false, onClose }: {
             )}
           </span>
         </label>
+        )}
         <label className="field">
           <span>待機させる worktree の数</span>
           <input
@@ -248,10 +276,10 @@ export function RegisterRepoForm({ mobile = false, inModal = false, onClose }: {
             キャンセル
           </button>
           <button type="submit" className="btn primary" disabled={!canSubmit}>
-            {busy ? '登録中…' : '登録してクローン'}
+            {busy ? '登録中…' : local ? '登録して複製' : '登録してクローン'}
           </button>
         </div>
-        {!trusted && url.trim() && <div className="hint right">登録するには「信頼する」にチェックしてください</div>}
+        {!trusted && filled && <div className="hint right">登録するには「信頼する」にチェックしてください</div>}
       </form>
   );
   if (inModal) return form;

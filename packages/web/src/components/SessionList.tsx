@@ -1,7 +1,7 @@
 // セッション一覧(並び順を選べる / リポジトリ・cwd ごとにまとめる)。デスクトップのサイドバーとモバイルの一覧で共用
 import { useState } from 'react';
 import type { SessionInfo } from '@cc-hub/shared';
-import { api } from '../api';
+import { api, sessionApi } from '../api';
 import { SORT_LABEL, type SortMode, groupSessions, isFinished, useHub } from '../store';
 import { STATUS_ICON, STATUS_LABEL, projectLabel } from '../util';
 import { needsRelease, useSessionWorktree } from '../repo';
@@ -22,7 +22,20 @@ function SessionRow({
   const wt = useSessionWorktree(s);
   const release = needsRelease(s, wt);
   const sub = s.status === 'awaiting_approval' ? s.approval?.question ?? '' : toolText(s);
+  const [removing, setRemoving] = useState(false);
+  const remove = async () => {
+    const live = s.managed && s.status !== 'stopped' && s.status !== 'error';
+    if (!window.confirm(`「${s.name}」を一覧から削除しますか?(会話の記録は残ります)${live ? '\n実行中のプロセスも終了します。' : ''}`)) return;
+    setRemoving(true);
+    try {
+      await sessionApi.control(s.id, 'remove');
+    } catch (e) {
+      window.alert(`削除できませんでした: ${e instanceof Error ? e.message : String(e)}`);
+      setRemoving(false);
+    }
+  };
   return (
+    <div className="srow-wrap">
     <button className={`srow st-${s.status} ${active ? 'active' : ''}`} onClick={onClick} aria-current={active}>
       <span className="srow-main">
         <span className="srow-top">
@@ -70,6 +83,17 @@ function SessionRow({
         )}
       </span>
     </button>
+      <button
+        type="button"
+        className="srow-del"
+        onClick={() => void remove()}
+        disabled={removing}
+        title="一覧から削除"
+        aria-label={`「${s.name}」を一覧から削除`}
+      >
+        ×
+      </button>
+    </div>
   );
 }
 

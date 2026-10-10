@@ -40,15 +40,17 @@ import type { Store, SessionRow } from '../store/db';
 import type { AgentTree } from '../agents/tree';
 import type { UsageTracker } from '../usage';
 import { findTranscript } from '../history';
-import { HttpError, clampInt, taskText, toolTarget } from '../util';
+import { HttpError, activeBackgroundTasks, clampInt, taskText, toolTarget } from '../util';
 import { TranscriptTail, combineTokens } from './tokens';
 import { PtyHost } from './pty-host';
 import { approvalKeys, detectApproval, type DetectedApproval } from './approval';
-import { buildTerminalArgv, launchTerminal, type TerminalSpec } from './terminal';
+import { buildTerminalArgv, launchTerminal, terminalEnv, type TerminalSpec } from './terminal';
 
 const DEFAULT_COLS = 120;
 const DEFAULT_ROWS = 32;
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+/** バックグラウンド待機にしたまま何も起きなければ「入力待ち」に戻すまでの時間 */
+const BG_SETTLE_MS = 20000;
 
 interface Entry {
   info: SessionInfo;
@@ -534,12 +536,7 @@ export class SessionManager {
     if (o.prompt) args.push(o.prompt);
     const fi = args.indexOf('--append-system-prompt-file');
     if (fi >= 0) console.log(`[session] 共通の指示を渡します: ${info.name} --append-system-prompt-file ${args[fi + 1]}`);
-    const env: Record<string, string> = {};
-    for (const [k, v] of Object.entries(process.env)) {
-      if (v == null || /^CLAUDE/i.test(k)) continue;
-      env[k] = v;
-    }
-    env.CC_HUB_SESSION = info.id;
+    const env = terminalEnv(info.id);
     if (!e.host) e.host = new PtyHost(info.cols || DEFAULT_COLS, info.rows || DEFAULT_ROWS);
     const host = e.host;
     host.onData = (data) => {
@@ -1016,6 +1013,20 @@ export class SessionManager {
     }
   }
 
+  /** バックグラウンド待機のまま ms のあいだ hooks が来なければ「入力待ち」にする */
+  private settleWaiting(e: Entry, ms: number): void {
+    const info = e.info;
+    const mark = info.lastEventAt;
+    setTimeout(() => {
+      if (this.sessions.get(info.id) !== e) return;
+      if (info.lastEventAt !== mark || info.status !== 'running' || info.currentTool?.name !== '待機') return;
+      if (this.agents.runningCount(info.id) > 0) return;
+      info.currentTool = null;
+      this.setStatus(e, 'awaiting_input');
+      this.touch(e, false);
+    }, ms);
+  }
+
   private notify(e: Entry, kind: NotifyKind, title: string, body: string): void {
     const now = Date.now();
     const last = e.lastNotify.get(kind) ?? 0;
@@ -1058,14 +1069,7 @@ export class SessionManager {
 
     // バックグラウンド待機中に最後のエージェントが終わったら、少し待っても再開しなければ「入力待ち」にする
     if (ev === 'SubagentStop' && info.currentTool?.name === '待機' && this.agents.runningCount(info.id) === 0) {
-      const mark = info.lastEventAt;
-      setTimeout(() => {
-        if (info.lastEventAt === mark && info.status === 'running' && info.currentTool?.name === '待機') {
-          info.currentTool = null;
-          this.setStatus(e, 'awaiting_input');
-          this.touch(e, false);
-        }
-      }, 20000);
+      this.settleWaiting(e, BG_SETTLE_MS);
     }
 
     // managed で PTY が無い(終了済み)なら状態は PTY 側の判定を優先する
@@ -1118,11 +1122,15 @@ export class SessionManager {
           {
             // バックグラウンドのサブエージェントが動いている間は、ターンが終わっても「入力待ち」にしない
             // (Claude はエージェントの完了通知で自動的に再開するため、ここで通知するとユーザーを早く呼びすぎる)
-            const bg = Array.isArray(b.background_tasks) ? b.background_tasks.length : 0;
-            const running = Math.max(bg, this.agents.runningCount(info.id));
+            // background_tasks には終わったばかりのタスクが残っていることがあるので、終了済みの状態のものは数えない
+            const bg = activeBackgroundTasks(b.background_tasks);
+            const tracked = this.agents.runningCount(info.id);
+            const running = Math.max(bg, tracked);
             if (running > 0) {
               info.currentTool = { name: '待機', target: `バックグラウンドのエージェント ${running} 件`, since: now };
               this.setStatus(e, 'running');
+              // 追跡中のエージェントが無い = SubagentStop はもう来ないので、何も起きなければ入力待ちに戻す
+              if (tracked === 0) this.settleWaiting(e, BG_SETTLE_MS);
               break;
             }
           }
