@@ -415,6 +415,29 @@ export interface HistoryEntry {
   cwd: string;
   title: string;
   mtime: number;
+  /** 以下は GET /api/history で付く(ある場合) */
+  createdAt?: number;
+  /** ユーザー発言の数(おおよその長さ) */
+  messageCount?: number;
+  /** 最後のアシスタント発言の先頭 */
+  lastMessage?: string | null;
+  gitBranch?: string | null;
+  /** CC Hub 上のセッション(一覧に残っていれば)。あればその画面を開ける */
+  hubSessionId?: string | null;
+}
+
+export interface HistoryMessage {
+  role: 'user' | 'assistant' | 'tool';
+  text: string;
+  ts: number;
+}
+
+export interface DirEntry {
+  name: string;
+  path: string;
+  isGitRepo: boolean;
+  /** .claude フォルダや CLAUDE.md がある */
+  hasClaude: boolean;
 }
 
 // ---------------------------------------------------------------- 通知イベント
@@ -469,7 +492,14 @@ export type ServerMessage =
 // 認証(Cookie ccr_token / Cookie hub_local / Authorization: Bearer <local-token>):
 //   GET  /api/state                                      → HubState
 //   GET  /api/projects                                   → {projects: ProjectEntry[]}
-//   GET  /api/history?limit=30                           → {sessions: HistoryEntry[]}
+//   GET  /api/history?limit=30&offset=0&q=<検索>&cwd=<フォルダ(配下も含む)>  → {sessions: HistoryEntry[], total}
+//                                                        (~/.claude/projects の全 transcript。新しい順。q はタイトル / 最初の発言 / cwd を部分一致)
+//   GET  /api/history/:id                                → {ok, entry: HistoryEntry, messages: HistoryMessage[]}(直近 200 件。サブエージェントは除く)
+//   POST /api/history/:id/open {target: 'hub' | 'terminal'}  → {ok, session}
+//          hub: CC Hub の PTY で claude --resume(その会話の cwd で。既に CC Hub 上にあれば takeover / restart と同じ扱い)
+//          terminal: 新しい PowerShell で claude --resume(handedOff のセッションとして一覧に載る)
+//   GET  /api/fs/dirs?path=<フォルダ>                    → {ok, path, parent, dirs: DirEntry[]}(path 省略時はドライブ一覧とホーム。隠しフォルダ・node_modules 等は除く)
+//   Electron(デスクトップ)では window.ccHub.pickFolder(): Promise<string | null> で Windows のフォルダ選択ダイアログを使う
 //   POST /api/sessions          StartSessionRequest      → {ok, session}
 //   POST /api/sessions/:id/input   {data, submit?}
 //   POST /api/sessions/:id/resize  {cols, rows}
