@@ -39,7 +39,8 @@ import type { Store, SessionRow } from '../store/db';
 import type { AgentTree } from '../agents/tree';
 import type { UsageTracker } from '../usage';
 import { findTranscript } from '../history';
-import { HttpError, clampInt, toolTarget } from '../util';
+import { HttpError, clampInt, taskText, toolTarget } from '../util';
+import { TranscriptTail, combineTokens } from './tokens';
 import { PtyHost } from './pty-host';
 import { approvalKeys, detectApproval, type DetectedApproval } from './approval';
 import { buildTerminalArgv, launchTerminal, type TerminalSpec } from './terminal';
@@ -72,7 +73,19 @@ interface Entry {
   handoffAt: number | null;
   /** PTY の終了を待っている処理 */
   exitWaiters: (() => void)[];
+  /** トークン集計: statusLine の累計(メイン会話)。届いていなければ null */
+  slTokens: { input: number; output: number } | null;
+  /** トークン集計: transcript の追記読み(必要になったら作る) */
+  tail: TranscriptTail | null;
+  /** これまでに使われた claude 側の session_id(/clear 前の transcript も集計に含める) */
+  claudeIds: Set<string>;
+  tokenTimer: NodeJS.Timeout | null;
+  tokenLastAt: number;
+  tokenRunning: boolean;
 }
+
+/** トークン使用量の更新(transcript の読み込み + 配信)の最短間隔 */
+const TOKEN_INTERVAL_MS = 2000;
 
 /** PowerShell に移したセッションが、まだ向こうで動いているとみなす状態 */
 const HANDED_OFF_LIVE: SessionStatus[] = ['starting', 'running', 'awaiting_approval', 'awaiting_input', 'idle'];
@@ -89,6 +102,8 @@ export interface PendingStart {
   name: string;
   mode: SessionMode;
   repoId: string;
+  /** 最初の指示(SessionInfo.task 用) */
+  task?: string;
   /** 仮の cwd(worktree が決まるまではリポジトリの baseDir) */
   cwd: string;
 }
@@ -174,7 +189,7 @@ export class SessionManager {
 
   /** 変更を配信して保存する */
   private touch(e: Entry, persist = true): void {
-    if (persist) this.store.saveSession(e.info, e.endedAt, e.claudeId);
+    if (persist) this.store.saveSession(e.info, e.endedAt, e.claudeId, this.tokensJson(e));
     bus.state({ t: 'session.upsert', session: { ...e.info } });
   }
 
@@ -195,6 +210,12 @@ export class SessionManager {
       handingOff: false,
       handoffAt: null,
       exitWaiters: [],
+      slTokens: null,
+      tail: null,
+      claudeIds: new Set([info.id]),
+      tokenTimer: null,
+      tokenLastAt: 0,
+      tokenRunning: false,
     };
   }
 
@@ -236,7 +257,17 @@ export class SessionManager {
       e.endedAt = r.ended_at;
       if (r.claude_session_id && r.claude_session_id !== info.id) {
         e.claudeId = r.claude_session_id;
+        e.claudeIds.add(e.claudeId);
         this.aliases.set(e.claudeId, info.id);
+      }
+      if (r.tokens_json) {
+        try {
+          const j = JSON.parse(r.tokens_json);
+          if (j?.tokens && typeof j.tokens === 'object') info.tokens = j.tokens;
+          if (j?.sl && Number.isFinite(j.sl.input) && Number.isFinite(j.sl.output)) e.slTokens = { input: j.sl.input, output: j.sl.output };
+        } catch {
+          /* 壊れていたら無視(次の更新で取り直す) */
+        }
       }
       this.sessions.set(info.id, e);
       if (info.managed) {
@@ -286,6 +317,7 @@ export class SessionManager {
       worktreeId: r.worktree_id ?? null,
       branch: r.branch ?? null,
       handedOff: !!r.handed_off && !r.managed,
+      task: r.task ?? null,
     });
     return info;
   }
@@ -311,6 +343,7 @@ export class SessionManager {
       const keepCwd = !!existing?.info.worktreeId;
       Object.assign(info, { managed: true, handedOff: false, cwd: keepCwd ? info.cwd : cwd, mode, status: 'starting', exitCode: null, approval: null, currentTool: null });
       if (req.name) info.name = name;
+      if (!info.task) info.task = taskText(req.instruction);
       e.endedAt = null;
       e.userStopped = false;
       this.sessions.set(info.id, e);
@@ -322,6 +355,8 @@ export class SessionManager {
     const info = this.blankInfo(id, name, cwd, true);
     info.mode = mode;
     info.permissionMode = this.cfg.permissionMode;
+    // commander でも保存するのは指示の本文だけ(/commander は付けない)
+    info.task = taskText(req.instruction);
     const e = this.newEntry(info);
     this.sessions.set(id, e);
     try {
@@ -342,6 +377,7 @@ export class SessionManager {
     info.mode = o.mode;
     info.repoId = o.repoId;
     info.permissionMode = this.cfg.permissionMode;
+    info.task = taskText(o.task);
     const e = this.newEntry(info);
     e.preparing = true;
     e.host = new PtyHost(DEFAULT_COLS, DEFAULT_ROWS);
@@ -375,6 +411,7 @@ export class SessionManager {
     info.cwd = o.cwd;
     info.worktreeId = o.worktreeId;
     info.branch = o.branch;
+    if (!info.task) info.task = taskText(o.instruction);
     e.preparing = false;
     this.progress(id, `${o.cwd} で claude を起動します(${o.branch ?? 'detached'})`);
     try {
@@ -583,6 +620,7 @@ export class SessionManager {
         e.host.kill();
       }
       if (e.detectTimer) clearTimeout(e.detectTimer);
+      if (e.tokenTimer) clearTimeout(e.tokenTimer);
       e.host?.dispose();
       this.sessions.delete(id);
       this.store.deleteSession(id);
@@ -939,6 +977,8 @@ export class SessionManager {
           break;
         case 'UserPromptSubmit':
           this.setStatus(e, 'running');
+          // CC Hub 以外から始めたセッションは最初のプロンプトを「何の作業か」にする
+          if (!info.task && !fromSubagent) info.task = taskText(b.prompt);
           break;
         case 'PreToolUse':
           if (info.status !== 'awaiting_approval') this.setStatus(e, 'running');
@@ -1005,6 +1045,7 @@ export class SessionManager {
       }
     }
     this.touch(e);
+    this.scheduleTokens(e);
   }
 
   /**
@@ -1019,7 +1060,10 @@ export class SessionManager {
     if (sid === cur) return;
     if (e.claudeId) this.aliases.delete(e.claudeId);
     e.claudeId = sid === e.info.id ? null : sid;
-    if (e.claudeId) this.aliases.set(e.claudeId, e.info.id);
+    if (e.claudeId) {
+      this.aliases.set(e.claudeId, e.info.id);
+      e.claudeIds.add(e.claudeId);
+    }
     console.log(`[session] claude の session_id が変わりました (${String(b.source || '?')}): ${e.info.name} ${cur} → ${sid}`);
   }
 
@@ -1039,7 +1083,65 @@ export class SessionManager {
     const cost = Number(data.cost?.total_cost_usd);
     if (data.cost?.total_cost_usd != null && Number.isFinite(cost)) info.costUsd = cost;
     if (typeof data.model?.display_name === 'string') info.model = data.model.display_name;
+    // トークンの累計(メイン会話)。サブエージェントとキャッシュ分は transcript から足す
+    const ti = Number(data.context_window?.total_input_tokens);
+    const to = Number(data.context_window?.total_output_tokens);
+    if (data.context_window?.total_input_tokens != null && Number.isFinite(ti) && Number.isFinite(to)) {
+      e.slTokens = { input: ti, output: to };
+    }
     if (JSON.stringify([info.status, info.contextPct, info.costUsd, info.model]) !== before) this.touch(e);
+    this.scheduleTokens(e);
+  }
+
+  // ================================================================ トークン使用量
+  private tokensJson(e: Entry): string | null {
+    return e.info.tokens ? JSON.stringify({ tokens: e.info.tokens, sl: e.slTokens }) : null;
+  }
+
+  /** トークン使用量の更新を予約する(セッションごとに最短 2 秒間隔) */
+  private scheduleTokens(e: Entry): void {
+    if (e.tokenTimer || this.shuttingDown) return;
+    const wait = Math.max(0, e.tokenLastAt + TOKEN_INTERVAL_MS - Date.now());
+    e.tokenTimer = setTimeout(() => {
+      e.tokenTimer = null;
+      void this.flushTokens(e);
+    }, wait);
+    e.tokenTimer.unref?.();
+  }
+
+  private async flushTokens(e: Entry): Promise<void> {
+    if (e.tokenRunning) {
+      this.scheduleTokens(e);
+      return;
+    }
+    e.tokenRunning = true;
+    e.tokenLastAt = Date.now();
+    try {
+      if (!e.tail) e.tail = new TranscriptTail();
+      await e.tail.poll([...e.claudeIds]);
+      if (this.sessions.get(e.info.id) !== e) return; // 削除済み
+      // statusLine も transcript も無いうちは何もしない(null のまま)
+      if (!e.slTokens && e.tail.tally.size === 0) return;
+      const next = combineTokens(e.slTokens, e.tail.tally);
+      const cur = e.info.tokens;
+      if (
+        !cur ||
+        cur.input !== next.input ||
+        cur.output !== next.output ||
+        cur.cacheRead !== next.cacheRead ||
+        cur.cacheCreation !== next.cacheCreation
+      ) {
+        e.info.tokens = next;
+        this.touch(e);
+      }
+    } catch (err) {
+      console.warn(`[session] トークン集計に失敗: ${e.info.id} ${(err as Error).message}`);
+    } finally {
+      e.tokenRunning = false;
+      e.tokenLastAt = Date.now();
+    }
+    // 大きな transcript の読み残し
+    if (e.tail?.pending) this.scheduleTokens(e);
   }
 
   // ================================================================ ターミナル購読

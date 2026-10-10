@@ -298,6 +298,7 @@ export class RepoManager {
       mode: req.mode === 'commander' ? 'commander' : 'plain',
       repoId: repo.id,
       cwd: repo.baseDir,
+      task: req.instruction,
     });
     void this.prepare(info.id, repo, req, userSlug, !name);
     return info;
@@ -338,6 +339,7 @@ export class RepoManager {
       mode: o.mode === 'commander' ? 'commander' : 'plain',
       repoId: repo.id,
       cwd: repo.baseDir,
+      task: o.instruction,
     });
     void this.preparePr(info.id, repo, o);
     return info;

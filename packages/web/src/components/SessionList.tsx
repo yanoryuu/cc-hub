@@ -5,6 +5,7 @@ import { api } from '../api';
 import { SORT_LABEL, type SortMode, groupSessions, isFinished, useHub } from '../store';
 import { STATUS_ICON, STATUS_LABEL, projectLabel } from '../util';
 import { needsRelease, useSessionWorktree } from '../repo';
+import { fmtTokens, projectKey } from '../project';
 import { CtxMeter, WhereTag, toolText } from './common';
 
 function SessionRow({
@@ -54,6 +55,14 @@ function SessionRow({
       </span>
       <span className="srow-right">
         <CtxMeter pct={s.contextPct} />
+        {s.tokens && (
+          <span
+            className="srow-tok"
+            title={`トークン: 入力 ${s.tokens.input.toLocaleString('ja-JP')} / 出力 ${s.tokens.output.toLocaleString('ja-JP')}`}
+          >
+            {fmtTokens(s.tokens.input + s.tokens.output)} tok
+          </span>
+        )}
         {index < 9 && (
           <kbd className="srow-key" title={`Ctrl+${index + 1} で開く`}>
             Ctrl+{index + 1}
@@ -106,6 +115,9 @@ export function SessionList({
   const worktrees = useHub((s) => s.worktrees);
   const selectedId = useHub((s) => s.selectedId);
   const opts = useHub((s) => s.sortOpts);
+  const openProject = useHub((s) => s.openProject);
+  // いま開いている管理画面のグループを強調する
+  const activeProject = useHub((s) => (s.deskView === 'project' || s.mobileProject ? projectKey(s.project) : ''));
   const [showDone, setShowDone] = useState(false);
   const [clearing, setClearing] = useState(false);
   const all = Object.values(sessions);
@@ -136,7 +148,12 @@ export function SessionList({
         g.sessions.length === 0 ? null : (
           <div className="sgroup" key={g.key}>
             {g.key !== 'all' && (
-              <div className="sgroup-title" title={g.sub}>
+              <button
+                className={`sgroup-title sgroup-link ${activeProject && activeProject === projectKey(g) ? 'on' : ''}`}
+                title={`${g.sub}\nクリックで管理画面を開く`}
+                aria-label={`${g.repoId ? g.label : projectLabel(g.cwd ?? '')} の管理画面を開く(${g.sessions.length} セッション)`}
+                onClick={() => openProject(g.repoId ? { repoId: g.repoId } : { cwd: g.cwd })}
+              >
                 {g.repoId ? (
                   <>
                     <span className="sgroup-repo-ico" aria-hidden="true">
@@ -148,7 +165,11 @@ export function SessionList({
                   <span className="sgroup-label">{projectLabel(g.cwd ?? '')}</span>
                 )}
                 <span className="sgroup-count">{g.sessions.length}</span>
-              </div>
+                <span className="spacer" />
+                <span className="sgroup-go" aria-hidden="true">
+                  管理画面 ›
+                </span>
+              </button>
             )}
             {g.sessions.map((s) => {
               const i = idx++;

@@ -18,6 +18,7 @@ import { SkillsView } from './Skills';
 import { McpView } from './Mcp';
 import { PowerShellButton, TakeoverButton } from './Handoff';
 import { useScopeCwd } from '../ext';
+import { ProjectScreen } from './Project';
 
 function ApprovalDrawer() {
   const open = useHub((s) => s.approvalDrawer);
@@ -160,7 +161,7 @@ export function DesktopApp() {
   }, []);
 
   // セッション以外(リポジトリ / PR / スキル / MCP)の表示中は右パネルを畳んで中央を広げる
-  const wide = view === 'repos' || view === 'prs' || view === 'skills' || view === 'mcp';
+  const wide = view === 'repos' || view === 'prs' || view === 'skills' || view === 'mcp' || view === 'project';
 
   return (
     <div className="desk">
@@ -179,6 +180,8 @@ export function DesktopApp() {
         <main className="center">
           {view === 'game' ? (
             <GameView />
+          ) : view === 'project' ? (
+            <ProjectScreen />
           ) : view === 'skills' ? (
             <div className="repo-scroll">
               <div className="repo-page ext-page">

@@ -19,6 +19,8 @@ export interface RunOptions {
   logFile?: string;
   /** 追加の環境変数 */
   env?: Record<string, string>;
+  /** 標準入力に渡す文字列(git commit -F - 用)。省略時は stdin を閉じる */
+  input?: string;
 }
 
 /** claude / git / インストールに渡す環境変数。CLAUDE* と CLAUDECODE は取り除く(検証 X2) */
@@ -69,13 +71,19 @@ export function run(cmd: string, args: string[], o: RunOptions = {}): Promise<Ru
         env: cleanEnv(o.env),
         windowsHide: true,
         shell: !!o.shell,
-        stdio: ['ignore', 'pipe', 'pipe'],
+        stdio: [o.input != null ? 'pipe' : 'ignore', 'pipe', 'pipe'],
       });
     } catch (e) {
       finish(-1, String((e as Error).message));
       return;
     }
     const pid = child.pid;
+    if (o.input != null && child.stdin) {
+      child.stdin.on('error', () => {
+        /* 先に終了した場合など。結果は code で判定する */
+      });
+      child.stdin.end(o.input, 'utf8');
+    }
     if (o.timeout) {
       timer = setTimeout(() => {
         err += `\n[timeout ${o.timeout}ms]`;

@@ -33,7 +33,10 @@ export function SidebarRepos() {
   const deskView = useHub((s) => s.deskView);
   const route = useHub((s) => s.repoRoute);
   const openRepos = useHub((s) => s.openRepos);
+  const openProject = useHub((s) => s.openProject);
+  const project = useHub((s) => s.project);
   const activeId = deskView === 'repos' && route.page === 'repo' ? route.id : null;
+  const projectId = deskView === 'project' ? project?.repoId ?? null : null;
   return (
     <section className="side-repos" aria-label="リポジトリ">
       <div className="side-repos-head">
@@ -59,18 +62,28 @@ export function SidebarRepos() {
           </button>
         ) : (
           repos.map((r) => (
-            <button
-              key={r.id}
-              className={`side-repo ${activeId === r.id ? 'active' : ''} ${r.error ? 'has-error' : ''}`}
-              onClick={() => openRepos({ page: 'repo', id: r.id })}
-              title={r.error ?? r.id}
-            >
-              <span className="side-repo-name">
-                {r.error && <span className="warn-ico" aria-label="警告">!</span>}
-                {r.name}
-              </span>
-              <PoolChips repo={r} worktrees={wtByRepo[r.id] ?? []} />
-            </button>
+            <div key={r.id} className={`side-repo-row ${activeId === r.id || projectId === r.id ? 'active' : ''}`}>
+              <button
+                className={`side-repo ${activeId === r.id ? 'active' : ''} ${r.error ? 'has-error' : ''}`}
+                onClick={() => openRepos({ page: 'repo', id: r.id })}
+                title={r.error ?? `${r.id}(設定と worktree プール)`}
+              >
+                <span className="side-repo-name">
+                  {r.error && <span className="warn-ico" aria-label="警告">!</span>}
+                  {r.name}
+                </span>
+                <PoolChips repo={r} worktrees={wtByRepo[r.id] ?? []} />
+              </button>
+              <button
+                className={`side-repo-dash ${projectId === r.id ? 'on' : ''}`}
+                onClick={() => openProject({ repoId: r.id })}
+                aria-label={`${r.name} の管理画面`}
+                aria-current={projectId === r.id ? 'page' : undefined}
+                title="管理画面(セッション・作業ツリー・アーティファクト・PR・Git・トークン)"
+              >
+                管理画面
+              </button>
+            </div>
           ))
         )}
       </div>
@@ -256,10 +269,12 @@ export function RegisterRepoForm({ mobile = false }: { mobile?: boolean }) {
 
 // ---------------------------------------------------------------- リポジトリ詳細
 
-export function RepoPage({ id, mobile = false }: { id: string; mobile?: boolean }) {
+/** embedded = 管理画面の「設定」タブとして埋め込む(戻るボタンと「管理画面」ボタンを出さない) */
+export function RepoPage({ id, mobile = false, embedded = false }: { id: string; mobile?: boolean; embedded?: boolean }) {
   const repo = useHub((s) => s.repos[id]);
   const wtByRepo = useWorktreesByRepo();
   const openRepos = useHub((s) => s.openRepos);
+  const openProject = useHub((s) => s.openProject);
   const setNew = useHub((s) => s.setNewSessionOpen);
   const [refillMsg, setRefillMsg] = useState<string | null>(null);
   const [refilling, setRefilling] = useState(false);
@@ -296,22 +311,29 @@ export function RepoPage({ id, mobile = false }: { id: string; mobile?: boolean 
   return (
     <div className="repo-page">
       <div className="rp-head wrap">
-        {!mobile && (
+        {!mobile && !embedded && (
           <button className="btn ghost" onClick={() => openRepos({ page: 'list' })}>
             ‹ リポジトリ
           </button>
         )}
         <h2 className="rp-title">
-          {repo.name}
+          {embedded ? 'リポジトリの設定' : repo.name}
           <span className="rp-owner">{repo.owner}</span>
         </h2>
         <RepoStatusBadge status={repo.status} />
         <span className="kind-tag">{KIND_LABEL[repo.kind]}</span>
         <span className="spacer" />
         <div className="rp-actions">
-          <button className="btn primary" disabled={repo.status !== 'ready'} onClick={() => setNew(true, repo.id)}>
-            + セッション
-          </button>
+          {!embedded && (
+            <button className="btn" onClick={() => openProject({ repoId: repo.id })} title="セッション・作業ツリー・PR・Git・トークンをまとめて見る">
+              管理画面
+            </button>
+          )}
+          {!embedded && (
+            <button className="btn primary" disabled={repo.status !== 'ready'} onClick={() => setNew(true, repo.id)}>
+              + セッション
+            </button>
+          )}
           <button className="btn" disabled={refilling || repo.status !== 'ready'} onClick={() => void refill()}>
             {refilling ? '補充中…' : '補充'}
           </button>

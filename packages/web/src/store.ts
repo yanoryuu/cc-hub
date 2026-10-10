@@ -9,7 +9,7 @@ export type MobileTab = 'sessions' | 'approvals' | 'prs' | 'repos' | 'more';
 /** モバイル「その他」タブの中身 */
 export type MoreView = 'menu' | 'skills' | 'mcp' | 'game';
 /** デスクトップ中央の表示 */
-export type DeskView = 'session' | 'game' | 'repos' | 'prs' | 'skills' | 'mcp';
+export type DeskView = 'session' | 'game' | 'repos' | 'prs' | 'skills' | 'mcp' | 'project';
 /** デスクトップ右パネルのタブ */
 export type RightTab = 'details' | 'skills' | 'mcp';
 /** セッション一覧の並び順 */
@@ -29,6 +29,14 @@ export const SORT_LABEL: Record<SortMode, string> = {
 export type RepoRoute = { page: 'list' } | { page: 'register' } | { page: 'repo'; id: string };
 /** PR 画面の表示(一覧 / 詳細)。id = PrInfo.id("<repoId>#<number>") */
 export type PrRoute = { page: 'list' } | { page: 'pr'; id: string };
+/** フォルダ(プロジェクト)の管理画面。repoId(プールのリポジトリ)か cwd(フォルダ)のどちらか */
+export interface ProjectRoute {
+  kind: 'project';
+  repoId: string | null;
+  cwd: string | null;
+}
+/** 管理画面のタブ */
+export type ProjectTab = 'overview' | 'sessions' | 'worktrees' | 'artifacts' | 'prs' | 'git' | 'tokens' | 'settings';
 
 export interface Toast {
   id: number;
@@ -53,6 +61,11 @@ interface Store {
   deskView: DeskView;
   repoRoute: RepoRoute;
   prRoute: PrRoute;
+  /** 開いている管理画面(なければ null) */
+  project: ProjectRoute | null;
+  projectTab: ProjectTab;
+  /** モバイルで管理画面を全画面表示中か */
+  mobileProject: boolean;
   mobileTab: MobileTab;
   moreView: MoreView;
   rightTab: RightTab;
@@ -63,6 +76,8 @@ interface Store {
   newSessionOpen: boolean;
   /** 新規セッションダイアログで最初に選んでおくリポジトリ */
   newSessionRepo: string | null;
+  /** 新規セッションダイアログの「フォルダを指定」に最初から入れておくパス */
+  newSessionCwd: string | null;
   toasts: Toast[];
 
   setAuth(a: AuthState): void;
@@ -87,6 +102,11 @@ interface Store {
   openRepos(r: RepoRoute): void;
   /** PR 画面を開く(id を渡すと詳細) */
   openPr(id?: string | null): void;
+  /** フォルダ(プロジェクト)の管理画面を開く(デスクトップ: 中央 / モバイル: 全画面) */
+  openProject(key: { repoId?: string | null; cwd?: string | null }, tab?: ProjectTab): void;
+  /** モバイルの管理画面を閉じる */
+  closeProject(): void;
+  setProjectTab(t: ProjectTab): void;
   setMobileTab(t: MobileTab): void;
   /** モバイル「その他」の中身を開く(タブも切り替える) */
   openMore(v: MoreView): void;
@@ -94,7 +114,7 @@ interface Store {
   setSortOpts(o: Partial<SortOptions>): void;
   setMobileDetail(v: boolean): void;
   setApprovalDrawer(v: boolean): void;
-  setNewSessionOpen(v: boolean, repoId?: string | null): void;
+  setNewSessionOpen(v: boolean, repoId?: string | null, cwd?: string | null): void;
   pushToast(e: NotifyEvent): void;
   dismissToast(id: number): void;
 }
@@ -117,6 +137,9 @@ export const useHub = create<Store>((set, get) => ({
   deskView: 'session',
   repoRoute: { page: 'list' },
   prRoute: { page: 'list' },
+  project: null,
+  projectTab: 'overview',
+  mobileProject: false,
   mobileTab: 'sessions',
   moreView: 'menu',
   rightTab: readRightTab(),
@@ -125,6 +148,7 @@ export const useHub = create<Store>((set, get) => ({
   approvalDrawer: false,
   newSessionOpen: false,
   newSessionRepo: null,
+  newSessionCwd: null,
   toasts: [],
 
   setAuth: (auth) => set({ auth }),
@@ -207,12 +231,24 @@ export const useHub = create<Store>((set, get) => ({
     }),
   setUsage: (usage) => set({ usage }),
   select: (selectedId) => set({ selectedId }),
-  open: (id) => set({ selectedId: id, deskView: 'session', mobileTab: 'sessions', mobileDetail: true }),
+  open: (id) => set({ selectedId: id, deskView: 'session', mobileTab: 'sessions', mobileDetail: true, mobileProject: false }),
   setDeskView: (deskView) => set({ deskView }),
-  openRepos: (repoRoute) => set({ repoRoute, deskView: 'repos', mobileTab: 'repos' }),
-  openPr: (id) => set({ prRoute: id ? { page: 'pr', id } : { page: 'list' }, deskView: 'prs', mobileTab: 'prs' }),
-  setMobileTab: (mobileTab) => set({ mobileTab }),
-  openMore: (moreView) => set({ moreView, mobileTab: 'more' }),
+  openRepos: (repoRoute) => set({ repoRoute, deskView: 'repos', mobileTab: 'repos', mobileProject: false }),
+  openPr: (id) =>
+    set({ prRoute: id ? { page: 'pr', id } : { page: 'list' }, deskView: 'prs', mobileTab: 'prs', mobileProject: false }),
+  openProject: (key, tab) =>
+    set((st) => {
+      const project: ProjectRoute = { kind: 'project', repoId: key.repoId ?? null, cwd: key.repoId ? null : key.cwd ?? null };
+      const same = !!st.project && st.project.repoId === project.repoId && st.project.cwd === project.cwd;
+      // 別のプロジェクトを開いたら概要から。設定タブはリポジトリのときだけ
+      let projectTab: ProjectTab = tab ?? (same ? st.projectTab : 'overview');
+      if (projectTab === 'settings' && !project.repoId) projectTab = 'overview';
+      return { project, projectTab, deskView: 'project', mobileProject: true };
+    }),
+  closeProject: () => set({ mobileProject: false }),
+  setProjectTab: (projectTab) => set({ projectTab }),
+  setMobileTab: (mobileTab) => set({ mobileTab, mobileProject: false }),
+  openMore: (moreView) => set({ moreView, mobileTab: 'more', mobileProject: false }),
   setRightTab: (rightTab) => {
     writeLocal('cchub_right_tab', rightTab);
     set({ rightTab });
@@ -225,7 +261,8 @@ export const useHub = create<Store>((set, get) => ({
     }),
   setMobileDetail: (mobileDetail) => set({ mobileDetail }),
   setApprovalDrawer: (approvalDrawer) => set({ approvalDrawer }),
-  setNewSessionOpen: (newSessionOpen, repoId = null) => set({ newSessionOpen, newSessionRepo: repoId }),
+  setNewSessionOpen: (newSessionOpen, repoId = null, cwd = null) =>
+    set({ newSessionOpen, newSessionRepo: repoId, newSessionCwd: repoId ? null : cwd }),
   pushToast: (event) => {
     const st = get();
     // いま見ているセッションの通知は画面に出ているので出さない(スマホでは承認バナーを隠してしまうため)

@@ -8,6 +8,7 @@ import type { SessionManager } from '../session/manager';
 import type { RepoManager } from '../repo/manager';
 import type { GitHubWatcher } from '../github/watcher';
 import type { PrActions } from '../github/actions';
+import type { ProjectService } from '../project/service';
 import { cleanupBranches, listBranches } from '../repo/branches';
 import { generateSlug } from '../repo/slug';
 import { listProjects, scanSessions } from '../history';
@@ -66,6 +67,7 @@ export interface ServerDeps {
   repos: RepoManager;
   github: GitHubWatcher;
   prs: PrActions;
+  project: ProjectService;
   claudePath: string;
   getState: () => HubState;
   onIngestHook: (body: any, hubHeader: string | undefined) => void;
@@ -289,6 +291,47 @@ async function handle(d: ServerDeps, req: http.IncomingMessage, res: http.Server
       await d.repos.removeWorktree(id);
       return json(res, 200, { ok: true });
     }
+  }
+
+  // ------------------------------------------------ フォルダ(プロジェクト)ごとの管理画面
+  if (p === '/api/project' && method === 'GET') {
+    const project = await d.project.overview({ repoId: url.searchParams.get('repoId'), cwd: url.searchParams.get('cwd') });
+    return json(res, 200, { ok: true, project });
+  }
+
+  if (p === '/api/project/file' && method === 'GET') {
+    // テキスト(画像以外)は JSON {ok, path, size, mtime, binary, truncated, text}(512KB まで)。
+    // 画像はそのままのバイト列(SVG はスクリプトが動かないよう CSP を付ける)
+    const r = await d.project.file(url.searchParams.get('target'), url.searchParams.get('path'));
+    if (r.type === 'json') return json(res, 200, r.body);
+    const headers: Record<string, string> = {
+      'Content-Type': r.mime,
+      'Content-Length': String(r.data.length),
+      'Cache-Control': 'no-store',
+      'X-Content-Type-Options': 'nosniff',
+    };
+    if (r.svg) headers['Content-Security-Policy'] = "default-src 'none'; style-src 'unsafe-inline'; sandbox";
+    res.writeHead(200, headers);
+    res.end(r.data);
+    return;
+  }
+
+  if (p === '/api/project/diff' && method === 'GET') {
+    const staged = /^(1|true)$/i.test(url.searchParams.get('staged') || '');
+    const r = await d.project.diff(url.searchParams.get('target'), url.searchParams.get('path'), staged);
+    return json(res, 200, { ok: true, ...r });
+  }
+
+  if (p === '/api/git/stage' && method === 'POST') {
+    return json(res, 200, { ok: true, target: await d.project.stage(await readBody(req)) });
+  }
+
+  if (p === '/api/git/commit' && method === 'POST') {
+    return json(res, 200, { ok: true, commit: await d.project.commit(await readBody(req)) });
+  }
+
+  if (p === '/api/git/push' && method === 'POST') {
+    return json(res, 200, { ok: true, ...(await d.project.push(await readBody(req))) });
   }
 
   // ------------------------------------------------ 指示・PowerShell・スキル・MCP

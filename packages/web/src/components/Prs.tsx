@@ -154,7 +154,7 @@ export function SidebarPrs() {
 
 // ---------------------------------------------------------------- 一覧
 
-function PrRow({ pr, now }: { pr: PrInfo; now: number }) {
+export function PrRow({ pr, now }: { pr: PrInfo; now: number }) {
   const openPr = useHub((s) => s.openPr);
   const repoName = repoShort(pr.repoId);
   const go = () => openPr(pr.id);

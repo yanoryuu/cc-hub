@@ -16,6 +16,7 @@ import { RegisterRepoForm, RepoListPage, RepoPage } from './Repos';
 import { PrDetailPage, PrListPage, RefreshPrsButton } from './Prs';
 import { SessionGit } from './SessionGit';
 import { needsAttention, usePrGroups } from '../pr';
+import { ProjectScreen } from './Project';
 
 /** PR タブ: 一覧 → 詳細 */
 function PrMobileScreen() {
@@ -242,6 +243,7 @@ export function MobileApp() {
   const setTab = useHub((s) => s.setMobileTab);
   const openMore = useHub((s) => s.openMore);
   const detail = useHub((s) => s.mobileDetail);
+  const projectOpen = useHub((s) => s.mobileProject);
   const open = useHub((s) => s.open);
   const setNew = useHub((s) => s.setNewSessionOpen);
   const approvals = useApprovalSessions();
@@ -250,7 +252,10 @@ export function MobileApp() {
   const prBadge = prGroups.mine.filter(needsAttention).length + prGroups.review.length;
 
   let body: React.ReactNode;
-  if (tab === 'sessions' && detail) {
+  if (projectOpen) {
+    // 管理画面(全画面。戻るで元のタブへ)
+    body = <ProjectScreen mobile />;
+  } else if (tab === 'sessions' && detail) {
     body = <SessionDetailView />;
   } else if (tab === 'sessions') {
     body = (

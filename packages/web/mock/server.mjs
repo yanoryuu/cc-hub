@@ -7,6 +7,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { WebSocketServer } from 'ws';
+import { createProjectMock } from './project.mjs';
 
 const PORT = Number(process.env.MOCK_PORT || 7862);
 const PIN = '1234';
@@ -41,8 +42,14 @@ function mkSession(p) {
     worktreeId: null,
     branch: null,
     handedOff: false,
+    task: null,
+    tokens: null,
     ...p,
   };
+}
+/** トークン使用量(mock) */
+function mkTokens(input, output, cacheRead, cacheCreation) {
+  return { input, output, cacheRead, cacheCreation, updatedAt: Date.now() };
 }
 
 const sessions = {};
@@ -62,6 +69,8 @@ const s1 = mkSession({
   worktreeId: `${REPO_WEB}#wt-01`,
   contextPct: 48,
   costUsd: 1.23,
+  task: 'ログイン後に常にトップへ飛ばされる不具合を直して。?next= で元のページに戻すようにし、オープンリダイレクトにならないよう検証も入れて',
+  tokens: mkTokens(182_400, 21_350, 1_240_000, 96_000),
   approval: {
     type: 'options',
     question: 'Bash コマンドを実行しますか?\n  npm test -- --watch=false',
@@ -81,6 +90,8 @@ const s2 = mkSession({
   worktreeId: `${REPO_WEB}#wt-02`,
   contextPct: 72,
   costUsd: 3.87,
+  task: 'ShopService が肥大化しているので責務ごと(在庫・価格・カート)に分割して。既存のテストが通る状態を保つこと',
+  tokens: mkTokens(412_800, 58_900, 3_820_000, 214_000),
   currentTool: { name: 'Task', target: '並列で 3 エージェントを起動', since: now - 95_000 },
 });
 const s3 = mkSession({
@@ -91,6 +102,8 @@ const s3 = mkSession({
   mode: 'plain',
   contextPct: 91,
   costUsd: 0.42,
+  task: '設計書(docs/design.md)を最新の実装に合わせて更新して',
+  tokens: mkTokens(64_200, 9_800, 420_000, 31_000),
   model: 'claude-sonnet-4-5',
   permissionMode: 'default',
   currentTool: { name: 'Edit', target: 'docs/design.md', since: now - 12_000 },
@@ -109,6 +122,8 @@ const s4 = mkSession({
   worktreeId: `${REPO_WEB}#wt-03`,
   contextPct: 35,
   costUsd: 0.88,
+  task: 'ヘッダーのカートアイコンに商品数のバッジを表示して(0 件なら非表示)',
+  tokens: mkTokens(98_100, 12_400, 610_000, 44_000),
   createdAt: now - 90 * MIN,
   lastMessage: 'カートのバッジに件数を表示するようにしました。テストも追加済みです。',
 });
@@ -122,6 +137,8 @@ const s5 = mkSession({
   worktreeId: `${REPO_WEB}#wt-04`,
   contextPct: 22,
   costUsd: 0.61,
+  task: '商品一覧の上に検索ボックスを追加。入力から 300ms で絞り込み、該当なしのときは案内を出す',
+  tokens: mkTokens(71_500, 10_200, 380_000, 27_500),
   createdAt: now - 20 * MIN,
   lastMessage: '検索ボックスを追加しました。PR を作りますか?',
 });
@@ -137,6 +154,8 @@ const s6 = mkSession({
   worktreeId: `${REPO_WEB}#wt-08`,
   contextPct: 41,
   costUsd: 1.02,
+  task: '決済画面の入力チェック(カード番号・有効期限・郵便番号)を追加',
+  tokens: mkTokens(120_300, 15_600, 720_000, 51_000),
   createdAt: now - 50 * MIN,
   lastEventAt: now - 8 * MIN,
   lastMessage: '決済画面の入力チェックを追加しました。PowerShell 側で手動確認中です。',
@@ -762,6 +781,8 @@ const server = http.createServer(async (req, res) => {
   }
 
   if (p === '/api/state') return json(res, 200, fullState());
+  // ---------------- フォルダ(プロジェクト)ごとの管理画面
+  if (await project.handle(req, res, url)) return;
   if (p === '/api/projects')
     return json(res, 200, {
       ok: true,
@@ -879,6 +900,8 @@ const server = http.createServer(async (req, res) => {
       createdAt: Date.now(),
       contextPct: 0,
       costUsd: 0,
+      task: b.instruction ? String(b.instruction).slice(0, 300) : null,
+      tokens: mkTokens(0, 0, 0, 0),
     });
     sessions[s.id] = s;
     termBuf[s.id] = `${C.dim}(mock) 起動: ${b.mode} ${b.resume ? '--resume ' + b.resume : ''} ${b.instruction ?? ''}${C.reset}\r\n`;
@@ -1384,6 +1407,9 @@ setInterval(() => {
   }
 }, 2000);
 
+// 管理画面(/api/project, /api/git/*)と、トークン数の疑似増加
+const project = createProjectMock({ sessions, worktrees, repos, prs, upsertSession, upsertWt, json, readBody, REPO_WEB, mkTokens });
+
 server.listen(PORT, '127.0.0.1', () => {
   console.log(`CC Hub mock: http://127.0.0.1:${PORT}  (PIN: ${PIN})`);
 });
@@ -1423,6 +1449,8 @@ function startOnBranch(repo, branch, b) {
     repoId: repo.id,
     worktreeId: w.id,
     branch,
+    task: b.instruction ? String(b.instruction).slice(0, 300) : null,
+    tokens: mkTokens(0, 0, 0, 0),
   });
   sessions[s.id] = s;
   termBuf[s.id] = `${C.dim}(mock) ${w.name} に ${branch} を用意して起動: ${s.mode} ${b.instruction ?? ''}${C.reset}\r\n`;

@@ -70,6 +70,13 @@ add('warn-fg', 'warn-bg', 4.5, '警告ボックス');
 add('approve-fg', 'approve', 4.5, '許可ボタン');
 add('deny-fg', 'deny', 4.5, '拒否ボタン');
 add('danger-fg', 'danger-bg', 4.5, '危険ボタン');
+// 管理画面: 変更の種類バッジ / push 済みバッジ / トークンのグラフ(非テキスト)
+for (const c of ['diff-add', 'st-running', 'st-error', 'wt-warming', 'st-approval', 'muted', 'st-input']) {
+  add(c, `mix:${c}:0.14:panel`, 4.5, '変更の種類バッジ(管理画面)');
+}
+add('warn-fg', 'panel', 4.5, '未 push(管理画面)');
+add('dim', 'bg-term', 3, 'コードの行番号');
+for (const c of ['st-running', 'st-input', 'wt-warming']) add(c, 'bg', 3, 'トークンのグラフ(非テキスト)');
 add('border-input', 'bg', 3, '入力欄の枠(非テキスト)');
 add('border-input', 'panel', 3, '入力欄の枠(非テキスト)');
 

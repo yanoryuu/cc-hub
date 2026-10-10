@@ -34,9 +34,11 @@ function ModeSeg({ mode, setMode }: { mode: SessionMode; setMode: (m: SessionMod
 
 function Dialog({ onClose }: { onClose: () => void }) {
   const presetRepo = useHub((s) => s.newSessionRepo);
+  const presetCwd = useHub((s) => s.newSessionCwd);
   const repos = useRepoList();
   const readyRepos = repos.filter((r) => r.status === 'ready');
-  const [tab, setTab] = useState<Tab>(() => (presetRepo || readyRepos.length > 0 ? 'repo' : 'folder'));
+  // 管理画面の「+ セッション」(フォルダ)から開いたときは「フォルダを指定」をそのパスで
+  const [tab, setTab] = useState<Tab>(() => (presetCwd ? 'folder' : presetRepo || readyRepos.length > 0 ? 'repo' : 'folder'));
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
@@ -99,7 +101,7 @@ function Dialog({ onClose }: { onClose: () => void }) {
         {tab === 'repo' ? (
           <RepoTab preset={presetRepo} busy={busy} err={err} setErr={setErr} start={start} onClose={onClose} />
         ) : tab === 'folder' ? (
-          <FolderTab busy={busy} err={err} setErr={setErr} start={start} onClose={onClose} />
+          <FolderTab preset={presetCwd} busy={busy} err={err} setErr={setErr} start={start} onClose={onClose} />
         ) : (
           <HistoryTab busy={busy} err={err} start={start} />
         )}
@@ -320,9 +322,9 @@ function RepoTab({ preset, busy, err, setErr, start, onClose }: TabProps & { pre
 
 // ---------------------------------------------------------------- フォルダを指定
 
-function FolderTab({ busy, err, setErr, start, onClose }: TabProps) {
+function FolderTab({ preset, busy, err, setErr, start, onClose }: TabProps & { preset: string | null }) {
   const [projects, setProjects] = useState<ProjectEntry[] | null>(null);
-  const [cwd, setCwd] = useState('');
+  const [cwd, setCwd] = useState(preset ?? '');
   const [mode, setMode] = useState<SessionMode>('commander');
   const [name, setName] = useState('');
   const [instruction, setInstruction] = useState('');

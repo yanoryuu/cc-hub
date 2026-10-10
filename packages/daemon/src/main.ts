@@ -11,6 +11,7 @@ import { RepoManager } from './repo/manager';
 import { GitStatWatcher } from './repo/gitstat';
 import { GitHubWatcher } from './github/watcher';
 import { PrActions } from './github/actions';
+import { ProjectService } from './project/service';
 import { setGhPath } from './github/gh';
 import { createServer } from './api/server';
 import { WsHub } from './api/ws';
@@ -35,6 +36,7 @@ function main(): void {
     sessions: () => sessions.all(),
   });
   const prs = new PrActions(repos, sessions, github);
+  const project = new ProjectService({ sessions, repos, github, gitStat });
   const startedAt = Date.now();
 
   const getState = (): HubState => ({
@@ -53,6 +55,7 @@ function main(): void {
     repos,
     github,
     prs,
+    project,
     claudePath: config.claudePath,
     getState,
     onIngestHook: (body, hubHeader) => sessions.handleHook(body, hubHeader),

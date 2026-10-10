@@ -26,6 +26,10 @@ export interface SessionRow {
   claude_session_id: string | null;
   /** 1 = PowerShell に移したセッション(SessionInfo.handedOff)。列の追加前の行は null */
   handed_off?: number | null;
+  /** SessionInfo.task(列の追加前の行は null) */
+  task?: string | null;
+  /** トークン使用量 {tokens: SessionTokens, sl: statusLine の累計 | null} の JSON(列の追加前の行は null) */
+  tokens_json?: string | null;
 }
 
 /** worktree の内部情報(WorktreeInfo に含めないもの) */
@@ -78,6 +82,8 @@ export class Store {
     this.addColumn('sessions', 'branch', 'TEXT');
     this.addColumn('sessions', 'claude_session_id', 'TEXT');
     this.addColumn('sessions', 'handed_off', 'INTEGER');
+    this.addColumn('sessions', 'task', 'TEXT');
+    this.addColumn('sessions', 'tokens_json', 'TEXT');
   }
 
   private addColumn(table: string, col: string, type: string): void {
@@ -86,22 +92,23 @@ export class Store {
   }
 
   // ------------------------------------------------------------ sessions
-  saveSession(s: SessionInfo, endedAt: number | null, claudeSessionId: string | null = null): void {
+  saveSession(s: SessionInfo, endedAt: number | null, claudeSessionId: string | null = null, tokensJson: string | null = null): void {
     this.db
       .prepare(
         `INSERT INTO sessions (id, name, cwd, mode, status, managed, created_at, ended_at, last_event_at,
            context_pct, cost_usd, model, permission_mode, last_message, exit_code,
-           repo_id, worktree_id, branch, claude_session_id, handed_off)
+           repo_id, worktree_id, branch, claude_session_id, handed_off, task, tokens_json)
          VALUES (@id, @name, @cwd, @mode, @status, @managed, @created_at, @ended_at, @last_event_at,
            @context_pct, @cost_usd, @model, @permission_mode, @last_message, @exit_code,
-           @repo_id, @worktree_id, @branch, @claude_session_id, @handed_off)
+           @repo_id, @worktree_id, @branch, @claude_session_id, @handed_off, @task, @tokens_json)
          ON CONFLICT(id) DO UPDATE SET name=excluded.name, cwd=excluded.cwd, mode=excluded.mode,
            status=excluded.status, managed=excluded.managed, ended_at=excluded.ended_at,
            last_event_at=excluded.last_event_at, context_pct=excluded.context_pct,
            cost_usd=excluded.cost_usd, model=excluded.model, permission_mode=excluded.permission_mode,
            last_message=excluded.last_message, exit_code=excluded.exit_code,
            repo_id=excluded.repo_id, worktree_id=excluded.worktree_id, branch=excluded.branch,
-           claude_session_id=excluded.claude_session_id, handed_off=excluded.handed_off`,
+           claude_session_id=excluded.claude_session_id, handed_off=excluded.handed_off,
+           task=excluded.task, tokens_json=COALESCE(excluded.tokens_json, sessions.tokens_json)`,
       )
       .run({
         id: s.id,
@@ -124,6 +131,8 @@ export class Store {
         branch: s.branch,
         claude_session_id: claudeSessionId,
         handed_off: s.handedOff ? 1 : 0,
+        task: s.task ?? null,
+        tokens_json: tokensJson,
       });
   }
 
