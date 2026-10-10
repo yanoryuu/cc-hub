@@ -63,6 +63,20 @@ export interface SessionInfo {
    * 「CC Hub に戻す」(takeover)で再び CC Hub の PTY で再開できる
    */
   handedOff?: boolean;
+  /** 最初の指示(何の作業か)。CC Hub 起動時の instruction、無ければ最初の UserPromptSubmit。先頭 300 文字 */
+  task?: string | null;
+  /** トークン使用量(statusLine と transcript から。リアルタイムに更新) */
+  tokens?: SessionTokens | null;
+}
+
+export interface SessionTokens {
+  /** セッション累計(statusLine の context_window.total_input_tokens / total_output_tokens) */
+  input: number;
+  output: number;
+  /** transcript の usage から集計したキャッシュ分(取れない場合は 0) */
+  cacheRead: number;
+  cacheCreation: number;
+  updatedAt: number;
 }
 
 // ---------------------------------------------------------------- スキル / MCP
@@ -271,6 +285,88 @@ export interface PrDetail extends PrInfo {
 
 export type MergeMethod = 'squash' | 'merge' | 'rebase';
 
+// ---------------------------------------------------------------- フォルダ(プロジェクト)ごとの管理画面
+
+export type FileChangeStatus = 'A' | 'M' | 'D' | 'R' | 'U' | '?';
+
+export interface FileChange {
+  path: string; // 作業ツリーからの相対パス(/ 区切り)
+  status: FileChangeStatus;
+  additions: number;
+  deletions: number;
+  /** R のときの元のパス */
+  from?: string;
+}
+
+export interface CommitInfo {
+  sha: string;
+  subject: string;
+  author: string;
+  date: number;
+  /** origin に push 済みか */
+  pushed: boolean;
+}
+
+/** git 操作の対象(worktree / プールのベース / 普通のフォルダ) */
+export interface GitTarget {
+  id: string; // "wt:<worktreeId>" / "base:<repoId>" / "dir:<path>"
+  kind: 'worktree' | 'base' | 'dir';
+  label: string; // "wt-01" / ".base" / フォルダ名
+  path: string;
+  branch: string | null;
+  /** 比較対象(origin/<default>) */
+  baseRef: string | null;
+  upstream: string | null;
+  ahead: number;
+  behind: number;
+  unpushed: number;
+  staged: FileChange[];
+  unstaged: FileChange[];
+  untracked: string[];
+  /** baseRef..HEAD のコミット(新しい順、最大 50)。baseRef が無ければ直近 20 件 */
+  commits: CommitInfo[];
+  /** このターゲットを使っているセッション */
+  sessionId: string | null;
+  updatedAt: number;
+}
+
+/** セッションが作成・変更したファイル(baseRef からの差分 + 未コミット + 未追跡) */
+export interface Artifact {
+  targetId: string;
+  sessionId: string | null;
+  path: string;
+  status: FileChangeStatus;
+  /** 'image' | 'markdown' | 'code' | 'data' | 'other'(拡張子から) */
+  kind: 'image' | 'markdown' | 'code' | 'data' | 'other';
+  size: number;
+  mtime: number;
+  committed: boolean;
+}
+
+export interface ProjectTokens {
+  input: number;
+  output: number;
+  cacheRead: number;
+  cacheCreation: number;
+  costUsd: number;
+  /** セッションごと(sessionId → 使用量)。並びは使用量の多い順で UI 側が決める */
+  bySession: Record<string, { input: number; output: number; cacheRead: number; cacheCreation: number; costUsd: number }>;
+}
+
+export interface ProjectOverview {
+  key: { repoId: string | null; cwd: string | null };
+  name: string;
+  path: string;
+  /** このプロジェクトのセッション ID(終了済みも含む。新しい順) */
+  sessionIds: string[];
+  targets: GitTarget[];
+  artifacts: Artifact[];
+  /** このプロジェクトの PR(HubState.prs のキー) */
+  prIds: string[];
+  tokens: ProjectTokens;
+  updatedAt: number;
+}
+
 export interface RegisterRepoRequest {
   /** https / git@ / "owner/name" のいずれか */
   url: string;
@@ -414,6 +510,16 @@ export type ServerMessage =
 //                                                        (.git/info/exclude 済み)。path は cwd からの相対パス(指示に "@path" で入れる)
 //   GET  /api/skills?cwd=<path>                          → {ok, skills: SkillInfo[]}(ユーザー / プロジェクト / 有効なプラグイン)
 //   GET  /api/mcp?cwd=<path>&refresh=1                   → {ok, servers: McpServerInfo[], checkedAt}(claude mcp list。2 分キャッシュ)
+//   --- フォルダ(プロジェクト)ごとの管理画面 ---
+//   プロジェクトの指定(以下 <proj>): repoId=<o/r>(プールのリポジトリ: .base と全 worktree が対象)または cwd=<path>(フォルダ)
+//   GET  /api/project?<proj>                            → {ok, project: ProjectOverview}
+//   GET  /api/project/file?target=<GitTarget.id>&path=<相対パス>  ファイルの中身(テキストは 512KB まで、画像はそのまま)
+//   GET  /api/project/diff?target=&path=&staged=1       → {ok, diff: string}(unified diff。200KB まで)
+//   POST /api/git/stage   {target, paths: string[], unstage?: boolean}
+//   POST /api/git/commit  {target, message, paths?: string[]}   paths があれば先に stage。空コミットは 409
+//                          そのセッションが実行中なら {force: true} が無い限り 409(Claude の作業と衝突しないように)
+//   POST /api/git/push    {target}   git push -u origin HEAD(既定ブランチへの直接 push は {force: true} が無い限り 409)
+//   GitTarget.id: "wt:<worktreeId>" / "base:<repoId>" / "dir:<path>"
 //   GET  /game/windows | GET /game/stream?hwnd= | POST /game/input   (CC Remote から移植、仕様そのまま)
 // ingest(ingest トークン: ヘッダ X-CC-Hub-Token。tailscale 経由=X-Forwarded-For 付きは拒否):
 //   POST /ingest/hook        hooks の stdin JSON をそのまま
