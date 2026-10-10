@@ -384,6 +384,10 @@ export interface HubState {
   worktrees: Record<string, WorktreeInfo>;
   /** フェーズ 3: 自分の PR / レビュー依頼 / セッションに紐付いた PR。key = PrInfo.id */
   prs?: Record<string, PrInfo>;
+  /** アップロード先のサーバー(秘密情報は含まない) */
+  servers?: Record<string, ServerInfo>;
+  /** 直近のアップロード(申請中 / 実行中 / 最近 50 件) */
+  deploys?: Record<string, DeployJob>;
   usage: Usage | null;
   daemon: { version: string; startedAt: number; port: number };
 }
@@ -442,7 +446,109 @@ export interface DirEntry {
 
 // ---------------------------------------------------------------- 通知イベント
 
-export type NotifyKind = 'approval' | 'input' | 'done' | 'error' | 'pr';
+export type NotifyKind = 'approval' | 'input' | 'done' | 'error' | 'pr' | 'deploy';
+
+// ---------------------------------------------------------------- 通知の設定
+
+export type NotifyChannel = 'windows' | 'discord';
+
+/** 通知の種類(NotifyKind をさらに細かく分けたもの。設定画面のチェック項目) */
+export type NotifyTopic =
+  | 'approval' // 承認待ち
+  | 'input' // 入力待ち(ターンが終わった)
+  | 'error'
+  | 'pr_ci_failed'
+  | 'pr_review' // レビュー / コメント / 変更依頼 / 承認
+  | 'pr_merged'
+  | 'deploy_request' // Claude からのアップロード申請(承認待ち)
+  | 'deploy_done' // アップロード完了 / 失敗
+  | 'test';
+
+export interface DiscordTarget {
+  id: string;
+  name: string; // 例: 「全体」「TomsLands」
+  /** 設定画面では末尾 6 文字だけ見せる("…abc123")。保存時はフル URL を送る */
+  webhookMasked: string;
+  /** 対象のリポジトリ(空 = すべて) */
+  repoIds: string[];
+  topics: NotifyTopic[];
+  enabled: boolean;
+}
+
+export interface NotifySettings {
+  windows: { enabled: boolean; topics: NotifyTopic[]; /** アプリが前面でそのセッションを表示中なら出さない */ suppressWhenViewing: boolean };
+  discord: DiscordTarget[];
+  /** 同じセッション・同じ種類の通知の最短間隔(秒) */
+  throttleSeconds: number;
+}
+
+// ---------------------------------------------------------------- アップロード先のサーバー(レンタルサーバー FTP / SFTP)
+
+export type ServerProtocol = 'ftp' | 'ftps' | 'sftp';
+
+export interface ServerInfo {
+  id: string;
+  name: string; // 例: 「ポートフォリオ本番」
+  protocol: ServerProtocol;
+  host: string;
+  port: number;
+  username: string;
+  /** パスワード / 秘密鍵の有無だけ(中身は返さない) */
+  auth: { type: 'password' | 'key'; hasSecret: boolean; keyPath?: string };
+  /** アップロード先(例: /public_html/portfolio) */
+  remoteDir: string;
+  /** 公開 URL(例: https://example.com/portfolio/) */
+  publicUrl: string | null;
+  /** 既定のアップロード元(プロジェクトのフォルダ。ビルド出力なら dist など)。空 = 毎回指定 */
+  defaultLocalDir: string | null;
+  /** アップロード前に実行するビルドコマンド(例: npm run build)。空 = なし */
+  buildCommand: string | null;
+  /** 送らないもの(.git, node_modules, .cc-hub は常に除外) */
+  exclude: string[];
+  /** リモートにあってローカルに無いファイルを消す(既定 false) */
+  deleteExtra: boolean;
+  note: string;
+  lastDeployAt: number | null;
+  lastTest: { ok: boolean; message: string; at: number } | null;
+}
+
+export type DeployState =
+  | 'pending_approval' // Claude からの申請、ユーザーの承認待ち
+  | 'planning' // 差分計算中(ビルドを含む)
+  | 'ready' // 差分が出た(ユーザーの確認待ち)
+  | 'uploading'
+  | 'done'
+  | 'failed'
+  | 'rejected'
+  | 'cancelled';
+
+export interface DeployPlan {
+  upload: { path: string; size: number; reason: 'new' | 'changed' }[];
+  delete: string[];
+  unchanged: number;
+  totalBytes: number;
+}
+
+export interface DeployJob {
+  id: string;
+  serverId: string;
+  serverName: string;
+  localDir: string;
+  /** 申請者: 'user' か Claude のセッション */
+  requestedBy: { kind: 'user' } | { kind: 'claude'; sessionId: string | null; sessionName: string | null };
+  /** Claude が書いた申請理由 */
+  note: string | null;
+  state: DeployState;
+  buildCommand: string | null;
+  plan: DeployPlan | null;
+  progress: { done: number; total: number; bytes: number; current: string | null } | null;
+  /** ビルド / アップロードのログ末尾 */
+  log: string[];
+  error: string | null;
+  createdAt: number;
+  finishedAt: number | null;
+  url: string | null;
+}
 
 export interface NotifyEvent {
   kind: NotifyKind;
@@ -478,6 +584,9 @@ export type ServerMessage =
   | { t: 'worktree.remove'; id: string }
   | { t: 'pr.upsert'; pr: PrInfo }
   | { t: 'pr.remove'; id: string }
+  | { t: 'server.upsert'; server: ServerInfo }
+  | { t: 'server.remove'; id: string }
+  | { t: 'deploy.upsert'; deploy: DeployJob }
   | { t: 'term.snapshot'; sid: string; data: string; cols: number; rows: number }
   | { t: 'term.data'; sid: string; data: string }
   | { t: 'term.resize'; sid: string; cols: number; rows: number }
@@ -500,6 +609,34 @@ export type ServerMessage =
 //          terminal: 新しい PowerShell で claude --resume(handedOff のセッションとして一覧に載る)
 //   GET  /api/fs/dirs?path=<フォルダ>                    → {ok, path, parent, dirs: DirEntry[]}(path 省略時はドライブ一覧とホーム。隠しフォルダ・node_modules 等は除く)
 //   Electron(デスクトップ)では window.ccHub.pickFolder(): Promise<string | null> で Windows のフォルダ選択ダイアログを使う
+//   --- 通知 ---
+//   GET  /api/notify/settings                            → {ok, settings: NotifySettings}
+//   PUT  /api/notify/settings  NotifySettings(discord[].webhookUrl に新しい URL を入れたときだけ更新。空なら据え置き)
+//   POST /api/notify/test {channel: 'windows' | 'discord', targetId?}  テスト送信
+//   (Windows 通知: デスクトップアプリが接続中ならアプリが出す。未接続ならデーモンが自分で出す)
+//   --- アップロード先のサーバー ---
+//   POST /api/servers  {…ServerInfo の編集項目, secret?: string}  → {ok, server}   secret = パスワード or 秘密鍵のパスフレーズ。DPAPI で暗号化して保存
+//   PATCH /api/servers/:id {…, secret?} / DELETE /api/servers/:id
+//   POST /api/servers/:id/test                           接続してリモートフォルダを確認 → {ok, message, entries?: string[]}
+//   POST /api/deploys {serverId, localDir?, buildCommand?, dryRun?: boolean}  ユーザーからのアップロード → {ok, deploy}
+//          まず planning(ビルド → 差分計算)→ ready。ready で POST /api/deploys/:id/start すると送信(dryRun なら ready で止まる)
+//   POST /api/deploys/:id/approve   Claude の申請(pending_approval)を承認 → planning → ready → 自動で送信
+//   POST /api/deploys/:id/reject {reason?} / POST /api/deploys/:id/cancel / POST /api/deploys/:id/start
+//   --- Claude から使う MCP サーバー(CC Hub 自身)---
+//   POST /mcp(Streamable HTTP、Authorization: Bearer <mcp トークン>)。ツール:
+//     list_servers()                                       名前・URL・既定フォルダなど(秘密は含まない)
+//     request_deploy({server, localDir?, note})            承認キューに申請を出す → {deployId, state}
+//     get_deploy_status({deployId})                        状態・URL・エラー
+//     list_sessions() / get_session({id})                  CC Hub のセッション状況(読み取りのみ)
+//     get_project_instructions({cwd?})                     プロジェクトの共通の指示(cwd 省略時は呼び出し元セッションのプロジェクト)
+//     update_project_instructions({cwd?, content})         全文を置き換える → {lineCount, limit, warning?}(200 行超は保存した上で警告)
+//   ユーザースコープに `claude mcp add --transport http cc-hub http://127.0.0.1:<port>/mcp --header "Authorization: Bearer …"` で登録する
+//   --- プロジェクトの共通の指示 ---
+//   GET  /api/project/instructions?<proj>               → {ok, instructions: ProjectInstructions}
+//   PUT  /api/project/instructions?<proj> {content}     → {ok, instructions}(200 行超も保存するが warning を返す)
+//   POST /api/project/instructions/rewrite?<proj> {request}  → {ok, proposal: string, lineCount}
+//          Claude(claude -p)に「この依頼に沿って共通の指示を書き直して」と頼み、案を返す(保存はしない。UI で差分を見て保存)
+//   CC Hub がそのプロジェクトで起動するセッションには --append-system-prompt-file で自動的に渡す
 //   POST /api/sessions          StartSessionRequest      → {ok, session}
 //   POST /api/sessions/:id/input   {data, submit?}
 //   POST /api/sessions/:id/resize  {cols, rows}
@@ -572,3 +709,20 @@ export interface ApiErr {
 }
 
 export const DEFAULT_PORT = 7861; // 移行完了までは 7861。移行後に 7860 へ
+
+// ---------------------------------------------------------------- プロジェクトの共通の指示
+
+/** 共通の指示の推奨上限(行)。超えたら警告する */
+export const INSTRUCTIONS_LINE_LIMIT = 200;
+
+export interface ProjectInstructions {
+  key: { repoId: string | null; cwd: string | null };
+  content: string;
+  lineCount: number;
+  limit: number;
+  /** 上限を超えている / 近い(90% 以上)ときの注意文。問題なければ null */
+  warning: string | null;
+  updatedAt: number | null;
+  /** 最後に書き換えたのは誰か */
+  updatedBy: 'user' | 'claude' | null;
+}

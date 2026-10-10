@@ -2,7 +2,7 @@
 import { useHub } from '../store';
 import { resolveNotifyPr } from '../pr';
 
-const KIND_LABEL = { approval: '承認待ち', input: '入力待ち', done: '完了', error: 'エラー', pr: 'PR' } as const;
+const KIND_LABEL = { approval: '承認待ち', input: '入力待ち', done: '完了', error: 'エラー', pr: 'PR', deploy: 'アップロード' } as const;
 
 export function Toasts() {
   const toasts = useHub((s) => s.toasts);
