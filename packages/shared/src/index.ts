@@ -58,9 +58,40 @@ export interface SessionInfo {
   repoId: string | null;
   worktreeId: string | null;
   branch: string | null;
+  /**
+   * CC Hub から PowerShell に移したセッション(managed=false で動いているが worktree は保持したまま)。
+   * 「CC Hub に戻す」(takeover)で再び CC Hub の PTY で再開できる
+   */
+  handedOff?: boolean;
 }
 
-// ---------------------------------------------------------------- サブエージェント
+// ---------------------------------------------------------------- スキル / MCP
+
+export type SkillSource = 'user' | 'project' | 'plugin';
+
+export interface SkillInfo {
+  /** 呼び出し名(/<name>)。プラグインのスキルは "<plugin>:<name>" */
+  name: string;
+  description: string;
+  source: SkillSource;
+  /** 'skill' = skills/<name>/SKILL.md、'command' = commands/<name>.md */
+  kind: 'skill' | 'command';
+  plugin?: string;
+  path: string;
+}
+
+export type McpStatus = 'connected' | 'needs_auth' | 'failed' | 'unknown';
+
+export interface McpServerInfo {
+  name: string;
+  /** 接続先(URL またはコマンド) */
+  target: string;
+  status: McpStatus;
+  /** claude mcp list の状態表示そのまま(例: "Connected", "Needs authentication") */
+  statusText: string;
+  /** "claude.ai ..." で始まるものは claude.ai のコネクタ */
+  origin: 'claude.ai' | 'local';
+}
 
 export type AgentStatus = 'running' | 'done' | 'error';
 
@@ -374,6 +405,15 @@ export type ServerMessage =
 //   POST /api/prs/:repo/:n/close
 //   POST /api/sessions/:id/create-pr {draft?: boolean}  実行中のセッションに「push して gh pr create して」と指示する。
 //          PR ができると headRefName で自動的に紐付く
+//   --- 指示・PowerShell・スキル・MCP ---
+//   POST /api/sessions/:id/open-terminal                CC Hub の PTY を止め、新しい PowerShell ウィンドウで claude --resume して続きを開く
+//                                                        (handedOff=true / managed=false。worktree は保持。hooks は同じセッションに紐付く)
+//   POST /api/sessions/:id/takeover {force?: boolean}   外部 / PowerShell に移したセッションを CC Hub の PTY で --resume して引き取る。
+//                                                        相手が実行中(running / awaiting_approval)なら force なしは 409
+//   POST /api/sessions/:id/attach {name, mime, dataBase64}  → {ok, path}  画像などを <cwd>\.cc-hub\attachments\ に保存
+//                                                        (.git/info/exclude 済み)。path は cwd からの相対パス(指示に "@path" で入れる)
+//   GET  /api/skills?cwd=<path>                          → {ok, skills: SkillInfo[]}(ユーザー / プロジェクト / 有効なプラグイン)
+//   GET  /api/mcp?cwd=<path>&refresh=1                   → {ok, servers: McpServerInfo[], checkedAt}(claude mcp list。2 分キャッシュ)
 //   GET  /game/windows | GET /game/stream?hwnd= | POST /game/input   (CC Remote から移植、仕様そのまま)
 // ingest(ingest トークン: ヘッダ X-CC-Hub-Token。tailscale 経由=X-Forwarded-For 付きは拒否):
 //   POST /ingest/hook        hooks の stdin JSON をそのまま
