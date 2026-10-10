@@ -25,6 +25,7 @@ import { RepoPage } from './Repos';
 import { ArtifactsTab } from './ProjectArtifacts';
 import { GitTab } from './ProjectGit';
 import { TokenTotals, TokensTab } from './ProjectTokens';
+import { HistoryView } from './History';
 
 const TABS: { id: ProjectTab; label: string }[] = [
   { id: 'overview', label: '概要' },
@@ -34,6 +35,7 @@ const TABS: { id: ProjectTab; label: string }[] = [
   { id: 'prs', label: 'PR' },
   { id: 'git', label: 'Git' },
   { id: 'tokens', label: 'トークン' },
+  { id: 'history', label: '履歴' },
   { id: 'settings', label: '設定' },
 ];
 
@@ -149,7 +151,10 @@ function ProjectDashboard({ route, mobile }: { route: ProjectRoute; mobile: bool
   );
 
   let body: React.ReactNode;
-  if (tab === 'settings' && route.repoId) {
+  if (tab === 'history') {
+    // リポジトリはベースディレクトリ(worktree を含む)配下の会話
+    body = <HistoryView cwd={repo?.baseDir ?? route.cwd ?? path} mobile={mobile} embedded />;
+  } else if (tab === 'settings' && route.repoId) {
     body = <RepoPage id={route.repoId} mobile={mobile} embedded />;
   } else if (!data) {
     body = error ? (
@@ -193,8 +198,8 @@ function ProjectDashboard({ route, mobile }: { route: ProjectRoute; mobile: bool
     return (
       <div className="m-screen pj-mobile">
         <div className="m-head">
-          <button className="icon-btn back" onClick={close} aria-label="戻る">
-            ‹
+          <button className="btn ghost sm pj-back" onClick={close} aria-label="プロジェクト一覧へ戻る">
+            ← 一覧
           </button>
           <span className="m-title">
             {name}
@@ -219,6 +224,9 @@ function ProjectDashboard({ route, mobile }: { route: ProjectRoute; mobile: bool
   return (
     <div className="repo-scroll">
       <div className="pj-page">
+        <button className="btn ghost sm pj-back" onClick={close} title="プロジェクト一覧へ(Alt+1)">
+          ← プロジェクト一覧
+        </button>
         <div className="rp-head wrap pj-head">
           <span className="pj-ico" aria-hidden="true">
             {route.repoId ? '⑂' : '▤'}

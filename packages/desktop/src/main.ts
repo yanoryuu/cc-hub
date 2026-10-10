@@ -1,7 +1,7 @@
 // CC Hub デスクトップシェル(Electron)
 // デーモンを必要に応じて起動し、Web UI を表示する。終了してもデーモンは止めない。
 import {
-  app, BrowserWindow, Tray, Menu, Notification, globalShortcut, shell, session, nativeImage,
+  app, BrowserWindow, Tray, Menu, Notification, globalShortcut, shell, session, nativeImage, ipcMain, dialog,
 } from 'electron';
 import { spawn } from 'node:child_process';
 import * as fs from 'node:fs';
@@ -188,6 +188,20 @@ function onNotify(ev: NotifyEvent): void {
   n.show();
 }
 
+// ---- レンダラーからの呼び出し(preload の ccHub.* 経由) ----
+/** 公開するチャンネル(preload と合わせる) */
+const IPC_PICK_FOLDER = 'hub:pick-folder';
+
+function registerIpc(): void {
+  // フォルダ選択ダイアログ。自分のウィンドウ(デーモンの画面)からの呼び出しだけ受ける
+  ipcMain.handle(IPC_PICK_FOLDER, async (e): Promise<string | null> => {
+    if (!win || e.sender !== win.webContents) return null;
+    if (!e.senderFrame?.url.startsWith(`http://127.0.0.1:${port}`)) return null;
+    const r = await dialog.showOpenDialog(win, { properties: ['openDirectory'], title: 'フォルダを選択' });
+    return r.canceled || r.filePaths.length === 0 ? null : r.filePaths[0];
+  });
+}
+
 // ---- 起動 ----
 if (!app.requestSingleInstanceLock()) {
   app.quit();
@@ -195,6 +209,7 @@ if (!app.requestSingleInstanceLock()) {
   app.on('second-instance', showWindow);
   app.setAppUserModelId('CC Hub');
   app.whenReady().then(() => {
+    registerIpc();
     createWindow();
     createTray();
     globalShortcut.register('Control+Shift+Space', toggleWindow);

@@ -5,11 +5,23 @@ import { resolveNotifyPr } from './pr';
 import { readLocal, writeLocal } from './util';
 
 export type AuthState = 'checking' | 'need_pin' | 'ok';
-export type MobileTab = 'sessions' | 'approvals' | 'prs' | 'repos' | 'more';
+export type MobileTab = 'projects' | 'sessions' | 'approvals' | 'prs' | 'more';
+/** 上部ナビ(デスクトップの上部タブ / モバイルの下タブ)の大分類 */
+export type TopView = 'projects' | 'sessions' | 'history' | 'prs';
+export const TOP_VIEW_LABEL: Record<TopView, string> = { projects: 'プロジェクト', sessions: 'セッション', history: '履歴', prs: 'PR' };
 /** モバイル「その他」タブの中身 */
-export type MoreView = 'menu' | 'skills' | 'mcp' | 'game';
+export type MoreView = 'menu' | 'history' | 'skills' | 'mcp' | 'game';
 /** デスクトップ中央の表示 */
-export type DeskView = 'session' | 'game' | 'repos' | 'prs' | 'skills' | 'mcp' | 'project';
+export type DeskView = 'home' | 'history' | 'session' | 'game' | 'repos' | 'prs' | 'skills' | 'mcp' | 'project';
+
+/** 中央の表示 → 上部ナビの大分類(スキル / MCP / ゲームはどれにも属さないので null) */
+export function topOf(v: DeskView): TopView | null {
+  if (v === 'home' || v === 'project' || v === 'repos') return 'projects';
+  if (v === 'prs') return 'prs';
+  if (v === 'history') return 'history';
+  if (v === 'session') return 'sessions';
+  return null;
+}
 /** デスクトップ右パネルのタブ */
 export type RightTab = 'details' | 'skills' | 'mcp';
 /** セッション一覧の並び順 */
@@ -36,7 +48,7 @@ export interface ProjectRoute {
   cwd: string | null;
 }
 /** 管理画面のタブ */
-export type ProjectTab = 'overview' | 'sessions' | 'worktrees' | 'artifacts' | 'prs' | 'git' | 'tokens' | 'settings';
+export type ProjectTab = 'overview' | 'sessions' | 'worktrees' | 'artifacts' | 'prs' | 'git' | 'tokens' | 'history' | 'settings';
 
 export interface Toast {
   id: number;
@@ -58,6 +70,8 @@ interface Store {
   loaded: boolean;
 
   selectedId: string | null;
+  /** 上部ナビで選ばれている大分類(最後の表示を localStorage に保存) */
+  topView: TopView;
   deskView: DeskView;
   repoRoute: RepoRoute;
   prRoute: PrRoute;
@@ -78,6 +92,8 @@ interface Store {
   newSessionRepo: string | null;
   /** 新規セッションダイアログの「フォルダを指定」に最初から入れておくパス */
   newSessionCwd: string | null;
+  /** 「GitHub からクローンして追加」のダイアログ */
+  cloneOpen: boolean;
   toasts: Toast[];
 
   setAuth(a: AuthState): void;
@@ -98,6 +114,9 @@ interface Store {
   /** セッションを開く(モバイルでは詳細画面へ遷移、デスクトップではセッション表示へ) */
   open(id: string): void;
   setDeskView(v: DeskView): void;
+  /** 上部ナビの切り替え(プロジェクト = ホーム / セッション / PR 一覧) */
+  setTopView(t: TopView): void;
+  setCloneOpen(v: boolean): void;
   /** リポジトリ画面を開く(デスクトップ / モバイル共通) */
   openRepos(r: RepoRoute): void;
   /** PR 画面を開く(id を渡すと詳細) */
@@ -121,6 +140,15 @@ interface Store {
 
 let toastSeq = 1;
 
+const initialTop = readTopView();
+const MOBILE_OF_TOP: Record<TopView, MobileTab> = { projects: 'projects', sessions: 'sessions', history: 'more', prs: 'prs' };
+const DESK_OF_TOP: Record<TopView, DeskView> = { projects: 'home', sessions: 'session', history: 'history', prs: 'prs' };
+
+/** 中央の表示を変えるときの共通部分: 大分類も追従させる(スキル / MCP / ゲームは直前の大分類のまま) */
+function deskNav(deskView: DeskView, cur: TopView): { deskView: DeskView; topView: TopView } {
+  return { deskView, topView: topOf(deskView) ?? cur };
+}
+
 export const useHub = create<Store>((set, get) => ({
   auth: 'checking',
   connected: false,
@@ -134,14 +162,16 @@ export const useHub = create<Store>((set, get) => ({
   loaded: false,
 
   selectedId: null,
-  deskView: 'session',
+  // 起動時は前回の大分類(初回はプロジェクト一覧)。セッションを直接開かないので、古い外部セッションに飛ばない
+  topView: initialTop,
+  deskView: DESK_OF_TOP[initialTop],
   repoRoute: { page: 'list' },
   prRoute: { page: 'list' },
   project: null,
   projectTab: 'overview',
   mobileProject: false,
-  mobileTab: 'sessions',
-  moreView: 'menu',
+  mobileTab: MOBILE_OF_TOP[initialTop],
+  moreView: initialTop === 'history' ? 'history' : 'menu',
   rightTab: readRightTab(),
   sortOpts: readSortOpts(),
   mobileDetail: false,
@@ -149,6 +179,7 @@ export const useHub = create<Store>((set, get) => ({
   newSessionOpen: false,
   newSessionRepo: null,
   newSessionCwd: null,
+  cloneOpen: false,
   toasts: [],
 
   setAuth: (auth) => set({ auth }),
@@ -231,11 +262,43 @@ export const useHub = create<Store>((set, get) => ({
     }),
   setUsage: (usage) => set({ usage }),
   select: (selectedId) => set({ selectedId }),
-  open: (id) => set({ selectedId: id, deskView: 'session', mobileTab: 'sessions', mobileDetail: true, mobileProject: false }),
-  setDeskView: (deskView) => set({ deskView }),
-  openRepos: (repoRoute) => set({ repoRoute, deskView: 'repos', mobileTab: 'repos', mobileProject: false }),
+  open: (id) =>
+    set({ selectedId: id, deskView: 'session', topView: 'sessions', mobileTab: 'sessions', mobileDetail: true, mobileProject: false }),
+  setDeskView: (deskView) => set((st) => deskNav(deskView, st.topView)),
+  setTopView: (t) =>
+    set((st) => {
+      const out: Partial<Store> = { topView: t, deskView: DESK_OF_TOP[t], mobileTab: MOBILE_OF_TOP[t], mobileProject: false };
+      // PR 表示中にもう一度 PR を押したら一覧へ
+      if (t === 'prs' && st.deskView === 'prs') out.prRoute = { page: 'list' };
+      if (t === 'projects') out.repoRoute = { page: 'list' };
+      // モバイルの履歴は「その他」の中
+      if (t === 'history') out.moreView = 'history';
+      if (t === 'sessions' && (!st.selectedId || !st.sessions[st.selectedId])) {
+        out.selectedId = firstSessionId(st.sessions, st.repos, st.sortOpts);
+      }
+      return out;
+    }),
+  setCloneOpen: (cloneOpen) => set({ cloneOpen }),
+  // リポジトリ一覧はホーム(プロジェクト一覧)に統合した。登録フォームはダイアログで開く
+  openRepos: (repoRoute) =>
+    set((st) =>
+      repoRoute.page === 'register'
+        ? { cloneOpen: true }
+        : {
+            repoRoute,
+            ...deskNav(repoRoute.page === 'list' ? 'home' : 'repos', st.topView),
+            mobileTab: 'projects',
+            mobileProject: false,
+          },
+    ),
   openPr: (id) =>
-    set({ prRoute: id ? { page: 'pr', id } : { page: 'list' }, deskView: 'prs', mobileTab: 'prs', mobileProject: false }),
+    set({
+      prRoute: id ? { page: 'pr', id } : { page: 'list' },
+      deskView: 'prs',
+      topView: 'prs',
+      mobileTab: 'prs',
+      mobileProject: false,
+    }),
   openProject: (key, tab) =>
     set((st) => {
       const project: ProjectRoute = { kind: 'project', repoId: key.repoId ?? null, cwd: key.repoId ? null : key.cwd ?? null };
@@ -243,12 +306,27 @@ export const useHub = create<Store>((set, get) => ({
       // 別のプロジェクトを開いたら概要から。設定タブはリポジトリのときだけ
       let projectTab: ProjectTab = tab ?? (same ? st.projectTab : 'overview');
       if (projectTab === 'settings' && !project.repoId) projectTab = 'overview';
-      return { project, projectTab, deskView: 'project', mobileProject: true };
+      return { project, projectTab, deskView: 'project', topView: 'projects', mobileProject: true };
     }),
-  closeProject: () => set({ mobileProject: false }),
+  // 管理画面を閉じたらプロジェクト一覧へ(デスクトップ / モバイル共通)
+  closeProject: () =>
+    set((st) => ({
+      mobileProject: false,
+      mobileTab: 'projects',
+      repoRoute: { page: 'list' },
+      ...(st.deskView === 'project' ? deskNav('home', st.topView) : { topView: 'projects' as TopView }),
+    })),
   setProjectTab: (projectTab) => set({ projectTab }),
-  setMobileTab: (mobileTab) => set({ mobileTab, mobileProject: false }),
-  openMore: (moreView) => set({ moreView, mobileTab: 'more', mobileProject: false }),
+  setMobileTab: (mobileTab) =>
+    set((st) => ({
+      mobileTab,
+      mobileProject: false,
+      topView: mobileTab === 'projects' || mobileTab === 'sessions' || mobileTab === 'prs' ? mobileTab : st.topView,
+      // プロジェクトタブをもう一度押したら一覧(ホーム)へ
+      repoRoute: mobileTab === 'projects' && st.mobileTab === 'projects' ? { page: 'list' } : st.repoRoute,
+    })),
+  openMore: (moreView) =>
+    set((st) => ({ moreView, mobileTab: 'more', mobileProject: false, topView: moreView === 'history' ? 'history' : st.topView })),
   setRightTab: (rightTab) => {
     writeLocal('cchub_right_tab', rightTab);
     set({ rightTab });
@@ -312,6 +390,16 @@ function readSortOpts(): SortOptions {
     return def;
   }
 }
+
+function readTopView(): TopView {
+  const v = readLocal('cchub_top_view', 'projects');
+  return v === 'sessions' || v === 'prs' || v === 'history' ? v : 'projects';
+}
+
+// 最後に見ていた大分類を保存(次回の起動時に復元)
+useHub.subscribe((s, p) => {
+  if (s.topView !== p.topView) writeLocal('cchub_top_view', s.topView);
+});
 
 function readRightTab(): RightTab {
   const v = readLocal('cchub_right_tab', 'details');

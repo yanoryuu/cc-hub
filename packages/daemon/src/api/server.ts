@@ -11,7 +11,8 @@ import type { PrActions } from '../github/actions';
 import type { ProjectService } from '../project/service';
 import { cleanupBranches, listBranches } from '../repo/branches';
 import { generateSlug } from '../repo/slug';
-import { listProjects, scanSessions } from '../history';
+import { historyEntry, listProjects, queryHistory, readMessages } from '../history';
+import { listDirs } from '../fsdirs';
 import { handleGame } from '../game/capture';
 import { listSkills } from '../skills';
 import { listMcp } from '../mcp';
@@ -197,10 +198,47 @@ async function handle(d: ServerDeps, req: http.IncomingMessage, res: http.Server
 
   if (p === '/api/projects' && method === 'GET') return json(res, 200, { ok: true, projects: listProjects() });
 
+  // ------------------------------------------------ 会話履歴(~/.claude/projects)・フォルダ選択
   if (p === '/api/history' && method === 'GET') {
-    const limit = Math.max(1, Math.min(100, parseInt(url.searchParams.get('limit') || '', 10) || 30));
-    return json(res, 200, { ok: true, sessions: scanSessions(limit) });
+    const sp = url.searchParams;
+    const limit = Math.max(1, Math.min(200, parseInt(sp.get('limit') || '', 10) || 30));
+    const offset = Math.max(0, parseInt(sp.get('offset') || '', 10) || 0);
+    const t0 = Date.now();
+    const r = queryHistory({
+      limit,
+      offset,
+      q: sp.get('q'),
+      cwd: sp.get('cwd'),
+      includeTests: /^(1|true)$/i.test(sp.get('includeTests') || ''),
+      hubIdFor: (id) => d.sessions.hubIdFor(id),
+    });
+    const ms = Date.now() - t0;
+    if (ms > 300) console.log(`[history] 一覧 ${r.total} 件 ${ms}ms`);
+    return json(res, 200, { ok: true, ...r });
   }
+
+  const hm = /^\/api\/history\/([^/]+)(\/open)?$/.exec(p);
+  if (hm) {
+    const id = decodeURIComponent(hm[1]);
+    const hubIdFor = (cid: string) => d.sessions.hubIdFor(cid);
+    if (!hm[2] && method === 'GET') {
+      const entry = historyEntry(id, hubIdFor);
+      if (!entry) throw new HttpError(404, '会話が見つかりません');
+      return json(res, 200, { ok: true, entry, messages: readMessages(id, 200) });
+    }
+    if (hm[2] && method === 'POST') {
+      const body = await readBody(req);
+      const target = body.target === 'terminal' ? 'terminal' : body.target === 'hub' || body.target == null ? 'hub' : null;
+      if (!target) throw new HttpError(400, "target は 'hub' か 'terminal' です");
+      const entry = historyEntry(id, hubIdFor);
+      // transcript が無くても CC Hub 上のセッションなら開ける(/clear 直後など)
+      if (!entry && !d.sessions.hubIdFor(id)) throw new HttpError(404, '会話が見つかりません');
+      const session = await d.sessions.openHistory(id, target, { cwd: entry?.cwd ?? '', title: entry?.title ?? '' });
+      return json(res, 200, { ok: true, session });
+    }
+  }
+
+  if (p === '/api/fs/dirs' && method === 'GET') return json(res, 200, listDirs(url.searchParams.get('path')));
 
   if (p === '/api/sessions' && method === 'POST') {
     const body = (await readBody(req)) as StartSessionRequest;

@@ -8,6 +8,7 @@ import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { WebSocketServer } from 'ws';
 import { createProjectMock } from './project.mjs';
+import { createHistoryMock } from './history.mjs';
 
 const PORT = Number(process.env.MOCK_PORT || 7862);
 const PIN = '1234';
@@ -162,7 +163,37 @@ const s6 = mkSession({
   cols: 0,
   rows: 0,
 });
-for (const s of [s1, s2, s3, s4, s5, s6]) sessions[s.id] = s;
+// 何日も前に外部で起動されたまま止まっている古いセッション(起動時にここへ飛ばないことの確認用)
+const s7 = mkSession({
+  name: 'csv-script',
+  cwd: 'C:\\Users\\yanor\\old-tool',
+  managed: false,
+  status: 'idle',
+  mode: 'plain',
+  contextPct: 12,
+  costUsd: 0.08,
+  task: 'CSV を読み込んで集計する小さなスクリプト',
+  tokens: mkTokens(12_400, 2_100, 40_000, 6_000),
+  model: 'claude-sonnet-4-5',
+  createdAt: now - 4 * 24 * 60 * MIN,
+  lastEventAt: now - 3 * 24 * 60 * MIN,
+  lastMessage: '集計スクリプトを作成しました。',
+  cols: 0,
+  rows: 0,
+});
+// 未登録リポジトリの worktree で動くセッション(ホームでは legacy-admin フォルダにまとまる)
+const s8 = mkSession({
+  name: 'csv-export',
+  cwd: 'D:\\WorkTree\\legacy-admin\\wt-02',
+  status: 'running',
+  branch: 'fix/csv-export',
+  contextPct: 30,
+  costUsd: 0.4,
+  task: 'CSV エクスポートの文字化け(Shift_JIS)を直して',
+  tokens: mkTokens(54_000, 7_200, 210_000, 18_000),
+  currentTool: { name: 'Edit', target: 'src/export.ts', since: now - 30_000 },
+});
+for (const s of [s1, s2, s3, s4, s5, s6, s7, s8]) sessions[s.id] = s;
 
 // ---------------------------------------------------------------- リポジトリ / worktree プール
 const repos = {};
@@ -789,17 +820,16 @@ const server = http.createServer(async (req, res) => {
       projects: [
         { path: 'C:\\Users\\yanor\\cc-hub', lastUsed: now - 5 * MIN },
         { path: 'D:\\WorkTree\\TomsLands\\.base', lastUsed: now - 60 * MIN },
+        { path: 'D:\\WorkTree\\_test-p5\\wt-01', lastUsed: now - 90 * MIN }, // 検証用: ホームには出さない
+        { path: 'D:\\AITEST\\p5-web', lastUsed: now - 100 * MIN }, // 検証用: ホームには出さない
+        { path: 'C:\\Users\\yanor\\blog', lastUsed: now - 26 * 60 * MIN },
         { path: 'C:\\Users\\yanor\\cc-remote', lastUsed: now - 600 * MIN },
+        { path: 'C:\\Users\\yanor\\sandbox\\react-try', lastUsed: now - 5 * 24 * 60 * MIN },
+        { path: 'D:\\Unity\\Prototype2025', lastUsed: now - 9 * 24 * 60 * MIN },
       ],
     });
-  if (p === '/api/history')
-    return json(res, 200, {
-      ok: true,
-      sessions: [
-        { id: crypto.randomUUID(), cwd: 'C:\\Users\\yanor\\cc-hub', title: 'デーモンの WS プロトコルを実装', mtime: now - 20 * MIN },
-        { id: crypto.randomUUID(), cwd: 'D:\\WorkTree\\TomsLands\\wt-03', title: 'インベントリ UI の不具合修正', mtime: now - 300 * MIN },
-      ],
-    });
+  // ---------------- 履歴 / フォルダブラウザ
+  if (await history.handle(req, res, url)) return;
   // ---------------- フェーズ 2: リポジトリ / worktree
   if (p === '/api/slug' && req.method === 'POST') {
     const b = await readBody(req).catch(() => ({}));
@@ -1409,6 +1439,7 @@ setInterval(() => {
 
 // 管理画面(/api/project, /api/git/*)と、トークン数の疑似増加
 const project = createProjectMock({ sessions, worktrees, repos, prs, upsertSession, upsertWt, json, readBody, REPO_WEB, mkTokens });
+const history = createHistoryMock({ sessions, upsertSession, json, readBody, mkSession, termBuf, linkIds: [s1.id, s3.id, s5.id, s7.id] });
 
 server.listen(PORT, '127.0.0.1', () => {
   console.log(`CC Hub mock: http://127.0.0.1:${PORT}  (PIN: ${PIN})`);

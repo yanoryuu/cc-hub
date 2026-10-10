@@ -1,4 +1,4 @@
-// モバイルレイアウト(幅 900px 未満): 下タブ セッション / 承認 / PR / リポジトリ / その他(スキル・MCP・ゲーム)
+// モバイルレイアウト(幅 900px 未満): 下タブ プロジェクト / セッション / 承認 / PR / その他(履歴・スキル・MCP・ゲーム)
 import { useState } from 'react';
 import { type MoreView, useHub } from '../store';
 import { SessionList, SortControl } from './SessionList';
@@ -17,6 +17,8 @@ import { PrDetailPage, PrListPage, RefreshPrsButton } from './Prs';
 import { SessionGit } from './SessionGit';
 import { needsAttention, usePrGroups } from '../pr';
 import { ProjectScreen } from './Project';
+import { HomeScreen } from './Home';
+import { HistoryView } from './History';
 
 /** PR タブ: 一覧 → 詳細 */
 function PrMobileScreen() {
@@ -55,7 +57,28 @@ function PrMobileScreen() {
   );
 }
 
-/** リポジトリタブ: 一覧 → 詳細 / 登録 */
+/** プロジェクトタブ: ホーム(リポジトリ + フォルダ)→ リポジトリ詳細 */
+function ProjectsTabScreen() {
+  const route = useHub((s) => s.repoRoute);
+  const setNew = useHub((s) => s.setNewSessionOpen);
+  if (route.page === 'repo') return <RepoScreen />;
+  return (
+    <div className="m-screen">
+      <div className="m-head">
+        <ConnDot />
+        <span className="m-title">プロジェクト</span>
+        <button className="btn primary sm" onClick={() => setNew(true)}>
+          + 新規セッション
+        </button>
+      </div>
+      <div className="m-scroll">
+        <HomeScreen mobile />
+      </div>
+    </div>
+  );
+}
+
+/** リポジトリ詳細 / 登録 */
 function RepoScreen() {
   const route = useHub((s) => s.repoRoute);
   const repo = useHub((s) => (route.page === 'repo' ? s.repos[route.id] : undefined));
@@ -167,6 +190,7 @@ function SessionDetailView() {
 }
 
 const MORE_ITEMS: { v: Exclude<MoreView, 'menu'>; label: string; ico: string; desc: string }[] = [
+  { v: 'history', label: '履歴', ico: '↺', desc: '過去の会話を見る・CC Hub で再開する' },
   { v: 'skills', label: 'スキル', ico: '✦', desc: '使えるスキルとコマンドの一覧。タップで入力欄に入れる' },
   { v: 'mcp', label: 'MCP の接続状況', ico: '⛁', desc: 'MCP サーバーがつながっているか' },
   { v: 'game', label: 'ゲームキャプチャ', ico: '▶', desc: 'PC のウィンドウを見ながら操作' },
@@ -178,6 +202,21 @@ function MoreScreen() {
   const openMore = useHub((s) => s.openMore);
   const cwd = useScopeCwd();
   const mcp = useMcp(cwd);
+  if (view === 'history') {
+    return (
+      <HistoryView
+        mobile
+        mobileHead={
+          <div className="m-head">
+            <button className="icon-btn back" onClick={() => openMore('menu')} aria-label="その他へ戻る">
+              ‹
+            </button>
+            <span className="m-title">履歴</span>
+          </div>
+        }
+      />
+    );
+  }
   if (view === 'game') {
     return (
       <div className="m-screen">
@@ -291,8 +330,8 @@ export function MobileApp() {
     );
   } else if (tab === 'prs') {
     body = <PrMobileScreen />;
-  } else if (tab === 'repos') {
-    body = <RepoScreen />;
+  } else if (tab === 'projects') {
+    body = <ProjectsTabScreen />;
   } else {
     body = <MoreScreen />;
   }
@@ -312,10 +351,10 @@ export function MobileApp() {
     <div className="mobile">
       <div className="m-body">{body}</div>
       <nav className="tabbar" aria-label="画面の切り替え">
+        {tabBtn('projects', 'プロジェクト')}
         {tabBtn('sessions', 'セッション')}
         {tabBtn('approvals', '承認', approvals.length > 0 && <span className="tab-badge">{approvals.length}</span>)}
         {tabBtn('prs', 'PR', prBadge > 0 && <span className="tab-badge pr">{prBadge}</span>)}
-        {tabBtn('repos', 'リポジトリ')}
         {tabBtn('more', 'その他')}
       </nav>
     </div>

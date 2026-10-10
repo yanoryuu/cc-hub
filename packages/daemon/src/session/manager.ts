@@ -839,6 +839,91 @@ export class SessionManager {
     return { ...info };
   }
 
+  // ================================================================ 履歴から開く
+  /** claude 側の session_id に対応する CC Hub のセッション ID(ハブの ID / /clear 後の ID のどちらでも) */
+  hubIdFor(claudeId: string): string | null {
+    return this.lookup(claudeId)?.info.id ?? null;
+  }
+
+  /**
+   * 履歴(~/.claude/projects の transcript)の会話を開く。
+   * hub: 既に CC Hub にあれば 実行中 → そのまま / 停止中 → 再開 / 外部・PowerShell → 引き取り。無ければ新しい managed セッションで --resume。
+   * terminal: 新しい PowerShell で --resume(handedOff のセッションとして一覧に載る)。CC Hub で動いていれば PowerShell に移す。
+   */
+  async openHistory(claudeId: string, target: 'hub' | 'terminal', h: { cwd: string; title: string }): Promise<SessionInfo> {
+    if (!UUID_RE.test(claudeId)) throw new HttpError(400, 'session_id が不正です');
+    const existing = this.lookup(claudeId);
+    if (existing) {
+      const info = existing.info;
+      const running = info.managed && this.isRunning(info.id);
+      if (!running && !existing.preparing && !(info.cwd && fs.existsSync(info.cwd))) {
+        throw new HttpError(409, `フォルダがありません: ${info.cwd || '(不明)'}`);
+      }
+      if (target === 'hub') {
+        if (info.managed) {
+          if (this.isRunning(info.id)) return { ...info };
+          this.control(info.id, 'restart');
+          return { ...existing.info };
+        }
+        return this.takeover(info.id, false);
+      }
+      if (info.managed) return this.openTerminal(info.id);
+      if (this.handedOffLive(existing) || (!info.handedOff && info.status !== 'stopped')) {
+        throw new HttpError(409, info.handedOff ? '既に PowerShell で開いています' : '元のウィンドウで動作中です');
+      }
+      return this.launchHandoff(existing);
+    }
+    const cwd = h.cwd ? path.resolve(h.cwd) : '';
+    let ok = false;
+    try {
+      ok = !!cwd && fs.statSync(cwd).isDirectory();
+    } catch {
+      ok = false;
+    }
+    if (!ok) throw new HttpError(409, `フォルダがありません: ${h.cwd || '(不明)'}`);
+    const title = String(h.title || '').replace(/\s+/g, ' ').trim();
+    const name = (title && !title.startsWith('(') ? title.slice(0, 40) : '') || path.basename(cwd) || cwd;
+    if (target === 'hub') return this.start({ cwd, name, resume: claudeId, mode: 'plain' });
+    const info = this.blankInfo(claudeId.toLowerCase(), name, cwd, false);
+    info.status = 'stopped';
+    return this.launchHandoff(this.newEntry(info));
+  }
+
+  /** 停止中の(または新しい)非 managed のセッションを PowerShell で --resume して handedOff にする */
+  private async launchHandoff(e: Entry): Promise<SessionInfo> {
+    const info = e.info;
+    if (info.worktreeId && this.repoHooks && !this.repoHooks.holdsWorktree(info)) {
+      throw new HttpError(409, 'このセッションの worktree は解放済みです');
+    }
+    const resumeId = this.resumeId(e);
+    if (!findTranscript(resumeId)) throw new HttpError(409, '再開できる会話(transcript)が見つかりません');
+    if (!fs.existsSync(info.cwd)) throw new HttpError(409, `フォルダがありません: ${info.cwd}`);
+    const spec: TerminalSpec = {
+      name: info.name,
+      cwd: info.cwd,
+      claudePath: this.cfg.claudePath,
+      resumeId,
+      extraArgs: ['--permission-mode', this.cfg.permissionMode, ...this.cfg.claudeArgs],
+    };
+    let launched: { file: string; args: string[] };
+    try {
+      launched = await launchTerminal(this.cfg.terminalLauncher, spec, info.id);
+    } catch (err) {
+      if (err instanceof HttpError) throw err;
+      throw new HttpError(500, `PowerShell を開けませんでした: ${(err as Error).message}`.slice(0, 200));
+    }
+    console.log(`[session] 履歴を PowerShell で開きました: ${info.name} (${info.id}) ${launched.file} ${launched.args.join(' ').slice(0, 300)}`);
+    const now = Date.now();
+    Object.assign(info, { managed: false, handedOff: true, status: 'starting' as SessionStatus, exitCode: null, approval: null, currentTool: null, lastEventAt: now });
+    e.endedAt = null;
+    e.handoffAt = now;
+    e.detected = null;
+    e.statusBeforeApproval = null;
+    this.sessions.set(info.id, e);
+    this.touch(e);
+    return { ...info };
+  }
+
   // ================================================================ 画面解析
   private scheduleDetect(e: Entry, ms: number): void {
     if (e.detectTimer) clearTimeout(e.detectTimer);

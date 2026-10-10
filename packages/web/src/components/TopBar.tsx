@@ -1,6 +1,7 @@
-// 上部バー: 使用率メーター / MCP の要約 / 承認待ち / 新規セッション
+// 上部バー: 大分類のタブ(プロジェクト / セッション / 履歴 / PR)/ 使用率メーター / MCP の要約 / 承認待ち / 新規セッション
 import type { RateWindow } from '@cc-hub/shared';
-import { useHub } from '../store';
+import { TOP_VIEW_LABEL, type TopView, isFinished, useHub } from '../store';
+import { needsAttention, usePrGroups } from '../pr';
 import { fmtUntil, useNow } from '../util';
 import { useApprovalSessions } from './Approval';
 import { McpSummary } from './Mcp';
@@ -57,6 +58,51 @@ export function ConnDot() {
   );
 }
 
+export const TOP_ORDER: TopView[] = ['projects', 'sessions', 'history', 'prs'];
+
+/** 上部の大分類タブ(Alt+1〜4) */
+function TopNav() {
+  const top = useHub((s) => s.topView);
+  const deskView = useHub((s) => s.deskView);
+  const setTop = useHub((s) => s.setTopView);
+  const sessions = useHub((s) => s.sessions);
+  const worktrees = useHub((s) => s.worktrees);
+  const active = Object.values(sessions).filter((x) => !isFinished(x, worktrees)).length;
+  const g = usePrGroups();
+  const prAttn = g.mine.filter(needsAttention).length + g.review.length;
+  // スキル / MCP / ゲームの表示中はどのタブも選択中にしない
+  const inTop = deskView !== 'skills' && deskView !== 'mcp' && deskView !== 'game';
+  const badge = (t: TopView) =>
+    t === 'sessions' && active > 0 ? (
+      <span className="topnav-n" aria-label={`動いているセッション ${active} 件`}>
+        {active}
+      </span>
+    ) : t === 'prs' && prAttn > 0 ? (
+      <span className="topnav-n warn" aria-label={`対応が必要な PR ${prAttn} 件`}>
+        {prAttn}
+      </span>
+    ) : null;
+  return (
+    <nav className="topnav" aria-label="画面の切り替え">
+      {TOP_ORDER.map((t, i) => {
+        const on = inTop && top === t;
+        return (
+          <button
+            key={t}
+            className={`topnav-btn ${on ? 'on' : ''}`}
+            aria-current={on ? 'page' : undefined}
+            onClick={() => setTop(t)}
+            title={`${TOP_VIEW_LABEL[t]}(Alt+${i + 1})`}
+          >
+            {TOP_VIEW_LABEL[t]}
+            {badge(t)}
+          </button>
+        );
+      })}
+    </nav>
+  );
+}
+
 export function TopBar() {
   const approvals = useApprovalSessions();
   const setDrawer = useHub((s) => s.setApprovalDrawer);
@@ -68,6 +114,7 @@ export function TopBar() {
         <ConnDot />
         CC Hub
       </div>
+      <TopNav />
       <UsageMeters />
       <div className="spacer" />
       <McpSummary />

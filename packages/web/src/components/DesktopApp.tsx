@@ -19,6 +19,9 @@ import { McpView } from './Mcp';
 import { PowerShellButton, TakeoverButton } from './Handoff';
 import { useScopeCwd } from '../ext';
 import { ProjectScreen } from './Project';
+import { HomeScreen } from './Home';
+import { HistoryView } from './History';
+import { TOP_ORDER } from './TopBar';
 
 function ApprovalDrawer() {
   const open = useHub((s) => s.approvalDrawer);
@@ -140,6 +143,16 @@ export function DesktopApp() {
   // Ctrl+1..9: セッション切替(一覧に表示している順) / Ctrl+Shift+A: 承認キュー
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
+      // Alt+1〜4: 上部の大分類(プロジェクト / セッション / 履歴 / PR)
+      if (e.altKey && !e.ctrlKey && !e.metaKey && !e.shiftKey) {
+        const m = /^Digit([1-4])$/.exec(e.code) ?? /^([1-4])$/.exec(e.key);
+        if (m) {
+          e.preventDefault();
+          e.stopPropagation();
+          useHub.getState().setTopView(TOP_ORDER[parseInt(m[1], 10) - 1]);
+        }
+        return;
+      }
       if (!e.ctrlKey || e.altKey || e.metaKey) return;
       if (/^[1-9]$/.test(e.key) && !e.shiftKey) {
         const st = useHub.getState();
@@ -161,7 +174,8 @@ export function DesktopApp() {
   }, []);
 
   // セッション以外(リポジトリ / PR / スキル / MCP)の表示中は右パネルを畳んで中央を広げる
-  const wide = view === 'repos' || view === 'prs' || view === 'skills' || view === 'mcp' || view === 'project';
+  const wide = view !== 'session' && view !== 'game';
+  const setTopView = useHub((s) => s.setTopView);
 
   return (
     <div className="desk">
@@ -180,6 +194,12 @@ export function DesktopApp() {
         <main className="center">
           {view === 'game' ? (
             <GameView />
+          ) : view === 'home' || (view === 'repos' && repoRoute.page === 'list') ? (
+            <div className="repo-scroll">
+              <HomeScreen />
+            </div>
+          ) : view === 'history' ? (
+            <HistoryView />
           ) : view === 'project' ? (
             <ProjectScreen />
           ) : view === 'skills' ? (
@@ -243,6 +263,11 @@ export function DesktopApp() {
           ) : (
             <div className="empty big">
               {loaded ? (selectedId ? 'セッションが見つかりません' : 'セッションがありません。「+ 新規セッション」から起動できます') : '読み込み中…'}
+              {loaded && (
+                <button className="btn" onClick={() => setTopView('projects')}>
+                  プロジェクト一覧へ
+                </button>
+              )}
             </div>
           )}
         </main>

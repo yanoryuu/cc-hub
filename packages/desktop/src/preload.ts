@@ -9,8 +9,16 @@ ipcRenderer.on('hub:select-session', (_e, sid: string) => {
   else pending = sid;
 });
 
+/** main と合わせる。ここに無いチャンネルは呼ばない */
+const IPC_PICK_FOLDER = 'hub:pick-folder';
+
 contextBridge.exposeInMainWorld('ccHub', {
   isDesktop: true,
+  /** Windows のフォルダ選択ダイアログ。キャンセルなら null */
+  async pickFolder(): Promise<string | null> {
+    const r: unknown = await ipcRenderer.invoke(IPC_PICK_FOLDER);
+    return typeof r === 'string' && r ? r : null;
+  },
   onSelectSession(cb: (sid: string) => void): void {
     selectCb = cb;
     if (pending) {

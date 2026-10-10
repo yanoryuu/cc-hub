@@ -26,62 +26,49 @@ export function parseRepoUrl(input: string): string | null {
 
 // ---------------------------------------------------------------- 一覧
 
-/** デスクトップ左サイドバーの「リポジトリ」セクション */
+/** デスクトップ左サイドバーの「プロジェクト」セクション(登録リポジトリ。名前で管理画面を開く) */
 export function SidebarRepos() {
   const repos = useRepoList();
   const wtByRepo = useWorktreesByRepo();
   const deskView = useHub((s) => s.deskView);
-  const route = useHub((s) => s.repoRoute);
-  const openRepos = useHub((s) => s.openRepos);
+  const setTopView = useHub((s) => s.setTopView);
+  const setClone = useHub((s) => s.setCloneOpen);
   const openProject = useHub((s) => s.openProject);
   const project = useHub((s) => s.project);
-  const activeId = deskView === 'repos' && route.page === 'repo' ? route.id : null;
   const projectId = deskView === 'project' ? project?.repoId ?? null : null;
   return (
-    <section className="side-repos" aria-label="リポジトリ">
+    <section className="side-repos" aria-label="プロジェクト">
       <div className="side-repos-head">
         <button
-          className={`side-repos-title ${deskView === 'repos' && route.page === 'list' ? 'on' : ''}`}
-          onClick={() => openRepos({ page: 'list' })}
+          className={`side-repos-title ${deskView === 'home' ? 'on' : ''}`}
+          onClick={() => setTopView('projects')}
+          title="プロジェクト一覧を開く(Alt+1)"
         >
-          リポジトリ
+          プロジェクト
         </button>
-        <button
-          className="icon-btn"
-          title="リポジトリを登録"
-          aria-label="リポジトリを登録"
-          onClick={() => openRepos({ page: 'register' })}
-        >
-          ＋
+        <button className="btn sm ghost side-add" title="GitHub からクローンして追加" onClick={() => setClone(true)}>
+          ＋ 追加
         </button>
       </div>
       <div className="side-repos-list">
         {repos.length === 0 ? (
-          <button className="side-repo empty-row" onClick={() => openRepos({ page: 'register' })}>
-            未登録 — URL を入力して登録
+          <button className="side-repo empty-row" onClick={() => setClone(true)}>
+            まだありません — 「＋ 追加」で GitHub からクローン
           </button>
         ) : (
           repos.map((r) => (
-            <div key={r.id} className={`side-repo-row ${activeId === r.id || projectId === r.id ? 'active' : ''}`}>
+            <div key={r.id} className={`side-repo-row ${projectId === r.id ? 'active' : ''}`}>
               <button
-                className={`side-repo ${activeId === r.id ? 'active' : ''} ${r.error ? 'has-error' : ''}`}
-                onClick={() => openRepos({ page: 'repo', id: r.id })}
-                title={r.error ?? `${r.id}(設定と worktree プール)`}
+                className={`side-repo ${projectId === r.id ? 'active' : ''} ${r.error ? 'has-error' : ''}`}
+                onClick={() => openProject({ repoId: r.id })}
+                aria-current={projectId === r.id ? 'page' : undefined}
+                title={r.error ?? `${r.id} の管理画面(セッション・作業ツリー・PR・Git・履歴)`}
               >
                 <span className="side-repo-name">
                   {r.error && <span className="warn-ico" aria-label="警告">!</span>}
                   {r.name}
                 </span>
                 <PoolChips repo={r} worktrees={wtByRepo[r.id] ?? []} />
-              </button>
-              <button
-                className={`side-repo-dash ${projectId === r.id ? 'on' : ''}`}
-                onClick={() => openProject({ repoId: r.id })}
-                aria-label={`${r.name} の管理画面`}
-                aria-current={projectId === r.id ? 'page' : undefined}
-                title="管理画面(セッション・作業ツリー・アーティファクト・PR・Git・トークン)"
-              >
-                管理画面
               </button>
             </div>
           ))
@@ -153,8 +140,10 @@ function RepoCard({ repo, worktrees, onOpen }: { repo: RepoInfo; worktrees: Work
 
 // ---------------------------------------------------------------- 登録フォーム
 
-export function RegisterRepoForm({ mobile = false }: { mobile?: boolean }) {
+/** inModal = 「GitHub からクローンして追加」ダイアログの中身として使う(閉じるのは onClose) */
+export function RegisterRepoForm({ mobile = false, inModal = false, onClose }: { mobile?: boolean; inModal?: boolean; onClose?: () => void }) {
   const openRepos = useHub((s) => s.openRepos);
+  const setTopView = useHub((s) => s.setTopView);
   const upsertRepo = useHub((s) => s.upsertRepo);
   const repos = useHub((s) => s.repos);
   const [url, setUrl] = useState('');
@@ -178,8 +167,12 @@ export function RegisterRepoForm({ mobile = false }: { mobile?: boolean }) {
       const req: RegisterRepoRequest = { url: url.trim(), trusted, poolMin: n };
       const r = await repoApi.register(req);
       const repo = pick<RepoInfo>(r, 'repo');
-      if (repo && repo.id) {
-        upsertRepo(repo);
+      if (repo && repo.id) upsertRepo(repo);
+      if (inModal) {
+        // ダイアログ: 閉じてプロジェクト一覧へ(カードにクローンの進み具合が出る)
+        onClose?.();
+        setTopView('projects');
+      } else if (repo && repo.id) {
         openRepos({ page: 'repo', id: repo.id });
       } else {
         openRepos({ page: 'list' });
@@ -191,17 +184,14 @@ export function RegisterRepoForm({ mobile = false }: { mobile?: boolean }) {
     }
   };
 
-  return (
-    <div className="repo-page">
-      {!mobile && (
-        <div className="rp-head">
-          <button className="btn ghost" onClick={() => openRepos({ page: 'list' })}>
-            ‹ リポジトリ
-          </button>
-          <h2 className="rp-title">リポジトリを登録</h2>
-        </div>
-      )}
-      <form className="rp-card form register-form" onSubmit={submit}>
+  const cancel = () => (inModal ? onClose?.() : openRepos({ page: 'list' }));
+  const form = (
+      <form className={inModal ? 'modal-body form register-form' : 'rp-card form register-form'} onSubmit={submit}>
+        {inModal && (
+          <p className="muted small">
+            GitHub のリポジトリをクローンして CC Hub に登録します。待機用の worktree を用意しておくので、複数のセッションを並行して始められます。
+          </p>
+        )}
         <label className="field">
           <span>GitHub のリポジトリ</span>
           <input
@@ -213,7 +203,7 @@ export function RegisterRepoForm({ mobile = false }: { mobile?: boolean }) {
             autoCapitalize="off"
             autoCorrect="off"
             inputMode="url"
-            autoFocus={!mobile}
+            autoFocus={!mobile || inModal}
           />
           <span className="hint">
             {url.trim() === '' ? (
@@ -254,7 +244,7 @@ export function RegisterRepoForm({ mobile = false }: { mobile?: boolean }) {
         </label>
         {err && <div className="form-error">{err}</div>}
         <div className="modal-foot">
-          <button type="button" className="btn" onClick={() => openRepos({ page: 'list' })}>
+          <button type="button" className="btn" onClick={cancel}>
             キャンセル
           </button>
           <button type="submit" className="btn primary" disabled={!canSubmit}>
@@ -263,6 +253,19 @@ export function RegisterRepoForm({ mobile = false }: { mobile?: boolean }) {
         </div>
         {!trusted && url.trim() && <div className="hint right">登録するには「信頼する」にチェックしてください</div>}
       </form>
+  );
+  if (inModal) return form;
+  return (
+    <div className="repo-page">
+      {!mobile && (
+        <div className="rp-head">
+          <button className="btn ghost" onClick={() => openRepos({ page: 'list' })}>
+            ‹ プロジェクト
+          </button>
+          <h2 className="rp-title">リポジトリを登録</h2>
+        </div>
+      )}
+      {form}
     </div>
   );
 }

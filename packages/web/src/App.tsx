@@ -9,6 +9,7 @@ import { DesktopApp } from './components/DesktopApp';
 import { MobileApp } from './components/MobileApp';
 import { NewSessionDialog } from './components/NewSessionDialog';
 import { Toasts } from './components/Toasts';
+import { CloneRepoModal } from './components/Home';
 
 // 401 を受けたら PIN 画面へ
 setNeedAuthHandler(() => useHub.getState().setAuth('need_pin'));
@@ -54,6 +55,7 @@ export function App() {
     <>
       {desktop ? <DesktopApp /> : <MobileApp />}
       <NewSessionDialog />
+      <CloneRepoModal />
       <Toasts />
     </>
   );
