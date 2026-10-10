@@ -517,6 +517,7 @@ export type DeployState =
   | 'planning' // 差分計算中(ビルドを含む)
   | 'ready' // 差分が出た(ユーザーの確認待ち)
   | 'uploading'
+  | 'preview_ready' // Firebase Hosting: プレビュー URL に公開済み。「本番に反映」(promote)待ち
   | 'done'
   | 'failed'
   | 'rejected'
@@ -548,6 +549,45 @@ export interface DeployJob {
   createdAt: number;
   finishedAt: number | null;
   url: string | null;
+  /** Firebase へのデプロイのとき(serverId は '' 、serverName は "Firebase: <projectId>") */
+  firebase?: FirebaseDeploy | null;
+}
+
+// ---------------------------------------------------------------- Firebase
+
+export type FirebaseTarget = 'hosting' | 'functions' | 'firestore:rules' | 'firestore:indexes' | 'storage';
+
+export interface FirebaseDeploy {
+  projectId: string;
+  /** firebase.json のあるフォルダ */
+  projectDir: string;
+  targets: FirebaseTarget[];
+  /** Hosting をまずプレビューチャンネルに出すか(既定 true) */
+  preview: boolean;
+  channel: string | null;
+  previewUrl: string | null;
+  previewExpiresAt: number | null;
+  /** 本番(live)に反映済みか */
+  promoted: boolean;
+}
+
+export interface FirebaseInfo {
+  /** firebase.json のあるフォルダ(cwd から上へ探す)。見つからなければ null */
+  projectDir: string | null;
+  /** .firebaserc の default と別名 */
+  projectId: string | null;
+  aliases: Record<string, string>;
+  /** firebase.json に設定のあるサービス */
+  configured: { hosting: boolean; functions: boolean; firestore: boolean; storage: boolean };
+  /** Hosting の公開先 URL(https://<site>.web.app) */
+  sites: { site: string; url: string }[];
+  channels: { site: string; channel: string; url: string; expireAt: number | null; updatedAt: number | null }[];
+  functions: { name: string; region: string; runtime: string | null; state: string | null; trigger: string | null }[];
+  /** ログイン中のアカウント(取れない場合 null)と、見えるプロジェクト一覧 */
+  account: string | null;
+  projects: { projectId: string; displayName: string | null }[];
+  checkedAt: number;
+  error: string | null;
 }
 
 export interface NotifyEvent {
@@ -628,6 +668,8 @@ export type ServerMessage =
 //     request_deploy({server, localDir?, note})            承認キューに申請を出す → {deployId, state}
 //     get_deploy_status({deployId})                        状態・URL・エラー
 //     list_sessions() / get_session({id})                  CC Hub のセッション状況(読み取りのみ)
+//     firebase_status({cwd})                               そのフォルダの Firebase プロジェクト・設定・プレビュー URL・Functions
+//     request_firebase_deploy({cwd, targets, note, preview?})  承認キューに申請 → {deployId, state}(Hosting は承認後まずプレビュー URL へ)
 //     get_project_instructions({cwd?})                     プロジェクトの共通の指示(cwd 省略時は呼び出し元セッションのプロジェクト)
 //     update_project_instructions({cwd?, content})         全文を置き換える → {lineCount, limit, warning?}(200 行超は保存した上で警告)
 //   ユーザースコープに `claude mcp add --transport http cc-hub http://127.0.0.1:<port>/mcp --header "Authorization: Bearer …"` で登録する
@@ -726,3 +768,12 @@ export interface ProjectInstructions {
   /** 最後に書き換えたのは誰か */
   updatedBy: 'user' | 'claude' | null;
 }
+
+// Firebase の REST(上の MCP ツールと同じ処理)
+//   GET  /api/firebase?cwd=<path>&refresh=1   → {ok, info: FirebaseInfo}(1 分キャッシュ。firebase CLI を使う)
+//   POST /api/firebase/deploy {cwd, targets: FirebaseTarget[], preview?: boolean, channel?: string, buildCommand?: string}
+//          → {ok, deploy: DeployJob}   ユーザーからのデプロイ。Hosting + preview なら preview_ready で止まる
+//   POST /api/deploys/:id/promote               preview_ready のプレビューを本番(live)へ(firebase hosting:clone。再ビルドしない)
+//   (Claude からの申請は MCP の request_firebase_deploy → pending_approval → POST /api/deploys/:id/approve)
+// Firebase 公式の MCP サーバー(Claude が Firestore / Auth / ログ等を調べる)は integrations/mcp/install-firebase.js で
+//   `claude mcp add --scope user firebase -- cmd /c firebase mcp` として登録する
