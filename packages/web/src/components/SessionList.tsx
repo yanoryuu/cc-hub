@@ -21,6 +21,9 @@ function SessionRow({
 }) {
   const wt = useSessionWorktree(s);
   const release = needsRelease(s, wt);
+  // 何の作業か(最初の指示の 1 行目)。名前と同じなら出さない
+  const title = (s.task ?? '').split(/\r?\n/).map((l) => l.trim()).find(Boolean) ?? '';
+  const showTitle = title && title !== s.name ? title : '';
   const sub = s.status === 'awaiting_approval' ? s.approval?.question ?? '' : toolText(s);
   const [removing, setRemoving] = useState(false);
   const remove = async () => {
@@ -42,6 +45,11 @@ function SessionRow({
           <span className="srow-name">{s.name}</span>
           {release && <span className="need-release">要解放</span>}
         </span>
+        {showTitle && (
+          <span className="srow-title" title={s.task ?? ''}>
+            {showTitle}
+          </span>
+        )}
         {s.branch && (
           <span className="srow-branch mono" title={wt ? `${s.branch}(${wt.name})` : s.branch}>
             {s.branch}
