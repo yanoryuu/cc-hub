@@ -11,7 +11,7 @@ import type { SecretBox } from '../dpapi';
 import { HttpError } from '../util';
 import type { NotifyMeta } from './emit';
 import { DiscordSender, buildPayload, type SendResult } from './discord';
-import { DiscordBot, type BotReply } from './bot';
+import { DiscordBot, splitMessage, type BotInteraction, type BotReply } from './bot';
 import { DeployApprovals, type DeployActions } from './approvals';
 import { HISTORY_TURNS, type BtwIO, type BtwRequest, type QaTurn } from './replies';
 import { Throttle, route, throttleKey, topicOf, type FocusState, type RouteDecision } from './topic';
@@ -59,6 +59,7 @@ export class NotifyService {
   /** 直近の振り分け結果(検証・デバッグ用。GET /api/notify/settings?debug=1 で返す) */
   readonly recent: { ts: number; title: string; topic: NotifyTopic | null; decision: RouteDecision | { skipped: string } }[] = [];
   private readonly approvals: DeployApprovals;
+  private statusText: (() => string) | null = null;
   private readonly onState = (msg: ServerMessage) => this.approvals.onState(msg);
   private readonly onNotify = (ev: NotifyEvent, meta: NotifyMeta) => {
     this.dispatch(ev, meta ?? {}).catch((e) => console.warn(`[notify] 振り分けに失敗: ${(e as Error).message}`));
@@ -78,7 +79,7 @@ export class NotifyService {
       // 承認ボタンのメッセージも、返信・スレッドで申請したセッションに質問できるようにする
       remember: (messageId, sessionId) => this.remember(messageId, sessionId, 'deploy_request'),
     });
-    this.bot.onInteraction = (i) => void this.approvals.onInteraction(i);
+    this.bot.onInteraction = (i) => void this.onInteraction(i);
     this.loadMessages();
     bus.on('notify', this.onNotify);
     bus.on('state', this.onState);
@@ -94,6 +95,24 @@ export class NotifyService {
   /** アップロードの承認ボタンで呼ぶ操作(main で DeployService をつなぐ) */
   setDeployActions(a: DeployActions): void {
     this.approvals.setActions(a);
+  }
+
+  /** Discord の /status で返す文章(main でつなぐ) */
+  setStatusProvider(fn: () => string): void {
+    this.statusText = fn;
+  }
+
+  private async onInteraction(i: BotInteraction): Promise<void> {
+    if (i.kind === 'button') return this.approvals.onInteraction(i);
+    if (i.command !== 'status') return;
+    try {
+      if (!this.settings.bot.allowedUserIds.includes(i.userId)) {
+        return await this.bot.respond(i, 4, { content: `このユーザー(ID: ${i.userId})は使えません。CC Hub の設定で「返信を受け付けるユーザー ID」に追加してください。`, flags: 64 });
+      }
+      await this.bot.respond(i, 4, { content: splitMessage(this.statusText?.() ?? '準備中です')[0] });
+    } catch (e) {
+      console.warn(`[bot] /status に答えられません: ${(e as Error).message}`);
+    }
   }
 
   // ================================================================ 設定
@@ -140,6 +159,11 @@ export class NotifyService {
    * - 通知への返信 → その通知からスレッドを作り、答えはスレッドに書く(作れなければ返信で答える)
    */
   private async onBotReply(r: BotReply): Promise<void> {
+    // スラッシュコマンドが使えない場合のために、「/status」「!status」だけの書き込みにも答える
+    if (/^[/!]status$/i.test(r.content) && this.settings.bot.allowedUserIds.includes(r.authorId)) {
+      await this.bot.reply(r.channelId, r.messageId, this.statusText?.() ?? '準備中です').catch(() => undefined);
+      return;
+    }
     const inThread = this.msgs.has(r.channelId);
     const notifId = inThread ? r.channelId : r.refMessageId;
     const m = notifId ? this.msgs.get(notifId) : undefined;

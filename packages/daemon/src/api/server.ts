@@ -11,6 +11,7 @@ import type { PrActions } from '../github/actions';
 import type { ProjectService } from '../project/service';
 import type { NotifyService } from '../notify/service';
 import type { DeployService } from '../deploy/service';
+import type { RestartScheduler } from '../restart/scheduler';
 import type { InstructionsService } from '../project/instructions';
 import type { FirebaseInfoService } from '../firebase/info';
 import { handleMcp, type McpHttpDeps } from '../mcp/server';
@@ -76,6 +77,7 @@ export interface ServerDeps {
   project: ProjectService;
   notify: NotifyService;
   deploy: DeployService;
+  restart: RestartScheduler;
   firebase: FirebaseInfoService;
   instructions: InstructionsService;
   /** /mcp(CC Hub 自身の MCP サーバー) */
@@ -403,6 +405,11 @@ async function handle(d: ServerDeps, req: http.IncomingMessage, res: http.Server
   if (p === '/api/git/push' && method === 'POST') {
     return json(res, 200, { ok: true, ...(await d.project.push(await readBody(req))) });
   }
+
+  // ------------------------------------------------ CC Hub の再起動の予約
+  if (p === '/api/restart' && method === 'GET') return json(res, 200, { ok: true, restart: d.restart.status() });
+  if (p === '/api/restart' && method === 'POST') return json(res, 200, { ok: true, restart: d.restart.request(await readBody(req)) });
+  if (p === '/api/restart/cancel' && method === 'POST') return json(res, 200, { ok: true, restart: d.restart.cancel() });
 
   // ------------------------------------------------ 通知
   if (p === '/api/notify/settings' && method === 'GET') {

@@ -8,7 +8,9 @@ import { defaultSettings, loadStored, mergeUpdate, toPublic } from '../src/notif
 import { NotifyService } from '../src/notify/service';
 import { emitNotify } from '../src/notify/emit';
 import { bus } from '../src/bus';
-import { parseInteraction, parseReply, splitMessage } from '../src/notify/bot';
+import { BOT_COMMANDS, parseInteraction, parseReply, splitMessage } from '../src/notify/bot';
+import { formatStatus } from '../src/notify/status';
+import { RestartScheduler } from '../src/restart/scheduler';
 import { DeployApprovals, buttons, cardText, customId, parseCustomId } from '../src/notify/approvals';
 import { HISTORY_TURNS, btwPrompt, decideReply } from '../src/notify/replies';
 
@@ -401,9 +403,9 @@ test('承認ボタン: custom_id とボタン・本文', () => {
   assert.ok(cardText(job()).includes('login-fix'));
   assert.ok(cardText(fb).includes('https://p--c.web.app'));
   assert.deepEqual(parseInteraction({ type: 3, id: 'i', token: 't', channel_id: 'c', message: { id: 'm' }, data: { custom_id: 'x' }, member: { user: { id: '1', username: 'me' } } }), {
-    id: 'i', token: 't', customId: 'x', userId: '1', userName: 'me', channelId: 'c', messageId: 'm',
+    kind: 'button', id: 'i', token: 't', customId: 'x', command: '', userId: '1', userName: 'me', channelId: 'c', messageId: 'm',
   });
-  assert.equal(parseInteraction({ type: 2, id: 'i', token: 't' }), null);
+  assert.equal(parseInteraction({ type: 4, id: 'i', token: 't' }), null);
 });
 
 test('承認ボタン: 投稿 → 押して承認 / 許可されていない人 / CC Hub で先に操作', async () => {
@@ -438,7 +440,7 @@ test('承認ボタン: 投稿 → 押して承認 / 許可されていない人 
   assert.equal(posts.length, 1);
   assert.equal(posts[0].ch, 'C1');
   const click = (customIdStr: string, userId: string) =>
-    ap.onInteraction({ id: 'i', token: 't', customId: customIdStr, userId, userName: userId, channelId: 'C1', messageId: 'm1' });
+    ap.onInteraction({ kind: 'button', command: '', id: 'i', token: 't', customId: customIdStr, userId, userName: userId, channelId: 'C1', messageId: 'm1' });
   // 許可されていない人 → 本人にだけ見えるメッセージ、操作しない
   await click(customId('approve', 'j1'), 'other');
   assert.equal(calls.length, 0);
@@ -476,6 +478,63 @@ test('承認ボタン: チャンネル ID の設定', async () => {
   assert.equal(toPublic(s1).bot?.approvalChannelId, '123456789012345678');
   assert.equal((await mergeUpdate(s1, { bot: { approvalChannelId: 'abc' } }, enc)).bot.approvalChannelId, '');
   assert.equal((await mergeUpdate(s1, { bot: { enabled: false } }, enc)).bot.approvalChannelId, '123456789012345678');
+});
+
+// ------------------------------------------------------------ /status と再起動の予約
+test('/status: セッションを状態ごとにまとめ、アップロードの承認待ちと再起動の予約も出す', () => {
+  const s = (name: string, status: string, o: any = {}) => ({ id: name, name, status, lastEventAt: 0, currentTool: null, approval: null, ...o }) as any;
+  const text = formatStatus({
+    sessions: [
+      s('A', 'running', { currentTool: { name: 'Edit', target: 'a.ts' } }),
+      s('B', 'awaiting_approval', { approval: { question: 'Bash を実行しますか?' } }),
+      s('C', 'awaiting_input', { lastEventAt: 0 }),
+      s('D', 'stopped'),
+    ],
+    deploys: [job()],
+    restart: { state: 'waiting', build: true, requestedAt: 1, busy: ['A'], error: null },
+    now: 30 * 60_000,
+  });
+  assert.ok(text.includes('⏳ 承認待ち 1') && text.includes('Bash を実行しますか?'));
+  assert.ok(text.includes('▶ 実行中 1') && text.includes('Edit: a.ts'));
+  assert.ok(text.includes('💬 入力待ち 1') && text.includes('30 分前'));
+  assert.ok(!text.includes('**D**'));
+  assert.ok(text.includes('📦 アップロードの承認待ち 1'));
+  assert.ok(text.includes('再起動の予約') && text.includes('(A)'));
+  assert.ok(formatStatus({ sessions: [], deploys: [], restart: null, now: 0 }).includes('動いているセッションはありません'));
+});
+
+test('/status: スラッシュコマンドの解析', () => {
+  const i = parseInteraction({ type: 2, id: 'i', token: 't', channel_id: 'c', data: { name: 'status' }, member: { user: { id: '1', username: 'me' } } });
+  assert.equal(i?.kind, 'command');
+  assert.equal(i?.command, 'status');
+  assert.equal(BOT_COMMANDS[0].name, 'status');
+});
+
+test('再起動の予約: 作業が無い状態が続いたら再起動 / 取り消し / すぐ', async () => {
+  let busy = ['A'];
+  const launched: boolean[] = [];
+  const r = new RestartScheduler({ busy: () => busy, script: process.execPath, logFile: 'x.log', launch: (_s, build) => launched.push(build) });
+  assert.equal(r.status().state, 'idle');
+  r.request({ when: 'idle', build: false });
+  assert.equal(r.status().state, 'waiting');
+  assert.deepEqual(r.status().busy, ['A']);
+  (r as any).tick();
+  assert.equal(launched.length, 0);
+  busy = [];
+  (r as any).tick(); // request 直後の 1 回 + ここで 2 回目 → まだ(作業中だったのでリセット済み)
+  assert.equal(launched.length, 0);
+  (r as any).tick();
+  assert.deepEqual(launched, [false]);
+  assert.equal(r.status().state, 'restarting');
+  assert.throws(() => r.cancel());
+  const r2 = new RestartScheduler({ busy: () => ['B'], script: process.execPath, logFile: 'x.log', launch: () => launched.push(true) });
+  r2.request({ when: 'idle' });
+  assert.equal(r2.cancel().state, 'idle');
+  r2.request({ when: 'now' });
+  assert.equal(launched.length, 2);
+  assert.throws(() => new RestartScheduler({ busy: () => [], script: 'Z:/none.ps1', logFile: 'x.log', launch: () => undefined }).request({}));
+  r.stop();
+  r2.stop();
 });
 
 void Promise.all(pending).then(() => console.log(`\nnotify: ${passed} passed`));

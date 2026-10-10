@@ -59,27 +59,39 @@ export function splitMessage(text: string, max = DISCORD_MAX - 50, maxParts = 4)
   return out;
 }
 
-/** ボタンが押された(INTERACTION_CREATE の MESSAGE_COMPONENT) */
+/** ボタンが押された / スラッシュコマンドが実行された(INTERACTION_CREATE) */
 export interface BotInteraction {
+  kind: 'button' | 'command';
   id: string;
   token: string;
+  /** ボタンの custom_id(コマンドなら '') */
   customId: string;
+  /** コマンド名(ボタンなら '') */
+  command: string;
   userId: string;
   userName: string;
   channelId: string;
   messageId: string;
 }
 
-/** INTERACTION_CREATE からボタンの操作を取り出す(それ以外は null) */
+/** Bot が登録するスラッシュコマンド */
+export const BOT_COMMANDS = [{ name: 'status', description: 'CC Hub の状況(動いているセッション・承認待ち・再起動の予約)', type: 1 }];
+
+/** INTERACTION_CREATE からボタンの操作(type 3)/ コマンド(type 2)を取り出す(それ以外は null) */
 export function parseInteraction(d: any): BotInteraction | null {
-  if (!d || d.type !== 3 || typeof d.id !== 'string' || typeof d.token !== 'string') return null;
+  if (!d || (d.type !== 2 && d.type !== 3) || typeof d.id !== 'string' || typeof d.token !== 'string') return null;
   const u = d.member?.user ?? d.user;
-  const customId = d.data?.custom_id;
-  if (typeof customId !== 'string' || !u?.id) return null;
+  if (!u?.id) return null;
+  const button = d.type === 3;
+  const customId = button ? d.data?.custom_id : '';
+  const command = button ? '' : d.data?.name;
+  if (typeof customId !== 'string' || typeof command !== 'string' || (!customId && !command)) return null;
   return {
+    kind: button ? 'button' : 'command',
     id: d.id,
     token: d.token,
     customId,
+    command,
     userId: String(u.id),
     userName: String(u.global_name || u.username || ''),
     channelId: String(d.channel_id ?? ''),
@@ -96,6 +108,9 @@ export class DiscordBot {
   private retryMs = 5000;
   private stopped = true;
   private _status: DiscordBotStatus = { state: 'off', user: null, error: null };
+  private appId: string | null = null;
+  /** スラッシュコマンドを登録済みのサーバー */
+  private readonly registered = new Set<string>();
 
   /** ボタンが押されたとき(NotifyService が設定する) */
   onInteraction: ((i: BotInteraction) => void) | null = null;
@@ -193,6 +208,11 @@ export class DiscordBot {
           this._status = { state: 'connected', user: u ? String(u.global_name || u.username || '') : null, error: null };
           this.retryMs = 5000;
           console.log(`[bot] Discord に接続しました: ${this._status.user ?? '?'}`);
+          // スラッシュコマンド(/status)をサーバーごとに登録する(サーバー単位ならすぐ使えるようになる)
+          this.appId = typeof p.d?.application?.id === 'string' ? p.d.application.id : null;
+          for (const g of Array.isArray(p.d?.guilds) ? p.d.guilds : []) if (typeof g?.id === 'string') void this.registerCommands(g.id);
+        } else if (p.t === 'GUILD_CREATE' && typeof p.d?.id === 'string') {
+          void this.registerCommands(p.d.id);
         } else if (p.t === 'MESSAGE_CREATE') {
           const r = parseReply(p.d);
           if (r) this.onReply(r);
@@ -251,6 +271,18 @@ export class DiscordBot {
         allowed_mentions: { parse: [] },
         ...(i === 0 ? { message_reference: { message_id: toMessageId, fail_if_not_exists: false } } : {}),
       });
+    }
+  }
+
+  /** サーバーにスラッシュコマンドを登録する(上書きなので何度呼んでもよい。接続ごとに 1 回) */
+  private async registerCommands(guildId: string): Promise<void> {
+    if (!this.appId || this.registered.has(guildId)) return;
+    this.registered.add(guildId);
+    try {
+      await this.rest('PUT', `/applications/${this.appId}/guilds/${guildId}/commands`, BOT_COMMANDS);
+    } catch (e) {
+      this.registered.delete(guildId);
+      console.warn(`[bot] /status コマンドを登録できません(サーバー ${guildId}): ${(e as Error).message}`);
     }
   }
 

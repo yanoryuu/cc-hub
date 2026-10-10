@@ -1,9 +1,9 @@
 // 設定画面: 通知(Windows / Discord)・アップロード先のサーバー・Claude との連携(CC Hub の MCP)
 // デスクトップは中央の表示(上部バーの ⚙)、モバイルは「その他 → 設定」
 import { useEffect, useMemo, useState } from 'react';
-import type { DiscordBotSettings, DiscordBotStatus, DiscordTarget, NotifySettings, NotifyTopic, ServerInfo, ServerProtocol } from '@cc-hub/shared';
+import type { DiscordBotSettings, DiscordBotStatus, DiscordTarget, NotifySettings, NotifyTopic, RestartStatus, ServerInfo, ServerProtocol } from '@cc-hub/shared';
 import { type SettingsTab, useHub } from '../store';
-import { errText } from '../api';
+import { api, errText, pick } from '../api';
 import {
   DEFAULT_PORT,
   type DiscordTargetEdit,
@@ -29,6 +29,7 @@ const SECTIONS: { id: SettingsTab; label: string }[] = [
   { id: 'notify', label: '通知' },
   { id: 'servers', label: 'アップロード先のサーバー' },
   { id: 'mcp', label: 'Claude との連携(MCP)' },
+  { id: 'hub', label: 'CC Hub' },
 ];
 
 export function SettingsScreen({ mobile = false }: { mobile?: boolean }) {
@@ -49,8 +50,115 @@ export function SettingsScreen({ mobile = false }: { mobile?: boolean }) {
         ))}
       </div>
       <div role="tabpanel">
-        {tab === 'notify' ? <NotifySection mobile={mobile} /> : tab === 'servers' ? <ServersSection /> : <McpSection />}
+        {tab === 'notify' ? <NotifySection mobile={mobile} /> : tab === 'servers' ? <ServersSection /> : tab === 'hub' ? <HubSection /> : <McpSection />}
       </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------- CC Hub(再起動の予約)
+
+const restartApi = {
+  get: async (): Promise<RestartStatus | undefined> => pick<RestartStatus>(await api('/api/restart'), 'restart'),
+  request: async (when: 'idle' | 'now', build: boolean): Promise<RestartStatus | undefined> =>
+    pick<RestartStatus>(await api('/api/restart', { when, build }), 'restart'),
+  cancel: async (): Promise<RestartStatus | undefined> => pick<RestartStatus>(await api('/api/restart/cancel', {}), 'restart'),
+};
+
+function HubSection() {
+  const [st, setSt] = useState<RestartStatus | null>(null);
+  const [build, setBuild] = useState(true);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const [confirmNow, setConfirmNow] = useState(false);
+  const load = () =>
+    restartApi
+      .get()
+      .then((s) => setSt(s ?? null))
+      .catch((e) => setErr(errText(e, '状態を取得できませんでした')));
+  useEffect(() => {
+    void load();
+  }, []);
+  // 待っている間 / 再起動中は状態を取り直す(再起動中は接続が切れて失敗するのでそのまま待つ)
+  useEffect(() => {
+    if (!st || st.state === 'idle') return;
+    const t = setInterval(() => void restartApi.get().then((s) => s && setSt(s)).catch(() => undefined), 5000);
+    return () => clearInterval(t);
+  }, [st?.state]);
+  const run = async (fn: () => Promise<RestartStatus | undefined>) => {
+    setBusy(true);
+    setErr(null);
+    try {
+      const s = await fn();
+      if (s) setSt(s);
+    } catch (e) {
+      setErr(errText(e, '失敗しました'));
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <div className="set-sec">
+      <section className="rp-card set-card" aria-labelledby="set-restart">
+        <div className="set-card-head">
+          <h3 id="set-restart" className="set-h">
+            CC Hub の再起動
+          </h3>
+          {st && st.state !== 'idle' && <span className="tag">{st.state === 'waiting' ? '作業が終わるのを待っています' : '再起動しています…'}</span>}
+        </div>
+        <p className="muted small">
+          CC Hub を新しいコードで再起動します。再起動すると CC Hub のセッションは一度止まり、自動で再開します。
+          「作業が終わったら再起動」は、実行中・承認待ちのセッションやアップロードが無くなった時点で再起動します。
+        </p>
+        {err && <div className="rp-alert error">{err}</div>}
+        {st?.error && st.state === 'idle' && <div className="rp-alert error">{st.error}</div>}
+        {st?.state === 'waiting' && (
+          <div className="rp-alert info">
+            {st.busy.length ? `待っている作業: ${st.busy.join('、')}` : 'まもなく再起動します'}
+            {st.requestedAt ? `(${fmtDate(st.requestedAt)} に予約)` : ''}
+          </div>
+        )}
+        {st?.state === 'restarting' && (
+          <div className="rp-alert info">
+            <Spinner /> 再起動しています。{st.build ? 'ビルドに 1〜2 分かかります。' : ''}終わったら画面を再読み込みしてください。
+          </div>
+        )}
+        <label className="check-inline set-inline">
+          <input type="checkbox" checked={build} onChange={(e) => setBuild(e.target.checked)} disabled={st?.state !== 'idle'} />
+          再起動の前にビルドする(コードを変えたあとはオン)
+        </label>
+        <div className="set-actions">
+          {st?.state === 'waiting' ? (
+            <button className="btn sm" disabled={busy} onClick={() => void run(restartApi.cancel)}>
+              予約を取り消す
+            </button>
+          ) : (
+            <>
+              <button className="btn sm danger" disabled={busy || !st || st.state !== 'idle'} onClick={() => setConfirmNow(true)}>
+                今すぐ再起動
+              </button>
+              <span className="spacer" />
+              <button className="btn primary sm" disabled={busy || !st || st.state !== 'idle'} onClick={() => void run(() => restartApi.request('idle', build))}>
+                作業が終わったら再起動
+              </button>
+            </>
+          )}
+        </div>
+      </section>
+      {confirmNow && (
+        <ConfirmModal
+          title="今すぐ再起動しますか?"
+          confirmLabel="再起動する"
+          danger
+          onClose={() => setConfirmNow(false)}
+          onConfirm={() => {
+            setConfirmNow(false);
+            void run(() => restartApi.request('now', build));
+          }}
+        >
+          <p>作業中のセッションも止まります(自動で再開しますが、途中の作業は中断されます)。</p>
+        </ConfirmModal>
+      )}
     </div>
   );
 }

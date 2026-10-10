@@ -14,7 +14,7 @@ export type MoreView = 'menu' | 'history' | 'skills' | 'mcp' | 'game' | 'setting
 /** デスクトップ中央の表示 */
 export type DeskView = 'home' | 'history' | 'session' | 'game' | 'repos' | 'prs' | 'skills' | 'mcp' | 'project' | 'settings';
 /** 設定画面のセクション */
-export type SettingsTab = 'notify' | 'servers' | 'mcp';
+export type SettingsTab = 'notify' | 'servers' | 'mcp' | 'hub';
 
 /** 中央の表示 → 上部ナビの大分類(スキル / MCP / ゲームはどれにも属さないので null) */
 export function topOf(v: DeskView): TopView | null {

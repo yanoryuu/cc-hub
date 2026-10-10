@@ -1,5 +1,6 @@
 // CC Hub デーモン: 複数の Claude Code セッション(PTY)を管理し、REST + WebSocket で UI に配信する。
 // CC Remote(server.js)の後継。待ち受けは 127.0.0.1 のみ(スマホは tailscale serve 経由)。
+import path from 'node:path';
 import type { HubState } from '@cc-hub/shared';
 import { loadConfig } from './config';
 import { Store } from './store/db';
@@ -21,6 +22,8 @@ import { NotifyService } from './notify/service';
 import { DeployService } from './deploy/service';
 import { InstructionsService } from './project/instructions';
 import { ReplyRouter } from './notify/replies';
+import { formatStatus } from './notify/status';
+import { RestartScheduler } from './restart/scheduler';
 import { createRunner } from './firebase/cli';
 import { FirebaseInfoService } from './firebase/info';
 
@@ -73,6 +76,23 @@ function main(): void {
   notify.setReplyHandler((req, io) => replies.handle(req, io));
   // アップロード / Firebase デプロイの承認ボタン(Bot が承認用チャンネルに投稿)
   notify.setDeployActions(deploy);
+  // 再起動の予約: CC Hub のセッションに作業中のものが無くなったら scripts/deploy.ps1 で再起動する
+  const restart = new RestartScheduler({
+    busy: () => [
+      ...Object.values(sessions.all())
+        .filter((s) => s.managed && ['running', 'awaiting_approval', 'starting'].includes(s.status) && (s.status === 'starting' || sessions.isLive(s.id)))
+        .map((s) => s.name),
+      ...Object.values(deploy.allJobs())
+        .filter((j) => j.state === 'planning' || j.state === 'uploading')
+        .map((j) => `アップロード: ${j.serverName}`),
+    ],
+    script: path.join(__dirname, '..', '..', '..', 'scripts', 'deploy.ps1'),
+    logFile: path.join(dir, 'restart.log'),
+  });
+  // Discord の /status
+  notify.setStatusProvider(() =>
+    formatStatus({ sessions: Object.values(sessions.all()), deploys: Object.values(deploy.allJobs()), restart: restart.status(), now: Date.now() }),
+  );
   /** cwd がリポジトリ(.base / worktree / 紐付けたクローン済みのフォルダ)の中なら repoId */
   const repoIdForCwd = (cwd: string): string | null => repos.repoForCwd(cwd)?.id ?? null;
   const startedAt = Date.now();
@@ -98,6 +118,7 @@ function main(): void {
     project,
     notify,
     deploy,
+    restart,
     firebase: firebaseInfo,
     instructions,
     mcp: {
@@ -154,6 +175,7 @@ function main(): void {
     github.stop();
     stopCapture();
     notify.stop();
+    restart.stop();
     wsHub.closeAll();
     server.close();
     setTimeout(() => process.exit(0), 500);

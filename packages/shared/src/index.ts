@@ -543,6 +543,21 @@ export interface DiscordBotStatus {
   error: string | null;
 }
 
+// ---------------------------------------------------------------- CC Hub の再起動の予約
+
+/** GET /api/restart */
+export interface RestartStatus {
+  /** idle = 予約なし / waiting = 作業が終わるのを待っている / restarting = 再起動を始めた */
+  state: 'idle' | 'waiting' | 'restarting';
+  /** 再起動の前にビルドするか */
+  build: boolean;
+  requestedAt: number | null;
+  /** 待っている作業(セッション名やアップロード) */
+  busy: string[];
+  /** 前回の再起動の失敗 */
+  error: string | null;
+}
+
 // ---------------------------------------------------------------- アップロード先のサーバー(レンタルサーバー FTP / SFTP)
 
 export type ServerProtocol = 'ftp' | 'ftps' | 'sftp';
@@ -710,6 +725,10 @@ export type ServerMessage =
 //          terminal: 新しい PowerShell で claude --resume(handedOff のセッションとして一覧に載る)
 //   GET  /api/fs/dirs?path=<フォルダ>                    → {ok, path, parent, dirs: DirEntry[]}(path 省略時はドライブ一覧とホーム。隠しフォルダ・node_modules 等は除く)
 //   Electron(デスクトップ)では window.ccHub.pickFolder(): Promise<string | null> で Windows のフォルダ選択ダイアログを使う
+//   --- CC Hub の再起動 ---
+//   GET  /api/restart                                    → {ok, restart: RestartStatus}
+//   POST /api/restart {when: 'idle' | 'now', build?: boolean}  予約(idle = 作業中のセッションが無くなったら)。build 既定 true
+//   POST /api/restart/cancel                             予約を取り消す
 //   --- 通知 ---
 //   GET  /api/notify/settings                            → {ok, settings: NotifySettings}
 //   PUT  /api/notify/settings  NotifySettings(discord[].webhookUrl に新しい URL を入れたときだけ更新。空なら据え置き)
