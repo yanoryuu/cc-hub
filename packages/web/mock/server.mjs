@@ -9,6 +9,7 @@ import { fileURLToPath } from 'node:url';
 import { WebSocketServer } from 'ws';
 import { createProjectMock } from './project.mjs';
 import { createHistoryMock } from './history.mjs';
+import { createOpsMock } from './ops.mjs';
 
 const PORT = Number(process.env.MOCK_PORT || 7862);
 const PIN = '1234';
@@ -732,6 +733,7 @@ function mcpServers() {
     c('claude.ai Box', 'https://mcp.box.com', 'needs_auth', NA),
     c('claude.ai Canva', 'https://mcp.canva.com/mcp', 'needs_auth', NA),
     c('claude.ai HubSpot', 'https://app.hubspot.com/mcp/v1/http', 'needs_auth', NA),
+    c('cc-hub', 'http://127.0.0.1:7862/mcp (HTTP)', 'connected', 'Connected'),
     c('image-gen', 'node C:\\Users\\yanor\\mcp\\image-gen\\dist\\index.js', 'connected', 'Connected'),
     c('touchdesigner', 'npx -y touchdesigner-mcp-server@latest --stdio', 'connected', 'Connected'),
     c('unity-editor-mcp', 'node D:\\Unity\\Tools\\unity-editor-mcp\\build\\index.js', mcpRound % 2 ? 'connected' : 'connected', 'Connected'),
@@ -748,7 +750,7 @@ function broadcast(topic, msg) {
   for (const c of clients) if (c.topics.has(topic)) send(c, msg);
 }
 function fullState() {
-  return { sessions, agents, repos, worktrees, prs, usage, daemon: { version: '0.0.0-mock', startedAt: now, port: PORT } };
+  return { sessions, agents, repos, worktrees, prs, servers: ops.servers, deploys: ops.deploys, usage, daemon: { version: '0.0.0-mock', startedAt: now, port: PORT } };
 }
 function upsertSession(s) {
   s.lastEventAt = Date.now();
@@ -813,6 +815,7 @@ const server = http.createServer(async (req, res) => {
 
   if (p === '/api/state') return json(res, 200, fullState());
   // ---------------- フォルダ(プロジェクト)ごとの管理画面
+  if (await ops.handle(req, res, url)) return;
   if (await project.handle(req, res, url)) return;
   if (p === '/api/projects')
     return json(res, 200, {
@@ -1439,6 +1442,7 @@ setInterval(() => {
 
 // 管理画面(/api/project, /api/git/*)と、トークン数の疑似増加
 const project = createProjectMock({ sessions, worktrees, repos, prs, upsertSession, upsertWt, json, readBody, REPO_WEB, mkTokens });
+const ops = createOpsMock({ broadcast, sessions, json, readBody, REPO_WEB, requesterId: s2.id });
 const history = createHistoryMock({ sessions, upsertSession, json, readBody, mkSession, termBuf, linkIds: [s1.id, s3.id, s5.id, s7.id] });
 
 server.listen(PORT, '127.0.0.1', () => {

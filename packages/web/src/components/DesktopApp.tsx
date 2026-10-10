@@ -8,7 +8,9 @@ import { SessionList, SortControl } from './SessionList';
 import { SessionPane } from './SessionPane';
 import { AgentTree } from './AgentTree';
 import { SessionDetails } from './SessionDetails';
-import { ApprovalList } from './Approval';
+import { ApprovalList, useApprovalCount } from './Approval';
+import { useClaudeDeploysInFlight } from './Deploy';
+import { SettingsScreen } from './Settings';
 import { StatusBadge, WhereTag } from './common';
 import { GameView } from './GameView';
 import { RegisterRepoForm, RepoListPage, RepoPage, SidebarRepos } from './Repos';
@@ -27,7 +29,8 @@ function ApprovalDrawer() {
   const open = useHub((s) => s.approvalDrawer);
   const setOpen = useHub((s) => s.setApprovalDrawer);
   const openSession = useHub((s) => s.open);
-  const pending = useHub((s) => Object.values(s.sessions).filter((x) => x.approval).length);
+  // Claude のアップロード申請と、承認後に進んでいるアップロードも数える(進み具合を見ている間は閉じない)
+  const pending = useApprovalCount() + useClaudeDeploysInFlight().filter((d) => d.state !== 'done' && d.state !== 'failed').length;
   // 最後の承認に答えて空になったら、少し間を置いて自動で閉じる(空のドロワーが出しっぱなしになるのを防ぐ)
   useEffect(() => {
     if (!open || pending > 0) return;
@@ -197,6 +200,10 @@ export function DesktopApp() {
           ) : view === 'home' || (view === 'repos' && repoRoute.page === 'list') ? (
             <div className="repo-scroll">
               <HomeScreen />
+            </div>
+          ) : view === 'settings' ? (
+            <div className="repo-scroll">
+              <SettingsScreen />
             </div>
           ) : view === 'history' ? (
             <HistoryView />

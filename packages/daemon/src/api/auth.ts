@@ -92,6 +92,19 @@ export class Auth {
     return false;
   }
 
+  /** Authorization: Bearer <ローカルトークン> か(デスクトップアプリの識別に使う。Cookie は含めない) */
+  isLocalBearer(req: http.IncomingMessage): boolean {
+    const bearer = /^Bearer\s+(.+)$/i.exec(String(req.headers.authorization || ''))?.[1]?.trim();
+    return !!bearer && safeEqual(bearer, this.localToken);
+  }
+
+  /** MCP: Authorization: Bearer <mcp トークン> かつ tailscale serve 経由(プロキシヘッダ付き)ではないこと */
+  isMcp(req: http.IncomingMessage, mcpToken: string): boolean {
+    if (req.headers['x-forwarded-for'] || req.headers['tailscale-user-login'] || req.headers['x-forwarded-host']) return false;
+    const bearer = /^Bearer\s+(.+)$/i.exec(String(req.headers.authorization || ''))?.[1]?.trim();
+    return !!bearer && !!mcpToken && safeEqual(bearer, mcpToken);
+  }
+
   /** ingest: トークン一致 かつ tailscale serve 経由(プロキシヘッダ付き)ではないこと */
   isIngest(req: http.IncomingMessage): boolean {
     if (req.headers['x-forwarded-for'] || req.headers['tailscale-user-login']) return false;

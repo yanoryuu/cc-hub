@@ -10,6 +10,7 @@ import { MobileApp } from './components/MobileApp';
 import { NewSessionDialog } from './components/NewSessionDialog';
 import { Toasts } from './components/Toasts';
 import { CloneRepoModal } from './components/Home';
+import { DeployDialog } from './components/Deploy';
 
 // 401 を受けたら PIN 画面へ
 setNeedAuthHandler(() => useHub.getState().setAuth('need_pin'));
@@ -32,6 +33,45 @@ export function App() {
     });
     return () => document.removeEventListener('visibilitychange', onVis);
   }, []);
+
+  // 表示中のセッションと画面のフォーカスをデーモンに伝える(見ているセッションの Windows / Discord 通知を抑えるため)
+  const viewing = useHub((s) => {
+    const mobile = !desktop;
+    const shown = mobile ? s.mobileTab === 'sessions' && s.mobileDetail : s.deskView === 'session';
+    return shown ? s.selectedId : null;
+  });
+  useEffect(() => {
+    if (auth !== 'ok') return;
+    let last = '';
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const send = () => {
+      const focused = document.visibilityState === 'visible' && document.hasFocus();
+      const body = { sessionId: viewing, focused };
+      const key = JSON.stringify(body);
+      if (key === last) return;
+      last = key;
+      void fetch('/api/client/focus', {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+        body: key,
+      }).catch(() => {});
+    };
+    const schedule = () => {
+      if (timer) clearTimeout(timer);
+      timer = setTimeout(send, 300);
+    };
+    send();
+    window.addEventListener('focus', schedule);
+    window.addEventListener('blur', schedule);
+    document.addEventListener('visibilitychange', schedule);
+    return () => {
+      if (timer) clearTimeout(timer);
+      window.removeEventListener('focus', schedule);
+      window.removeEventListener('blur', schedule);
+      document.removeEventListener('visibilitychange', schedule);
+    };
+  }, [auth, viewing]);
 
   // PR 一覧: 画面にフォーカスが戻ったら取り直す(30 秒に 1 回まで)
   useEffect(() => {
@@ -56,6 +96,7 @@ export function App() {
       {desktop ? <DesktopApp /> : <MobileApp />}
       <NewSessionDialog />
       <CloneRepoModal />
+      <DeployDialog />
       <Toasts />
     </>
   );

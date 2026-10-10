@@ -1,6 +1,6 @@
 // アプリ全体の状態(zustand)。デーモンが唯一の正なので、ここはその写し + UI 状態だけ。
 import { create } from 'zustand';
-import type { AgentNode, HubState, NotifyEvent, PrInfo, RepoInfo, SessionInfo, SessionStatus, Usage, WorktreeInfo } from '@cc-hub/shared';
+import type { AgentNode, DeployJob, HubState, NotifyEvent, PrInfo, RepoInfo, ServerInfo, SessionInfo, SessionStatus, Usage, WorktreeInfo } from '@cc-hub/shared';
 import { resolveNotifyPr } from './pr';
 import { readLocal, writeLocal } from './util';
 
@@ -10,9 +10,11 @@ export type MobileTab = 'projects' | 'sessions' | 'approvals' | 'prs' | 'more';
 export type TopView = 'projects' | 'sessions' | 'history' | 'prs';
 export const TOP_VIEW_LABEL: Record<TopView, string> = { projects: 'プロジェクト', sessions: 'セッション', history: '履歴', prs: 'PR' };
 /** モバイル「その他」タブの中身 */
-export type MoreView = 'menu' | 'history' | 'skills' | 'mcp' | 'game';
+export type MoreView = 'menu' | 'history' | 'skills' | 'mcp' | 'game' | 'settings';
 /** デスクトップ中央の表示 */
-export type DeskView = 'home' | 'history' | 'session' | 'game' | 'repos' | 'prs' | 'skills' | 'mcp' | 'project';
+export type DeskView = 'home' | 'history' | 'session' | 'game' | 'repos' | 'prs' | 'skills' | 'mcp' | 'project' | 'settings';
+/** 設定画面のセクション */
+export type SettingsTab = 'notify' | 'servers' | 'mcp';
 
 /** 中央の表示 → 上部ナビの大分類(スキル / MCP / ゲームはどれにも属さないので null) */
 export function topOf(v: DeskView): TopView | null {
@@ -48,7 +50,30 @@ export interface ProjectRoute {
   cwd: string | null;
 }
 /** 管理画面のタブ */
-export type ProjectTab = 'overview' | 'sessions' | 'worktrees' | 'artifacts' | 'prs' | 'git' | 'tokens' | 'history' | 'settings';
+export type ProjectTab =
+  | 'overview'
+  | 'sessions'
+  | 'worktrees'
+  | 'artifacts'
+  | 'prs'
+  | 'git'
+  | 'tokens'
+  | 'history'
+  | 'instructions'
+  | 'publish'
+  | 'settings';
+
+/** アップロードのダイアログ(サーバーのカード / 管理画面の「公開」/ 承認カードから開く) */
+export interface DeployDialogState {
+  /** 最初に選んでおくサーバー(なければ選ばせる) */
+  serverId: string | null;
+  /** アップロード元の初期値(なければサーバーの既定) */
+  localDir: string | null;
+  /** 既存のアップロードを見る(進み具合 / 結果) */
+  deployId: string | null;
+  /** 管理画面の「公開」から開いたときのプロジェクトのフォルダ(アップロード元の初期値に使う) */
+  projectPath: string | null;
+}
 
 export interface Toast {
   id: number;
@@ -64,6 +89,10 @@ interface Store {
   worktrees: Record<string, WorktreeInfo>;
   /** フェーズ 3。古いデーモンは返さないので {} */
   prs: Record<string, PrInfo>;
+  /** アップロード先のサーバー(古いデーモンは返さないので {}) */
+  servers: Record<string, ServerInfo>;
+  /** アップロード(申請中 / 実行中 / 最近のもの) */
+  deploys: Record<string, DeployJob>;
   usage: Usage | null;
   daemon: HubState['daemon'] | null;
   /** 初回の状態を受け取ったか */
@@ -94,6 +123,8 @@ interface Store {
   newSessionCwd: string | null;
   /** 「GitHub からクローンして追加」のダイアログ */
   cloneOpen: boolean;
+  settingsTab: SettingsTab;
+  deployDialog: DeployDialogState | null;
   toasts: Toast[];
 
   setAuth(a: AuthState): void;
@@ -109,6 +140,15 @@ interface Store {
   removeWorktree(id: string): void;
   upsertPr(p: PrInfo): void;
   removePr(id: string): void;
+  upsertServer(s: ServerInfo): void;
+  removeServer(id: string): void;
+  upsertDeploy(d: DeployJob): void;
+  /** 設定画面を開く(デスクトップ: 中央 / モバイル: その他 → 設定) */
+  openSettings(tab?: SettingsTab): void;
+  setSettingsTab(t: SettingsTab): void;
+  openDeployDialog(d: Partial<DeployDialogState> | null): void;
+  /** 承認キューを開く(デスクトップ: ドロワー / モバイル: 承認タブ) */
+  openApprovals(): void;
   setUsage(u: Usage): void;
   select(id: string | null): void;
   /** セッションを開く(モバイルでは詳細画面へ遷移、デスクトップではセッション表示へ) */
@@ -157,6 +197,8 @@ export const useHub = create<Store>((set, get) => ({
   repos: {},
   worktrees: {},
   prs: {},
+  servers: {},
+  deploys: {},
   usage: null,
   daemon: null,
   loaded: false,
@@ -180,6 +222,8 @@ export const useHub = create<Store>((set, get) => ({
   newSessionRepo: null,
   newSessionCwd: null,
   cloneOpen: false,
+  settingsTab: 'notify',
+  deployDialog: null,
   toasts: [],
 
   setAuth: (auth) => set({ auth }),
@@ -198,6 +242,8 @@ export const useHub = create<Store>((set, get) => ({
         repos,
         worktrees: s.worktrees ?? {},
         prs: s.prs ?? {},
+        servers: s.servers ?? {},
+        deploys: s.deploys ?? {},
         usage: s.usage,
         daemon: s.daemon,
         loaded: true,
@@ -260,6 +306,35 @@ export const useHub = create<Store>((set, get) => ({
       delete prs[id];
       return { prs };
     }),
+  upsertServer: (sv) => set((st) => ({ servers: { ...st.servers, [sv.id]: sv } })),
+  removeServer: (id) =>
+    set((st) => {
+      if (!st.servers[id]) return {};
+      const servers = { ...st.servers };
+      delete servers[id];
+      return { servers };
+    }),
+  upsertDeploy: (d) => set((st) => ({ deploys: { ...st.deploys, [d.id]: d } })),
+  openSettings: (tab) =>
+    set((st) => ({
+      settingsTab: tab ?? st.settingsTab,
+      ...deskNav('settings', st.topView),
+      moreView: 'settings',
+      mobileTab: 'more',
+      mobileProject: false,
+    })),
+  setSettingsTab: (settingsTab) => set({ settingsTab }),
+  openDeployDialog: (d) =>
+    set({
+      deployDialog: d
+        ? { serverId: d.serverId ?? null, localDir: d.localDir ?? null, deployId: d.deployId ?? null, projectPath: d.projectPath ?? null }
+        : null,
+    }),
+  openApprovals: () => {
+    const mobile = typeof window !== 'undefined' && window.innerWidth < 900;
+    if (mobile) set({ mobileTab: 'approvals', mobileProject: false, mobileDetail: false });
+    else set({ approvalDrawer: true });
+  },
   setUsage: (usage) => set({ usage }),
   select: (selectedId) => set({ selectedId }),
   open: (id) =>
@@ -357,11 +432,11 @@ export const useHub = create<Store>((set, get) => ({
     }
     const id = toastSeq++;
     // 同じセッションの古い通知は置き換える(承認待ち → 入力待ち と積み重ならないように)
-    // PR の通知とセッションの通知は別枠(PR の CI 通知で承認待ちの通知が消えないように)
-    const isPr = event.kind === 'pr';
+    // PR / アップロードの通知とセッションの通知は別枠(PR の CI 通知で承認待ちの通知が消えないように)
+    const lane = (k: NotifyEvent['kind']) => (k === 'pr' || k === 'deploy' ? k : 'session');
     set((s) => ({
       toasts: [
-        ...s.toasts.filter((t) => t.event.sessionId !== event.sessionId || (t.event.kind === 'pr') !== isPr).slice(-2),
+        ...s.toasts.filter((t) => t.event.sessionId !== event.sessionId || lane(t.event.kind) !== lane(event.kind)).slice(-2),
         { id, event },
       ],
     }));

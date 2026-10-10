@@ -41,7 +41,7 @@ export interface ApiOptions {
   /** true なら 401 時に再ログインを待たずに AuthError を投げる */
   noRetry?: boolean;
   /** 省略時は body があれば POST、なければ GET */
-  method?: 'GET' | 'POST' | 'PATCH' | 'DELETE';
+  method?: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
 }
 
 export async function api<T = any>(path: string, body?: unknown, opts: ApiOptions = {}): Promise<T> {

@@ -114,6 +114,8 @@ export interface LoadedConfig {
   config: HubConfig;
   localToken: string;
   ingestToken: string;
+  /** CC Hub 自身の MCP サーバー(/mcp)のトークン(integrations/mcp/install.js が claude mcp add に渡す) */
+  mcpToken: string;
 }
 
 export function loadConfig(): LoadedConfig {
@@ -152,5 +154,6 @@ export function loadConfig(): LoadedConfig {
     config,
     localToken: readOrCreateToken(path.join(dir, 'local-token')),
     ingestToken: readOrCreateToken(path.join(dir, 'ingest-token')),
+    mcpToken: readOrCreateToken(path.join(dir, 'mcp-token')),
   };
 }

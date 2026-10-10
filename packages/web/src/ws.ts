@@ -72,6 +72,15 @@ function handle(msg: ServerMessage): void {
     case 'pr.remove':
       st.removePr(msg.id);
       break;
+    case 'server.upsert':
+      st.upsertServer(msg.server);
+      break;
+    case 'server.remove':
+      st.removeServer(msg.id);
+      break;
+    case 'deploy.upsert':
+      st.upsertDeploy(msg.deploy);
+      break;
     case 'term.snapshot':
       emitTerm(msg.sid, { t: 'snapshot', data: msg.data, cols: msg.cols, rows: msg.rows });
       break;

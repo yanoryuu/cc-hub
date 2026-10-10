@@ -121,6 +121,10 @@ function createWindow(): void {
   });
   if (b.max) win.maximize();
   win.once('ready-to-show', () => win?.show());
+  // 前面かどうかをデーモンに知らせる(表示中のセッションの通知を Discord などにも出さないため。セッションは画面側が送る)
+  win.on('focus', () => reportFocus(true));
+  win.on('blur', () => reportFocus(false));
+  win.on('hide', () => reportFocus(false));
   win.on('resize', saveBounds);
   win.on('move', saveBounds);
   win.on('close', (e) => {
@@ -155,11 +159,26 @@ function createTray(): void {
   tray.on('click', showWindow);
 }
 
+/** POST /api/client/focus {focused}(失敗は無視) */
+function reportFocus(focused: boolean): void {
+  const body = JSON.stringify({ focused });
+  const req = http.request({
+    host: '127.0.0.1', port, path: '/api/client/focus', method: 'POST', timeout: 2000,
+    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) },
+  }, (res) => res.resume());
+  req.on('error', () => { /* 無視 */ });
+  req.on('timeout', () => req.destroy());
+  req.end(body);
+}
+
 // ---- 通知(WS) ----
 function connectWs(): void {
   if (ws) { try { ws.removeAllListeners(); ws.close(); } catch { /* 無視 */ } ws = null; }
   if (wsTimer) { clearTimeout(wsTimer); wsTimer = null; }
-  const sock = new WebSocket(`ws://127.0.0.1:${port}/ws`, { headers: { Authorization: `Bearer ${token}` } });
+  // client=desktop: デーモンはこの接続がある間だけ Windows 通知をアプリに任せる(無ければデーモンが自分で出す)
+  const sock = new WebSocket(`ws://127.0.0.1:${port}/ws?client=desktop`, {
+    headers: { Authorization: `Bearer ${token}`, 'X-CC-Hub-Client': 'desktop' },
+  });
   ws = sock;
   sock.on('open', () => sock.send(JSON.stringify({ t: 'sub', topics: ['state'] })));
   sock.on('message', (data) => {

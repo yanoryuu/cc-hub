@@ -1,0 +1,178 @@
+// NotifyService: 通知イベント(emitNotify)を設定に従って Windows 通知 / Discord に振り分ける。
+// - 種類(topic)→ チャンネルごとの絞り込み(種類・リポジトリ)→ 間引き(セッション + 種類ごとに throttleSeconds)
+//   → 抑制(アプリが前面でそのセッションを表示中なら Windows / Discord とも出さない)
+// - Windows: デスクトップアプリが WS 接続中(client=desktop)ならアプリに出させる(bus 'notify.desktop')。
+//   未接続ならデーモンが node-notifier で出す
+// - Discord: 暗号化して保存した Webhook URL を復号して送る(復号した URL は 10 分だけメモリに置く)
+import type { NotifyEvent, NotifySettings, NotifyTopic, SessionInfo } from '@cc-hub/shared';
+import { bus } from '../bus';
+import type { Store } from '../store/db';
+import type { SecretBox } from '../dpapi';
+import { HttpError } from '../util';
+import type { NotifyMeta } from './emit';
+import { DiscordSender, buildPayload } from './discord';
+import { Throttle, route, throttleKey, topicOf, type FocusState, type RouteDecision } from './topic';
+import { loadStored, mergeUpdate, toPublic, type StoredNotifySettings } from './settings';
+import { nodeToaster, type Toaster } from './toast';
+
+const SETTINGS_KEY = 'notify';
+const URL_CACHE_MS = 10 * 60_000;
+
+export interface NotifyDeps {
+  store: Store;
+  secrets: SecretBox;
+  session: (id: string) => SessionInfo | undefined;
+  /** デスクトップアプリの WS 接続数 */
+  desktopClients: () => number;
+  toaster?: Toaster;
+  sender?: DiscordSender;
+}
+
+export class NotifyService {
+  private settings: StoredNotifySettings;
+  private readonly throttle = new Throttle();
+  private focus: FocusState | null = null;
+  private readonly urlCache = new Map<string, { url: string; enc: string; at: number }>();
+  private readonly toaster: Toaster;
+  private readonly sender: DiscordSender;
+  /** 直近の振り分け結果(検証・デバッグ用。GET /api/notify/settings?debug=1 で返す) */
+  readonly recent: { ts: number; title: string; topic: NotifyTopic | null; decision: RouteDecision | { skipped: string } }[] = [];
+  private readonly onNotify = (ev: NotifyEvent, meta: NotifyMeta) => {
+    this.dispatch(ev, meta ?? {}).catch((e) => console.warn(`[notify] 振り分けに失敗: ${(e as Error).message}`));
+  };
+
+  constructor(private readonly d: NotifyDeps) {
+    this.settings = loadStored(d.store.getSetting(SETTINGS_KEY));
+    this.toaster = d.toaster ?? nodeToaster;
+    this.sender = d.sender ?? new DiscordSender();
+    bus.on('notify', this.onNotify);
+  }
+
+  stop(): void {
+    bus.off('notify', this.onNotify);
+  }
+
+  // ================================================================ 設定
+  getSettings(): NotifySettings {
+    return toPublic(this.settings);
+  }
+
+  async putSettings(body: unknown): Promise<NotifySettings> {
+    const next = await mergeUpdate(this.settings, body, (p) => this.d.secrets.protect(p));
+    this.settings = next;
+    this.d.store.setSetting(SETTINGS_KEY, next);
+    // 消えた / 変わった送信先の復号キャッシュを捨てる
+    for (const [id, c] of this.urlCache) if (!next.discord.some((t) => t.id === id && t.webhookEnc === c.enc)) this.urlCache.delete(id);
+    return this.getSettings();
+  }
+
+  // ================================================================ 表示中のセッション(抑制用)
+  /** POST /api/client/focus {sessionId?, focused?}。指定された項目だけ更新する */
+  setFocus(body: any): FocusState {
+    const cur = this.focus ?? { sessionId: null, focused: false, at: 0 };
+    const next: FocusState = { ...cur, at: Date.now() };
+    if (body && 'sessionId' in body) next.sessionId = typeof body.sessionId === 'string' && body.sessionId ? body.sessionId : null;
+    if (body && 'focused' in body) next.focused = body.focused === true;
+    this.focus = next;
+    return { ...next };
+  }
+
+  // ================================================================ 振り分け
+  private async dispatch(ev: NotifyEvent, meta: NotifyMeta): Promise<void> {
+    const topic = topicOf(ev, meta);
+    const info = ev.sessionId ? this.d.session(ev.sessionId) : undefined;
+    const repoId = meta.repoId ?? info?.repoId ?? (ev.prId ? ev.prId.replace(/#\d+$/, '') : null);
+    const now = Date.now();
+    const record = (decision: RouteDecision | { skipped: string }) => {
+      this.recent.unshift({ ts: now, title: ev.title, topic, decision });
+      this.recent.length = Math.min(this.recent.length, 50);
+    };
+    if (!topic) return record({ skipped: '対象外の種類' });
+    const decision = route({
+      event: ev,
+      topic,
+      repoId,
+      settings: toPublic(this.settings),
+      focus: this.focus,
+      desktopConnected: this.d.desktopClients() > 0,
+      now,
+    });
+    if (decision.skipped) return record(decision);
+    if (!this.throttle.allow(throttleKey(ev, topic), this.settings.throttleSeconds, now)) return record({ skipped: '間引き' });
+    record(decision);
+    if (decision.windows) this.showWindows(ev, decision.windows);
+    for (const id of decision.discord) {
+      const t = this.settings.discord.find((x) => x.id === id);
+      if (!t) continue;
+      const payload = buildPayload(ev, {
+        topic,
+        sessionName: info?.name ?? meta.sessionName ?? null,
+        repoId,
+        branch: meta.branch ?? info?.branch ?? null,
+        prUrl: meta.prUrl ?? null,
+        url: meta.url ?? null,
+        failed: ev.kind === 'deploy' && /失敗/.test(ev.title),
+      });
+      void this.sendDiscord(t.id, payload).then((r) => {
+        if (!r.ok) console.warn(`[notify] Discord(${t.name})への送信に失敗: ${r.error}`);
+      });
+    }
+  }
+
+  private showWindows(ev: NotifyEvent, via: 'app' | 'daemon'): void {
+    if (via === 'app') {
+      bus.emit('notify.desktop', ev);
+      return;
+    }
+    console.log(`[notify] Windows 通知(デーモン): ${ev.title}`);
+    void this.toaster({ title: ev.title, message: ev.body });
+  }
+
+  private async webhookUrl(id: string): Promise<string> {
+    const t = this.settings.discord.find((x) => x.id === id);
+    if (!t) throw new HttpError(404, 'Discord の送信先が見つかりません');
+    const c = this.urlCache.get(id);
+    if (c && c.enc === t.webhookEnc && Date.now() - c.at < URL_CACHE_MS) return c.url;
+    const url = await this.d.secrets.unprotect(t.webhookEnc);
+    this.urlCache.set(id, { url, enc: t.webhookEnc, at: Date.now() });
+    return url;
+  }
+
+  private async sendDiscord(id: string, payload: unknown): Promise<{ ok: boolean; error?: string }> {
+    let url: string;
+    try {
+      url = await this.webhookUrl(id);
+    } catch (e) {
+      return { ok: false, error: `Webhook URL を復号できません: ${(e as Error).message}` };
+    }
+    return this.sender.send(id, url, payload);
+  }
+
+  // ================================================================ テスト送信
+  /** POST /api/notify/test {channel, targetId?}。設定の絞り込み・間引きは無視して送る */
+  async test(channel: unknown, targetId: unknown): Promise<{ ok: boolean; message: string; via?: string }> {
+    const ev: NotifyEvent = {
+      kind: 'done',
+      sessionId: '',
+      title: 'CC Hub のテスト通知',
+      body: 'この通知が見えていれば設定は正しく動いています。',
+      ts: Date.now(),
+    };
+    if (channel === 'windows') {
+      const via = this.d.desktopClients() > 0 ? 'app' : 'daemon';
+      this.showWindows(ev, via);
+      return { ok: true, message: via === 'app' ? 'デスクトップアプリに通知を出させました' : 'デーモンから Windows 通知を出しました', via };
+    }
+    if (channel === 'discord') {
+      const targets = typeof targetId === 'string' && targetId ? this.settings.discord.filter((t) => t.id === targetId) : this.settings.discord;
+      if (!targets.length) throw new HttpError(404, 'Discord の送信先がありません');
+      const errors: string[] = [];
+      for (const t of targets) {
+        const r = await this.sendDiscord(t.id, buildPayload(ev, { topic: 'test' }));
+        if (!r.ok) errors.push(`${t.name}: ${r.error}`);
+      }
+      return errors.length ? { ok: false, message: errors.join(' / ') } : { ok: true, message: `${targets.length} 件の送信先に送りました` };
+    }
+    throw new HttpError(400, "channel は 'windows' か 'discord' です");
+  }
+}

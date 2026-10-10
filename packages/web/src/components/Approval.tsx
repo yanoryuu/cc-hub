@@ -4,6 +4,8 @@ import type { SessionInfo } from '@cc-hub/shared';
 import { sessionApi } from '../api';
 import { optionTone, optionValue } from '../util';
 import { useHub } from '../store';
+import { usePendingDeploys } from '../ops';
+import { DeployRequestCard, useClaudeDeploysInFlight } from './Deploy';
 
 export function ApprovalButtons({ session }: { session: SessionInfo }) {
   const [busy, setBusy] = useState<string | null>(null);
@@ -92,14 +94,32 @@ export function useApprovalSessions(): SessionInfo[] {
     .sort((a, b) => a.lastEventAt - b.lastEventAt);
 }
 
+/** 承認待ちの件数(セッションの承認 + Claude からのアップロード申請) */
+export function useApprovalCount(): number {
+  return useApprovalSessions().length + usePendingDeploys().length;
+}
+
 export function ApprovalList({ onOpen }: { onOpen: (id: string) => void }) {
   const list = useApprovalSessions();
-  if (list.length === 0) return <div className="empty">承認待ちはありません</div>;
+  const deploys = usePendingDeploys();
+  const running = useClaudeDeploysInFlight();
+  if (list.length === 0 && deploys.length === 0 && running.length === 0) return <div className="empty">承認待ちはありません</div>;
   return (
     <div className="appr-list">
+      {deploys.map((d) => (
+        <DeployRequestCard key={d.id} d={d} />
+      ))}
       {list.map((s) => (
         <ApprovalCard key={s.id} session={s} onOpen={() => onOpen(s.id)} />
       ))}
+      {running.length > 0 && (
+        <>
+          <h3 className="sec-title appr-sub">承認したアップロード</h3>
+          {running.map((d) => (
+            <DeployRequestCard key={d.id} d={d} />
+          ))}
+        </>
+      )}
     </div>
   );
 }

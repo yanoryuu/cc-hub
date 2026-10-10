@@ -26,6 +26,9 @@ import { ArtifactsTab } from './ProjectArtifacts';
 import { GitTab } from './ProjectGit';
 import { TokenTotals, TokensTab } from './ProjectTokens';
 import { HistoryView } from './History';
+import { InstructionsTab } from './Instructions';
+import { PublishTab } from './Deploy';
+import { lineTone, useInstructionsLines } from '../ops';
 
 const TABS: { id: ProjectTab; label: string }[] = [
   { id: 'overview', label: '概要' },
@@ -36,6 +39,8 @@ const TABS: { id: ProjectTab; label: string }[] = [
   { id: 'git', label: 'Git' },
   { id: 'tokens', label: 'トークン' },
   { id: 'history', label: '履歴' },
+  { id: 'instructions', label: '共通の指示' },
+  { id: 'publish', label: '公開' },
   { id: 'settings', label: '設定' },
 ];
 
@@ -71,6 +76,7 @@ function ProjectDashboard({ route, mobile }: { route: ProjectRoute; mobile: bool
   const sessions = useProjectSessions(route, data);
   const repo = route.repoId ? repos[route.repoId] : undefined;
   const [gitTarget, setGitTarget] = useState('');
+  const insLines = useInstructionsLines(route);
 
   const tokens = useMemo(() => computeLiveTokens(sessions, data?.tokens), [sessions, data?.tokens]);
   const active = sessions.filter((s) => !isFinished(s, worktrees));
@@ -101,6 +107,7 @@ function ProjectDashboard({ route, mobile }: { route: ProjectRoute; mobile: bool
 
   const tabs = TABS.filter((t) => t.id !== 'settings' || !!route.repoId);
   const badge = (id: ProjectTab): string | null => {
+    if (id === 'instructions') return insLines ? String(insLines) : null;
     if (!data) return null;
     if (id === 'sessions') return String(active.length);
     if (id === 'artifacts') return String(data.artifacts.length);
@@ -143,7 +150,7 @@ function ProjectDashboard({ route, mobile }: { route: ProjectRoute; mobile: bool
             onClick={() => setTab(t.id)}
           >
             {t.label}
-            {b !== null && <span className="pj-tab-n">{b}</span>}
+            {b !== null && <span className={`pj-tab-n ${t.id === 'instructions' && insLines ? `ins-n t-${lineTone(insLines)}` : ''}`}>{b}</span>}
           </button>
         );
       })}
@@ -154,6 +161,10 @@ function ProjectDashboard({ route, mobile }: { route: ProjectRoute; mobile: bool
   if (tab === 'history') {
     // リポジトリはベースディレクトリ(worktree を含む)配下の会話
     body = <HistoryView cwd={repo?.baseDir ?? route.cwd ?? path} mobile={mobile} embedded />;
+  } else if (tab === 'instructions') {
+    body = <InstructionsTab route={route} mobile={mobile} />;
+  } else if (tab === 'publish') {
+    body = <PublishTab path={repo?.baseDir ?? path} />;
   } else if (tab === 'settings' && route.repoId) {
     body = <RepoPage id={route.repoId} mobile={mobile} embedded />;
   } else if (!data) {

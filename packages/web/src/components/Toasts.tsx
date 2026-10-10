@@ -18,7 +18,13 @@ export function Toasts() {
             className="toast-main"
             onClick={() => {
               const st = useHub.getState();
-              if (t.event.kind === 'pr') {
+              if (t.event.kind === 'deploy') {
+                // アップロード: 申請があれば承認キュー、なければ最新のアップロードの詳細
+                const list = Object.values(st.deploys).sort((a, b) => b.createdAt - a.createdAt);
+                if (list.some((d) => d.state === 'pending_approval')) st.openApprovals();
+                else if (list[0]) st.openDeployDialog({ deployId: list[0].id });
+                else st.openSettings('servers');
+              } else if (t.event.kind === 'pr') {
                 // PR の通知は PR を開く(見つからなければ一覧)
                 openPr(resolveNotifyPr(t.event, st.prs, st.sessions));
               } else if (st.sessions[t.event.sessionId]) open(t.event.sessionId);

@@ -5,7 +5,7 @@
 import type http from 'node:http';
 import type { Duplex } from 'node:stream';
 import { WebSocketServer, WebSocket } from 'ws';
-import type { ClientMessage, HubState, ServerMessage, Topic } from '@cc-hub/shared';
+import type { ClientMessage, HubState, NotifyEvent, ServerMessage, Topic } from '@cc-hub/shared';
 import { bus } from '../bus';
 import type { Auth } from './auth';
 import type { SessionManager } from '../session/manager';
@@ -13,6 +13,8 @@ import type { SessionManager } from '../session/manager';
 interface Client {
   ws: WebSocket;
   state: boolean;
+  /** デスクトップアプリ(Bearer ローカルトークン + client=desktop)。Windows 通知はこのクライアントに出させる */
+  desktop: boolean;
   /** 購読中のセッション。値が配列ならスナップショット送信待ち(その間の term.data を溜める) */
   terms: Map<string, ServerMessage[] | null>;
 }
@@ -28,7 +30,13 @@ export class WsHub {
   ) {
     bus.on('state', (msg: ServerMessage) => {
       const text = JSON.stringify(msg);
-      for (const c of this.clients) if (c.state) this.sendRaw(c, text);
+      // 通知はデスクトップアプリには送らない(Windows 通知を出すかは NotifyService が決めて 'notify.desktop' で送る)
+      const isNotify = msg.t === 'notify';
+      for (const c of this.clients) if (c.state && !(isNotify && c.desktop)) this.sendRaw(c, text);
+    });
+    bus.on('notify.desktop', (event: NotifyEvent) => {
+      const text = JSON.stringify({ t: 'notify', event } satisfies ServerMessage);
+      for (const c of this.clients) if (c.desktop && c.state) this.sendRaw(c, text);
     });
     bus.on('term', (sid: string, msg: ServerMessage) => {
       let text: string | null = null;
@@ -63,11 +71,22 @@ export class WsHub {
       socket.destroy();
       return;
     }
-    this.wss.handleUpgrade(req, socket, head, (ws) => this.onConnection(ws));
+    // デスクトップアプリ: ?client=desktop か X-CC-Hub-Client: desktop、かつ Authorization: Bearer <ローカルトークン>
+    const desktop =
+      (url.searchParams.get('client') === 'desktop' || req.headers['x-cc-hub-client'] === 'desktop') && this.auth.isLocalBearer(req);
+    this.wss.handleUpgrade(req, socket, head, (ws) => this.onConnection(ws, desktop));
   }
 
-  private onConnection(ws: WebSocket): void {
-    const c: Client = { ws, state: false, terms: new Map() };
+  /** 接続中のデスクトップアプリの数(Windows 通知をアプリに任せるか、デーモンが出すかの判定) */
+  desktopCount(): number {
+    let n = 0;
+    for (const c of this.clients) if (c.desktop && c.ws.readyState === WebSocket.OPEN) n++;
+    return n;
+  }
+
+  private onConnection(ws: WebSocket, desktop: boolean): void {
+    const c: Client = { ws, state: false, desktop, terms: new Map() };
+    if (desktop) console.log('[ws] デスクトップアプリが接続しました');
     (ws as any).__alive = true;
     this.clients.add(c);
     ws.on('pong', () => ((ws as any).__alive = true));

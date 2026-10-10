@@ -3,7 +3,7 @@ import type { RateWindow } from '@cc-hub/shared';
 import { TOP_VIEW_LABEL, type TopView, isFinished, useHub } from '../store';
 import { needsAttention, usePrGroups } from '../pr';
 import { fmtUntil, useNow } from '../util';
-import { useApprovalSessions } from './Approval';
+import { useApprovalCount } from './Approval';
 import { McpSummary } from './Mcp';
 
 function Meter({ label, w, now }: { label: string; w: RateWindow | null; now: number }) {
@@ -71,7 +71,7 @@ function TopNav() {
   const g = usePrGroups();
   const prAttn = g.mine.filter(needsAttention).length + g.review.length;
   // スキル / MCP / ゲームの表示中はどのタブも選択中にしない
-  const inTop = deskView !== 'skills' && deskView !== 'mcp' && deskView !== 'game';
+  const inTop = deskView !== 'skills' && deskView !== 'mcp' && deskView !== 'game' && deskView !== 'settings';
   const badge = (t: TopView) =>
     t === 'sessions' && active > 0 ? (
       <span className="topnav-n" aria-label={`動いているセッション ${active} 件`}>
@@ -104,7 +104,10 @@ function TopNav() {
 }
 
 export function TopBar() {
-  const approvals = useApprovalSessions();
+  const approvals = useApprovalCount();
+  const deskView = useHub((s) => s.deskView);
+  const openSettings = useHub((s) => s.openSettings);
+  const setDeskView = useHub((s) => s.setDeskView);
   const setDrawer = useHub((s) => s.setApprovalDrawer);
   const drawer = useHub((s) => s.approvalDrawer);
   const setNew = useHub((s) => s.setNewSessionOpen);
@@ -119,11 +122,20 @@ export function TopBar() {
       <div className="spacer" />
       <McpSummary />
       <button
-        className={`btn appr-btn ${approvals.length > 0 ? 'has' : ''}`}
+        className={`btn appr-btn ${approvals > 0 ? 'has' : ''}`}
         onClick={() => setDrawer(!drawer)}
         title="承認キュー(Ctrl+Shift+A)"
       >
-        承認待ち <span className="count">{approvals.length}</span>
+        承認待ち <span className="count">{approvals}</span>
+      </button>
+      <button
+        className={`icon-btn gear-btn ${deskView === 'settings' ? 'on' : ''}`}
+        onClick={() => (deskView === 'settings' ? setDeskView('home') : openSettings())}
+        title="設定(通知・アップロード先のサーバー・Claude との連携)"
+        aria-label="設定"
+        aria-current={deskView === 'settings' ? 'page' : undefined}
+      >
+        ⚙
       </button>
       <button className="btn primary" onClick={() => setNew(true)}>
         + 新規セッション

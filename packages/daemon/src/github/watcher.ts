@@ -5,6 +5,8 @@
 // - PR ↔ worktree / セッションの紐付けは headRefName = worktree.branch(無ければ同じブランチのセッション)
 import type { PrInfo, RepoInfo, ServerMessage, SessionInfo } from '@cc-hub/shared';
 import { bus } from '../bus';
+import { emitNotify } from '../notify/emit';
+import { prTopic } from '../notify/topic';
 import type { WorktreePool } from '../repo/pool';
 import { GhError, ghJson, ghLogin } from './gh';
 import { PR_LIST_FIELDS, diffPrEvents, keepPr, mergePr, toPrInfo } from './pr';
@@ -218,10 +220,10 @@ export class GitHubWatcher {
       if (!keepPr(next, now)) continue;
       seen.add(next.id);
       for (const ev of diffPrEvents(prev, next)) {
-        bus.state({
-          t: 'notify',
-          event: { kind: 'pr', sessionId: next.sessionId ?? '', prId: next.id, title: `${ev.title}: ${next.id}`, body: ev.body, ts: now },
-        });
+        emitNotify(
+          { kind: 'pr', sessionId: next.sessionId ?? '', prId: next.id, title: `${ev.title}: ${next.id}`, body: ev.body, ts: now },
+          { topic: prTopic(ev.title), repoId: next.repoId, branch: next.headRefName, prUrl: next.url },
+        );
       }
       if (!prev || JSON.stringify(prev) !== JSON.stringify(next)) {
         this.prs.set(next.id, next);

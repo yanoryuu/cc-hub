@@ -3,7 +3,8 @@ import { useState } from 'react';
 import { type MoreView, useHub } from '../store';
 import { SessionList, SortControl } from './SessionList';
 import { SessionPane } from './SessionPane';
-import { ApprovalList, useApprovalSessions } from './Approval';
+import { ApprovalList, useApprovalCount } from './Approval';
+import { SettingsScreen } from './Settings';
 import { GameView } from './GameView';
 import { AgentTree } from './AgentTree';
 import { SessionDetails } from './SessionDetails';
@@ -194,6 +195,7 @@ const MORE_ITEMS: { v: Exclude<MoreView, 'menu'>; label: string; ico: string; de
   { v: 'skills', label: 'スキル', ico: '✦', desc: '使えるスキルとコマンドの一覧。タップで入力欄に入れる' },
   { v: 'mcp', label: 'MCP の接続状況', ico: '⛁', desc: 'MCP サーバーがつながっているか' },
   { v: 'game', label: 'ゲームキャプチャ', ico: '▶', desc: 'PC のウィンドウを見ながら操作' },
+  { v: 'settings', label: '設定', ico: '⚙', desc: '通知(Windows / Discord)・アップロード先のサーバー・Claude との連携' },
 ];
 
 /** 「その他」タブ: メニュー → スキル / MCP / ゲーム */
@@ -227,6 +229,21 @@ function MoreScreen() {
           <span className="m-title">ゲームキャプチャ</span>
         </div>
         <GameView />
+      </div>
+    );
+  }
+  if (view === 'settings') {
+    return (
+      <div className="m-screen">
+        <div className="m-head">
+          <button className="icon-btn back" onClick={() => openMore('menu')} aria-label="その他へ戻る">
+            ‹
+          </button>
+          <span className="m-title">設定</span>
+        </div>
+        <div className="m-scroll">
+          <SettingsScreen mobile />
+        </div>
       </div>
     );
   }
@@ -285,7 +302,7 @@ export function MobileApp() {
   const projectOpen = useHub((s) => s.mobileProject);
   const open = useHub((s) => s.open);
   const setNew = useHub((s) => s.setNewSessionOpen);
-  const approvals = useApprovalSessions();
+  const approvals = useApprovalCount();
   const prGroups = usePrGroups();
   // PR タブのバッジ: 対応が必要な自分の PR + レビュー依頼
   const prBadge = prGroups.mine.filter(needsAttention).length + prGroups.review.length;
@@ -353,7 +370,7 @@ export function MobileApp() {
       <nav className="tabbar" aria-label="画面の切り替え">
         {tabBtn('projects', 'プロジェクト')}
         {tabBtn('sessions', 'セッション')}
-        {tabBtn('approvals', '承認', approvals.length > 0 && <span className="tab-badge">{approvals.length}</span>)}
+        {tabBtn('approvals', '承認', approvals > 0 && <span className="tab-badge">{approvals}</span>)}
         {tabBtn('prs', 'PR', prBadge > 0 && <span className="tab-badge pr">{prBadge}</span>)}
         {tabBtn('more', 'その他')}
       </nav>

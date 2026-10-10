@@ -12,6 +12,7 @@ import type {
   StartSessionRequest,
 } from '@cc-hub/shared';
 import { bus } from '../bus';
+import { emitNotify } from '../notify/emit';
 import { dataDir, type HubConfig } from '../config';
 
 // 終了したセッションの最後の画面(デーモン再起動後も「どう終わったか」を見られるように保存する)
@@ -114,6 +115,8 @@ export class SessionManager {
   private readonly aliases = new Map<string, string>();
   private shuttingDown = false;
   private repoHooks: RepoHooks | null = null;
+  /** プロジェクトの共通の指示ファイル(--append-system-prompt-file に渡す)。無ければ null */
+  private instructionsFor: ((info: SessionInfo) => string | null) | null = null;
 
   constructor(
     private readonly cfg: HubConfig,
@@ -124,6 +127,21 @@ export class SessionManager {
 
   setRepoHooks(h: RepoHooks): void {
     this.repoHooks = h;
+  }
+
+  setInstructionsResolver(fn: (info: SessionInfo) => string | null): void {
+    this.instructionsFor = fn;
+  }
+
+  /** プロジェクトの共通の指示を渡す引数(指示が無ければ空) */
+  private instructionArgs(info: SessionInfo): string[] {
+    let f: string | null = null;
+    try {
+      f = this.instructionsFor?.(info) ?? null;
+    } catch (err) {
+      console.warn(`[session] 共通の指示を探せませんでした: ${(err as Error).message}`);
+    }
+    return f ? ['--append-system-prompt-file', f] : [];
   }
 
   // ================================================================ 状態
@@ -512,8 +530,10 @@ export class SessionManager {
   private spawn(e: Entry, o: { resume: boolean; prompt?: string }): void {
     const info = e.info;
     const args = o.resume ? ['--resume', this.resumeId(e)] : ['--session-id', info.id];
-    args.push('--permission-mode', this.cfg.permissionMode, '-n', info.name, ...this.cfg.claudeArgs);
+    args.push('--permission-mode', this.cfg.permissionMode, '-n', info.name, ...this.instructionArgs(info), ...this.cfg.claudeArgs);
     if (o.prompt) args.push(o.prompt);
+    const fi = args.indexOf('--append-system-prompt-file');
+    if (fi >= 0) console.log(`[session] 共通の指示を渡します: ${info.name} --append-system-prompt-file ${args[fi + 1]}`);
     const env: Record<string, string> = {};
     for (const [k, v] of Object.entries(process.env)) {
       if (v == null || /^CLAUDE/i.test(k)) continue;
@@ -721,7 +741,7 @@ export class SessionManager {
       cwd: info.cwd,
       claudePath: this.cfg.claudePath,
       resumeId,
-      extraArgs: ['--permission-mode', this.cfg.permissionMode, ...this.cfg.claudeArgs],
+      extraArgs: ['--permission-mode', this.cfg.permissionMode, ...this.instructionArgs(info), ...this.cfg.claudeArgs],
     };
     // 引用できないパスなどは PTY を止める前に弾く
     buildTerminalArgv(spec);
@@ -903,7 +923,7 @@ export class SessionManager {
       cwd: info.cwd,
       claudePath: this.cfg.claudePath,
       resumeId,
-      extraArgs: ['--permission-mode', this.cfg.permissionMode, ...this.cfg.claudeArgs],
+      extraArgs: ['--permission-mode', this.cfg.permissionMode, ...this.instructionArgs(info), ...this.cfg.claudeArgs],
     };
     let launched: { file: string; args: string[] };
     try {
@@ -1002,7 +1022,7 @@ export class SessionManager {
     // hooks と画面解析の二重通知を抑える(承認は 5 秒、それ以外は 1 秒)
     if (now - last < (kind === 'approval' ? 5000 : 1000)) return;
     e.lastNotify.set(kind, now);
-    bus.state({ t: 'notify', event: { kind, sessionId: e.info.id, title: `${title}: ${e.info.name}`, body, ts: now } });
+    emitNotify({ kind, sessionId: e.info.id, title: `${title}: ${e.info.name}`, body, ts: now });
   }
 
   /** hooks を受けた時のセッション特定。無ければ外部セッションとして登録する */

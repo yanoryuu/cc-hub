@@ -12,6 +12,8 @@ import { StatusBadge, StatusDot } from './common';
 import { CheckIcon } from './Prs';
 import { RegisterRepoForm } from './Repos';
 import { FolderInput } from './FolderPicker';
+import { InstructionsChip } from './Instructions';
+import { usePendingDeploys } from '../ops';
 
 // ---------------------------------------------------------------- ダイアログ(App 直下に置く)
 
@@ -136,6 +138,8 @@ function AttentionStrip({ mobile }: { mobile: boolean }) {
   const sessions = useHub((s) => s.sessions);
   const repos = useHub((s) => s.repos);
   const open = useHub((s) => s.open);
+  const openApprovals = useHub((s) => s.openApprovals);
+  const deploys = usePendingDeploys();
   const list = useMemo(
     () =>
       Object.values(sessions)
@@ -143,15 +147,23 @@ function AttentionStrip({ mobile }: { mobile: boolean }) {
         .sort((a, b) => Number(b.status === 'awaiting_approval') - Number(a.status === 'awaiting_approval') || b.lastEventAt - a.lastEventAt),
     [sessions],
   );
-  if (list.length === 0) return null;
-  const nApproval = list.filter((s) => s.status === 'awaiting_approval').length;
+  if (list.length === 0 && deploys.length === 0) return null;
+  const nApproval = list.filter((s) => s.status === 'awaiting_approval').length + deploys.length;
   return (
     <section className={`attn-strip ${nApproval > 0 ? 'has-approval' : ''}`} aria-label="対応が必要なセッション">
       <span className="attn-strip-title">
-        対応待ち <b>{list.length}</b>
-        {!mobile && <span className="muted small">(承認 {nApproval} / 入力 {list.length - nApproval})</span>}
+        対応待ち <b>{list.length + deploys.length}</b>
+        {!mobile && <span className="muted small">(承認 {nApproval} / 入力 {list.length + deploys.length - nApproval})</span>}
       </span>
       <div className="attn-strip-list">
+        {deploys.map((d) => (
+          <button key={d.id} className="attn-chip st-deploy" onClick={openApprovals} title={`Claude がアップロードを申請しています: ${d.serverName}
+${d.localDir}`}>
+            <span className="attn-chip-ico" aria-hidden="true">↑</span>
+            <span className="attn-chip-name">アップロードの申請</span>
+            <span className="attn-chip-where">{d.serverName}</span>
+          </button>
+        ))}
         {list.slice(0, mobile ? 4 : 8).map((s) => (
           <button key={s.id} className={`attn-chip st-${s.status}`} onClick={() => open(s.id)} title={`${STATUS_LABEL[s.status]}: ${s.name}\n${s.cwd}`}>
             <StatusDot status={s.status} />
@@ -231,6 +243,7 @@ function RepoCard({ d }: { d: RepoCardData }) {
           <span className="muted">Open の PR なし</span>
         )}
         <Tokens total={d.tokensTotal} today={d.tokensToday} />
+        <InstructionsChip project={{ repoId: r.id, cwd: null }} onOpen={() => openProject({ repoId: r.id }, 'instructions')} />
       </div>
       <div className="pcard-foot">
         <span className="muted small" title={d.lastActivity ? fmtDate(d.lastActivity) : undefined}>
@@ -271,6 +284,7 @@ function FolderCard({ d }: { d: FolderCardData }) {
       </div>
       <div className="pcard-line small">
         <Tokens total={d.tokensTotal} today={d.tokensToday} />
+        <InstructionsChip project={{ repoId: null, cwd: d.path }} onOpen={() => openProject({ cwd: d.path }, 'instructions')} />
       </div>
       <div className="pcard-foot">
         <span className="muted small" title={d.lastActivity ? fmtDate(d.lastActivity) : undefined}>

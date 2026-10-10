@@ -9,6 +9,10 @@ import type { RepoManager } from '../repo/manager';
 import type { GitHubWatcher } from '../github/watcher';
 import type { PrActions } from '../github/actions';
 import type { ProjectService } from '../project/service';
+import type { NotifyService } from '../notify/service';
+import type { DeployService } from '../deploy/service';
+import type { InstructionsService } from '../project/instructions';
+import { handleMcp, type McpHttpDeps } from '../mcp/server';
 import { cleanupBranches, listBranches } from '../repo/branches';
 import { generateSlug } from '../repo/slug';
 import { historyEntry, listProjects, queryHistory, readMessages } from '../history';
@@ -69,6 +73,11 @@ export interface ServerDeps {
   github: GitHubWatcher;
   prs: PrActions;
   project: ProjectService;
+  notify: NotifyService;
+  deploy: DeployService;
+  instructions: InstructionsService;
+  /** /mcp(CC Hub 自身の MCP サーバー) */
+  mcp: McpHttpDeps;
   claudePath: string;
   getState: () => HubState;
   onIngestHook: (body: any, hubHeader: string | undefined) => void;
@@ -169,6 +178,9 @@ async function handle(d: ServerDeps, req: http.IncomingMessage, res: http.Server
     });
     return;
   }
+
+  // ------------------------------------------------ MCP(mcp トークンで認証。PIN / ローカルトークンは使わない)
+  if (p === '/mcp') return handleMcp(d.mcp, req, res);
 
   // ------------------------------------------------ 認証不要
   if (p === '/auth' && method === 'POST') {
@@ -370,6 +382,77 @@ async function handle(d: ServerDeps, req: http.IncomingMessage, res: http.Server
 
   if (p === '/api/git/push' && method === 'POST') {
     return json(res, 200, { ok: true, ...(await d.project.push(await readBody(req))) });
+  }
+
+  // ------------------------------------------------ 通知
+  if (p === '/api/notify/settings' && method === 'GET') {
+    const out: Record<string, unknown> = { ok: true, settings: d.notify.getSettings() };
+    if (url.searchParams.get('debug') === '1') out.recent = d.notify.recent;
+    return json(res, 200, out);
+  }
+  if (p === '/api/notify/settings' && method === 'PUT') {
+    return json(res, 200, { ok: true, settings: await d.notify.putSettings(await readBody(req)) });
+  }
+  if (p === '/api/notify/test' && method === 'POST') {
+    const body = await readBody(req);
+    const r = await d.notify.test(body.channel, body.targetId);
+    return json(res, r.ok ? 200 : 502, r.ok ? { ...r, ok: true } : { ok: false, error: r.message });
+  }
+  // 画面が「どのセッションを前面で表示しているか」を知らせる(表示中のセッションの通知を抑える)
+  if (p === '/api/client/focus' && method === 'POST') {
+    return json(res, 200, { ok: true, focus: d.notify.setFocus(await readBody(req)) });
+  }
+
+  // ------------------------------------------------ アップロード先のサーバー / アップロード
+  if (p === '/api/servers' && method === 'GET') return json(res, 200, { ok: true, servers: d.deploy.serverList() });
+  if (p === '/api/servers' && method === 'POST') return json(res, 200, { ok: true, server: await d.deploy.createServer(await readBody(req, 64 * 1024)) });
+  const sv = /^\/api\/servers\/([^/]+)(\/test)?$/.exec(p);
+  if (sv) {
+    const id = decodeURIComponent(sv[1]);
+    if (sv[2] && method === 'POST') return json(res, 200, await d.deploy.testServer(id));
+    if (!sv[2] && method === 'PATCH') return json(res, 200, { ok: true, server: await d.deploy.patchServer(id, await readBody(req, 64 * 1024)) });
+    if (!sv[2] && method === 'DELETE') {
+      d.deploy.deleteServer(id);
+      return json(res, 200, { ok: true });
+    }
+  }
+  if (p === '/api/deploys' && method === 'POST') return json(res, 200, { ok: true, deploy: d.deploy.createUserJob(await readBody(req)) });
+  const dp = /^\/api\/deploys\/([^/]+)(?:\/(approve|reject|cancel|start))?$/.exec(p);
+  if (dp) {
+    const id = decodeURIComponent(dp[1]);
+    if (!dp[2] && method === 'GET') {
+      const deploy = d.deploy.job(id);
+      if (!deploy) throw new HttpError(404, 'アップロードが見つかりません');
+      return json(res, 200, { ok: true, deploy });
+    }
+    if (dp[2] && method === 'POST') {
+      const body = await readBody(req);
+      switch (dp[2]) {
+        case 'approve':
+          return json(res, 200, { ok: true, deploy: d.deploy.approve(id) });
+        case 'reject':
+          return json(res, 200, { ok: true, deploy: d.deploy.reject(id, body.reason) });
+        case 'cancel':
+          return json(res, 200, { ok: true, deploy: d.deploy.cancel(id) });
+        case 'start':
+          return json(res, 200, { ok: true, deploy: d.deploy.start(id) });
+      }
+    }
+  }
+
+  // ------------------------------------------------ プロジェクトの共通の指示
+  if (p === '/api/project/instructions' || p === '/api/project/instructions/rewrite') {
+    const key = d.instructions.normalizeKey({ repoId: url.searchParams.get('repoId'), cwd: url.searchParams.get('cwd') });
+    if (key.repoId) d.repos.require(key.repoId);
+    if (p === '/api/project/instructions' && method === 'GET') return json(res, 200, { ok: true, instructions: d.instructions.get(key) });
+    if (p === '/api/project/instructions' && method === 'PUT') {
+      const body = await readBody(req, 1e6);
+      return json(res, 200, { ok: true, instructions: d.instructions.put(key, body.content, 'user') });
+    }
+    if (p === '/api/project/instructions/rewrite' && method === 'POST') {
+      const body = await readBody(req);
+      return json(res, 200, { ok: true, ...(await d.instructions.rewrite(key, body.request)) });
+    }
   }
 
   // ------------------------------------------------ 指示・PowerShell・スキル・MCP

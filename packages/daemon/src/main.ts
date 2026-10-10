@@ -16,11 +16,16 @@ import { setGhPath } from './github/gh';
 import { createServer } from './api/server';
 import { WsHub } from './api/ws';
 import { stopCapture } from './game/capture';
+import { dpapi } from './dpapi';
+import { NotifyService } from './notify/service';
+import { DeployService } from './deploy/service';
+import { InstructionsService } from './project/instructions';
+import { isInside } from './project/parse';
 
 const VERSION = '0.1.0';
 
 function main(): void {
-  const { dir, config, localToken, ingestToken } = loadConfig();
+  const { dir, config, localToken, ingestToken, mcpToken } = loadConfig();
   const store = new Store(dir);
   const auth = new Auth(store, config.pin, localToken, ingestToken);
   const agents = new AgentTree(store);
@@ -37,6 +42,23 @@ function main(): void {
   });
   const prs = new PrActions(repos, sessions, github);
   const project = new ProjectService({ sessions, repos, github, gitStat });
+  // プロジェクトの共通の指示: CC Hub が起動するセッションに --append-system-prompt-file で渡す
+  const instructions = new InstructionsService(store, dir, config.claudePath);
+  sessions.setInstructionsResolver((info) => instructions.fileForSession(info));
+  const deploy = new DeployService({ store, secrets: dpapi, sessionName: (id) => sessions.info(id)?.name ?? null });
+  // ws は後で作るので、デスクトップアプリの接続数は遅延参照する
+  let ws: WsHub | null = null;
+  const notify = new NotifyService({
+    store,
+    secrets: dpapi,
+    session: (id) => sessions.info(id),
+    desktopClients: () => ws?.desktopCount() ?? 0,
+  });
+  /** cwd がプールのリポジトリ(.base / worktree)の中なら repoId */
+  const repoIdForCwd = (cwd: string): string | null => {
+    for (const r of Object.values(repos.all())) if (isInside(r.baseDir, cwd)) return r.id;
+    return null;
+  };
   const startedAt = Date.now();
 
   const getState = (): HubState => ({
@@ -45,6 +67,8 @@ function main(): void {
     repos: repos.all(),
     worktrees: repos.pool.all(),
     prs: github.all(),
+    servers: deploy.allServers(),
+    deploys: deploy.allJobs(),
     usage: usage.usage,
     daemon: { version: VERSION, startedAt, port: config.port },
   });
@@ -56,6 +80,18 @@ function main(): void {
     github,
     prs,
     project,
+    notify,
+    deploy,
+    instructions,
+    mcp: {
+      auth,
+      mcpToken,
+      version: VERSION,
+      deploy,
+      instructions,
+      sessions: () => sessions.all(),
+      repoIdForCwd,
+    },
     claudePath: config.claudePath,
     getState,
     onIngestHook: (body, hubHeader) => sessions.handleHook(body, hubHeader),
@@ -65,8 +101,9 @@ function main(): void {
       else sessions.handleStatusline(null, body);
     },
   });
-  const ws = new WsHub(auth, sessions, getState);
-  server.on('upgrade', (req, socket, head) => ws.handleUpgrade(req, socket, head));
+  const wsHub = new WsHub(auth, sessions, getState);
+  ws = wsHub;
+  server.on('upgrade', (req, socket, head) => wsHub.handleUpgrade(req, socket, head));
 
   server.on('error', (err: NodeJS.ErrnoException) => {
     console.error(`[http] listen に失敗しました: ${err.code || err.message}`);
@@ -98,7 +135,8 @@ function main(): void {
     gitStat.stop();
     github.stop();
     stopCapture();
-    ws.closeAll();
+    notify.stop();
+    wsHub.closeAll();
     server.close();
     setTimeout(() => process.exit(0), 500);
   };
