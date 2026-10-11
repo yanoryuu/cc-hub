@@ -333,6 +333,10 @@ export class NotifyService {
       }
       return errors.length ? { ok: false, message: errors.join(' / ') } : { ok: true, message: `${targets.length} 件の送信先に送りました` };
     }
-    throw new HttpError(400, "channel は 'windows' か 'discord' です");
+    if (channel === 'approval') {
+      await this.approvals.postTest();
+      return { ok: true, message: '承認用チャンネルにテストの承認ボタンを送りました(押しても何も起きません)' };
+    }
+    throw new HttpError(400, "channel は 'windows' / 'discord' / 'approval' です");
   }
 }

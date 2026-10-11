@@ -5,6 +5,7 @@
 // (ボタン付きのメッセージは Webhook では送れないため、Bot が投稿する)
 import type { DeployJob, ServerMessage } from '@cc-hub/shared';
 import type { BotInteraction } from './bot';
+import { HttpError } from '../util';
 
 export type DeployAction = 'approve' | 'reject' | 'promote' | 'cancel';
 
@@ -18,6 +19,9 @@ export interface DeployActions {
 /** ボタンを出す状態 */
 const ASK_STATES: DeployJob['state'][] = ['pending_approval', 'preview_ready'];
 const PREFIX = 'cchub:deploy:';
+/** テスト送信のボタン(押しても何もしない) */
+const TEST_PREFIX = 'test-';
+const TEST_TEXT = '**承認ボタンのテスト**: CC Hub の設定から送ったテストです。押しても何も起きません。';
 
 const STATE_LABEL: Record<DeployJob['state'], string> = {
   pending_approval: '承認待ち',
@@ -154,6 +158,19 @@ export class DeployApprovals {
     }
   }
 
+  /** テスト送信: 押しても何も起きない承認のメッセージを承認用チャンネルに投稿する */
+  async postTest(): Promise<void> {
+    const ch = this.d.channelId();
+    if (!ch) throw new HttpError(409, 'Bot が接続されていないか、承認ボタンを出すチャンネル ID が設定されていません');
+    const id = `${TEST_PREFIX}${Date.now()}`;
+    const b = (action: DeployAction, label: string, style: number) => ({ type: 2, style, label, custom_id: customId(action, id) });
+    try {
+      await this.d.post(ch, { content: TEST_TEXT, components: [{ type: 1, components: [b('approve', '承認', 3), b('reject', '却下', 4)] }] });
+    } catch (e) {
+      throw new HttpError(502, `承認用チャンネルに投稿できませんでした(Bot にチャンネルの表示・メッセージの送信の権限があるか確認してください): ${(e as Error).message}`);
+    }
+  }
+
   /** ボタンが押された */
   async onInteraction(i: BotInteraction): Promise<void> {
     const c = parseCustomId(i.customId);
@@ -163,6 +180,11 @@ export class DeployApprovals {
       if (!this.d.allowed(i.userId)) {
         console.warn(`[bot] 許可されていないユーザーが承認ボタンを押しました: ${i.userName} (${i.userId})`);
         return await ephemeral(`このユーザー(ID: ${i.userId})は承認できません。CC Hub の設定で「返信を受け付けるユーザー ID」に追加してください。`);
+      }
+      // テスト送信のボタン: 何もせず、押されたことだけを書く
+      if (c.jobId.startsWith(TEST_PREFIX)) {
+        console.log(`[bot] ${i.userName} がテストの承認ボタン(${c.action})を押しました`);
+        return await this.d.respond(i, 7, { content: `${TEST_TEXT}\n→ ${ACTION_DONE[c.action]}(テスト・${i.userName})`, components: [] });
       }
       if (!this.actions) return await ephemeral('CC Hub の準備ができていません。少し待ってからもう一度押してください。');
       const a = this.actions;

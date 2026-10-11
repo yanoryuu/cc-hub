@@ -732,7 +732,7 @@ export type ServerMessage =
 //   --- 通知 ---
 //   GET  /api/notify/settings                            → {ok, settings: NotifySettings}
 //   PUT  /api/notify/settings  NotifySettings(discord[].webhookUrl に新しい URL を入れたときだけ更新。空なら据え置き)
-//   POST /api/notify/test {channel: 'windows' | 'discord', targetId?}  テスト送信
+//   POST /api/notify/test {channel: 'windows' | 'discord' | 'approval', targetId?}  テスト送信(approval = 押しても何も起きない承認ボタンを承認用チャンネルへ)
 //   (Windows 通知: デスクトップアプリが接続中ならアプリが出す。未接続ならデーモンが自分で出す)
 //   --- アップロード先のサーバー ---
 //   POST /api/servers  {…ServerInfo の編集項目, secret?: string}  → {ok, server}   secret = パスワード or 秘密鍵のパスフレーズ。DPAPI で暗号化して保存

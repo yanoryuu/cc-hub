@@ -569,6 +569,22 @@ function BotCard({
             トークンを削除
           </button>
         )}
+        <button
+          className="btn sm"
+          disabled={busy || dirty || st.state !== 'connected' || !bot.approvalChannelId}
+          title={dirty ? '先に保存してください' : '押しても何も起きない承認ボタンを承認用チャンネルに送ります'}
+          onClick={() => {
+            setBusy(true);
+            setMsg(null);
+            notifyApi
+              .test('approval')
+              .then(() => setMsg({ ok: true, text: '承認用チャンネルにテストの承認ボタンを送りました(押しても何も起きません)' }))
+              .catch((e) => setMsg({ ok: false, text: errText(e, 'テスト送信に失敗しました') }))
+              .finally(() => setBusy(false));
+          }}
+        >
+          承認ボタンのテスト送信
+        </button>
         <span className="spacer" />
         <button className="btn primary sm" disabled={!dirty || busy || badIds.length > 0 || badCh} onClick={() => void run({}, '保存しました')}>
           {busy ? '保存中…' : '保存'}

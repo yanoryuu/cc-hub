@@ -49,7 +49,7 @@ export const notifyApi = {
   get: async (): Promise<NotifySettings | undefined> => pick<NotifySettings>(await api('/api/notify/settings'), 'settings'),
   put: async (s: Omit<NotifySettings, 'discord'> & { discord: DiscordTargetEdit[] }): Promise<NotifySettings | undefined> =>
     pick<NotifySettings>(await api('/api/notify/settings', s, { method: 'PUT' }), 'settings'),
-  test: (channel: 'windows' | 'discord', targetId?: string) =>
+  test: (channel: 'windows' | 'discord' | 'approval', targetId?: string) =>
     api('/api/notify/test', targetId ? { channel, targetId } : { channel }),
 };
 
