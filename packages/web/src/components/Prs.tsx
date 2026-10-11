@@ -371,6 +371,68 @@ export function FixDialog({
   );
 }
 
+/** 「コンフリクトを解消させる」: PR を作ったセッション(紐付いたセッション)に base を取り込ませて解消させる */
+export function ConflictDialog({ pr, onClose, onDone }: { pr: PrInfo; onClose: () => void; onDone?: (n: Notice) => void }) {
+  const session = useHub((s) => (pr.sessionId ? s.sessions[pr.sessionId] : undefined));
+  const [note, setNote] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const live = !!session && session.managed && session.status !== 'stopped' && session.status !== 'error';
+  const run = async () => {
+    setBusy(true);
+    setErr(null);
+    try {
+      const r = (await prApi.resolveConflicts(pr.repoId, pr.number, note.trim() ? { note: note.trim() } : {})) as {
+        action?: 'sent' | 'resumed' | 'started';
+        session?: { name?: string };
+      };
+      const name = r?.session?.name ?? session?.name ?? '';
+      const text =
+        r?.action === 'sent'
+          ? `セッション「${name}」にコンフリクトの解消を頼みました`
+          : r?.action === 'resumed'
+            ? `停止していたセッション「${name}」を再開して、コンフリクトの解消を頼みました`
+            : 'PR を作ったセッションが残っていないため、新しいセッションでコンフリクトを解消させます';
+      onDone?.({ text, sessionId: pickSessionId(r) ?? (live ? session!.id : null) });
+      onClose();
+    } catch (e) {
+      setErr(errText(e, '送信に失敗しました'));
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <ConfirmModal title="コンフリクトを解消させる" confirmLabel="送信" wide busy={busy} error={err} onConfirm={() => void run()} onClose={onClose}>
+      <p className="fix-target">
+        <span className="mono">
+          {pr.repoId}#{pr.number}
+        </span>{' '}
+        {pr.title}
+      </p>
+      <p>
+        <span className="mono">{pr.baseRefName}</span> の最新をマージで取り込み、コンフリクトを解消して push させます(rebase や force push はさせません)。
+      </p>
+      <p className="hint">
+        送り先:{' '}
+        {session ? (
+          <>
+            PR を作ったセッション <strong>{session.name}</strong>
+            {live ? '' : '(停止中なので再開して送ります。作業ツリーが残っていなければ新しいセッションを起動します)'}
+          </>
+        ) : (
+          <>
+            PR を作ったセッションが見つからないため、プールの worktree で <span className="mono">{pr.headRefName}</span> を checkout して新しいセッションを起動します
+          </>
+        )}
+      </p>
+      <label className="field">
+        <span>補足の指示(任意)</span>
+        <textarea rows={3} value={note} onChange={(e) => setNote(e.target.value)} placeholder="例: package-lock.json は main 側を採用してから npm install し直して" />
+      </label>
+    </ConfirmModal>
+  );
+}
+
 function ModeSeg({ mode, setMode }: { mode: SessionMode; setMode: (m: SessionMode) => void }) {
   return (
     <div className="field">
@@ -678,7 +740,8 @@ type Dialog =
   | { t: 'merge'; override: boolean }
   | { t: 'close' }
   | { t: 'review' }
-  | { t: 'ai-review' };
+  | { t: 'ai-review' }
+  | { t: 'conflict' };
 
 interface TimelineItem {
   key: string;
@@ -860,6 +923,11 @@ export function PrDetailPage({ id, mobile = false }: { id: string; mobile?: bool
             >
               CI の失敗を直させる
             </button>
+            {pr.mergeable === 'CONFLICTING' && (
+              <button className="btn primary" onClick={() => setDialog({ t: 'conflict' })} title="PR を作ったセッションに base を取り込ませてコンフリクトを解消させる">
+                コンフリクトを解消させる
+              </button>
+            )}
           </>
         )}
         <button className="btn" onClick={() => setDialog({ t: 'open' })}>
@@ -1011,6 +1079,7 @@ export function PrDetailPage({ id, mobile = false }: { id: string; mobile?: bool
       {dialog?.t === 'close' && <CloseDialog pr={pr} onClose={() => setDialog(null)} onDone={setNotice} />}
       {dialog?.t === 'review' && <ReviewDialog pr={pr} onClose={() => setDialog(null)} onDone={setNotice} />}
       {dialog?.t === 'ai-review' && <AiReviewDialog pr={pr} onClose={() => setDialog(null)} onDone={setNotice} />}
+      {dialog?.t === 'conflict' && <ConflictDialog pr={pr} onClose={() => setDialog(null)} onDone={setNotice} />}
     </div>
   );
 }

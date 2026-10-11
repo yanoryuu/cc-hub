@@ -13,6 +13,7 @@ import {
   toPrInfo,
   trimLog,
 } from '../src/github/pr';
+import { buildConflictInstruction } from '../src/github/actions';
 import { parseLeftRight, parseShortstat, parseStatusV2 } from '../src/repo/gitstat';
 import { parseRefs } from '../src/repo/branches';
 
@@ -253,4 +254,15 @@ test('for-each-ref: ローカル / origin(HEAD は除く)', () => {
   assert.equal(r.local.get('feat/x')!.date, 1700000100_000);
 });
 
+test('buildConflictInstruction: base をマージで取り込ませ、force push はさせない', () => {
+  const t = buildConflictInstruction({ number: 12, title: 'ボタン修正', headRefName: 'feat/btn', baseRefName: 'main' }, 'lock は main 側');
+  assert.ok(t.startsWith('PR #12「ボタン修正」(main ← feat/btn)'));
+  assert.ok(t.includes('git merge origin/main'));
+  assert.ok(t.includes('force push はしない'));
+  assert.ok(t.includes('git push'));
+  assert.ok(t.endsWith('補足: lock は main 側'));
+  assert.ok(!buildConflictInstruction({ number: 1, title: 't', headRefName: 'h', baseRefName: 'develop' }, '').includes('補足'));
+});
+
 console.log(`\n${passed} passed${process.exitCode ? ', some FAILED' : ''}`);
+

@@ -51,6 +51,22 @@ export function buildReviewInstruction(
   return lines.join('\n');
 }
 
+/** 「コンフリクトを解消」の指示(base を取り込むマージで解消する。push 済みの履歴は書き換えない) */
+export function buildConflictInstruction(pr: Pick<PrInfo, 'number' | 'title' | 'headRefName' | 'baseRefName'>, note: string): string {
+  const base = pr.baseRefName;
+  const lines = [
+    `PR #${pr.number}「${pr.title}」(${base} ← ${pr.headRefName})が ${base} とコンフリクトしています。解消してください。`,
+    `1. 未コミットの変更があれば先にコミットする。git fetch origin で最新を取得する`,
+    `2. git merge origin/${base} で取り込む(rebase や force push はしない。push 済みの履歴を書き換えないため)`,
+    '3. コンフリクトした箇所は、両方の変更の意図を読んで両立させる形で解消する。どちらを残すか判断できない箇所はユーザーに聞く',
+    '4. ビルド・型チェック・テストがあれば実行して、壊れていないことを確かめる',
+    '5. マージコミットを作って git push する',
+    '6. どのファイルをどう解消したかを短く報告する',
+  ];
+  if (note) lines.push(`補足: ${note}`);
+  return lines.join('\n');
+}
+
 /** レビュースレッド(未解決のみ使う) */
 const THREADS_QUERY = `query($owner:String!,$name:String!,$n:Int!){repository(owner:$owner,name:$name){pullRequest(number:$n){reviewThreads(first:100){nodes{isResolved isOutdated path line originalLine comments(first:30){nodes{author{login} body createdAt url}}}}}}}`;
 
@@ -208,6 +224,18 @@ export class PrActions {
     const note = typeof body?.note === 'string' ? body.note.slice(0, 4000) : undefined;
     const text = await this.buildFix(repo, d, { comments: wantComments, checks: wantChecks, note });
     return this.deliver(repo, d, text, `pr-${d.number}-fix`, undefined);
+  }
+
+  /** コンフリクトの解消を PR を作ったセッション(紐付いたセッション)にやらせる。無ければ PR のブランチで新しいセッション */
+  async resolveConflicts(repoId: string, n: unknown, body: any): Promise<FixResult> {
+    const repo = this.repo(repoId);
+    const d = await this.detail(repo.id, n);
+    if (d.state === 'OPEN' && d.mergeable === 'MERGEABLE') throw new HttpError(409, 'この PR はコンフリクトしていません');
+    const note = typeof body?.note === 'string' ? body.note.trim().slice(0, 2000) : '';
+    const mode: SessionMode | undefined = body?.mode === 'commander' ? 'commander' : undefined;
+    const r = await this.deliver(repo, d, buildConflictInstruction(d, note), `pr-${d.number}-conflict`, mode);
+    console.log(`[pr] ${d.id}: コンフリクトの解消を ${r.session.name} に任せます (${r.action})`);
+    return r;
   }
 
   /** PR から新規セッション(ユーザーの指示付き) */

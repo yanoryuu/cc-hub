@@ -21,7 +21,7 @@ import { needsRelease } from '../repo';
 import { STATUS_ICON, fmtCost, fmtDate, useNow } from '../util';
 import { StatusBadge, toolText } from './common';
 import { PoolChips, Spinner } from './RepoCommon';
-import { CheckIcon, MergeDialog, PrChip, PrRow } from './Prs';
+import { CheckIcon, ConflictDialog, MergeDialog, PrChip, PrRow } from './Prs';
 import { RepoPage } from './Repos';
 import { ArtifactsTab } from './ProjectArtifacts';
 import { GitTab } from './ProjectGit';
@@ -758,6 +758,7 @@ function PrsTab({ prs }: { prs: PrInfo[] }) {
   const now = useNow(30000);
   const openPr = useHub((s) => s.openPr);
   const [merging, setMerging] = useState<PrInfo | null>(null);
+  const [resolving, setResolving] = useState<PrInfo | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   if (prs.length === 0)
     return (
@@ -804,6 +805,11 @@ function PrsTab({ prs }: { prs: PrInfo[] }) {
                     <button className="btn sm" onClick={() => openPr(p.id)} title="詳細を開いて、Claude にレビューさせる / レビューを送る">
                       レビュー
                     </button>
+                    {p.mergeable === 'CONFLICTING' && (
+                      <button className="btn sm primary" onClick={() => setResolving(p)} title="PR を作ったセッションにコンフリクトを解消させる">
+                        コンフリクトを解消
+                      </button>
+                    )}
                     <button
                       className={`btn sm ${ok ? 'approve' : ''}`}
                       onClick={() => setMerging(p)}
@@ -826,6 +832,7 @@ function PrsTab({ prs }: { prs: PrInfo[] }) {
           onDone={(n) => setNotice(n.text)}
         />
       )}
+      {resolving && <ConflictDialog pr={resolving} onClose={() => setResolving(null)} onDone={(n) => setNotice(n.text)} />}
       {closed.length > 0 && (
         <section className="pr-group">
           <h3 className="sec-title">

@@ -25,15 +25,20 @@ export interface RestartDeps {
   launch?: (script: string, build: boolean, logFile: string) => void;
 }
 
-/** deploy.ps1 を切り離して実行する(このデーモンが止められても続く) */
+/**
+ * deploy.ps1 を切り離して実行する(このデーモンが止められても続く)。
+ * Node の detached で powershell を起動するとコンソールが無くスクリプトが動かないので、
+ * 外側の powershell が Start-Process で内側を起動してすぐ終わる形にする
+ */
 export function launchDeploy(script: string, build: boolean, logFile: string): void {
-  const cmd = `& '${script.replace(/'/g, "''")}'${build ? '' : ' -SkipBuild'} *> '${logFile.replace(/'/g, "''")}'`;
-  const child = spawn('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-WindowStyle', 'Hidden', '-Command', cmd], {
-    detached: true,
+  const q = (s: string) => s.replace(/'/g, "''");
+  const inner = `& '${q(script)}'${build ? '' : ' -SkipBuild'} *> '${q(logFile)}'`;
+  const outer = `Start-Process -FilePath powershell.exe -WindowStyle Hidden -ArgumentList @('-NoProfile','-ExecutionPolicy','Bypass','-Command','${q(inner)}')`;
+  const child = spawn('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', outer], {
     stdio: 'ignore',
     windowsHide: true,
   });
-  child.unref();
+  child.on('error', (e) => console.error(`[restart] powershell を起動できません: ${e.message}`));
 }
 
 export class RestartScheduler {

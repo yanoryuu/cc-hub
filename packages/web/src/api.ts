@@ -178,6 +178,8 @@ export const prApi = {
   close: (repoId: string, n: number) => api(`${prPath(repoId, n)}/close`, {}),
   review: (repoId: string, n: number, event: PrReviewEvent, body: string) => api(`${prPath(repoId, n)}/review`, { event, body }),
   aiReview: (repoId: string, n: number, req: { post: boolean; note?: string; mode?: SessionMode }) => api(`${prPath(repoId, n)}/ai-review`, req),
+  resolveConflicts: (repoId: string, n: number, req: { note?: string; mode?: SessionMode }) =>
+    api(`${prPath(repoId, n)}/resolve-conflicts`, req),
   createPr: (sessionId: string, draft: boolean) => api(`/api/sessions/${enc(sessionId)}/create-pr`, { draft }),
   branches: async (repoId: string): Promise<BranchInfo[]> =>
     pick<BranchInfo[]>(await api(`/api/repos/${enc(repoId)}/branches`), 'branches') ?? [],

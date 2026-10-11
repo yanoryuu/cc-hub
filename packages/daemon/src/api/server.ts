@@ -297,7 +297,7 @@ async function handle(d: ServerDeps, req: http.IncomingMessage, res: http.Server
     return json(res, 200, { ok: true, prs: d.github.all() });
   }
 
-  const pm = /^\/api\/prs\/([^/]+)\/(\d+)(?:\/(fix|open-session|merge|close|review|ai-review))?$/.exec(p);
+  const pm = /^\/api\/prs\/([^/]+)\/(\d+)(?:\/(fix|open-session|merge|close|review|ai-review|resolve-conflicts))?$/.exec(p);
   if (pm) {
     const repoId = decodeURIComponent(pm[1]);
     const n = Number(pm[2]);
@@ -317,6 +317,8 @@ async function handle(d: ServerDeps, req: http.IncomingMessage, res: http.Server
           return json(res, 200, await d.prs.review(repoId, n, body));
         case 'ai-review':
           return json(res, 200, await d.prs.aiReview(repoId, n, body));
+        case 'resolve-conflicts':
+          return json(res, 200, await d.prs.resolveConflicts(repoId, n, body));
       }
     }
   }

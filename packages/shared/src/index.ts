@@ -814,6 +814,9 @@ export type ServerMessage =
 //   POST /api/prs/:repo/:n/merge {method: MergeMethod}  gh pr merge --<method> --delete-branch。紐付いた worktree は停止済みなら解放(keep)
 //   POST /api/prs/:repo/:n/close
 //   POST /api/prs/:repo/:n/review {event: PrReviewEvent, body?: string}  gh pr review(request_changes / comment は body 必須)
+//   POST /api/prs/:repo/:n/resolve-conflicts {note?, mode?}  base とのコンフリクトの解消を PR を作ったセッションに指示する
+//                                              (fix と同じ届け方: 動いていれば送る / 停止中で worktree を持っていれば再開 / 無ければ新しいセッション)。
+//                                              → FixResult。コンフリクトしていない PR は 409
 //   POST /api/prs/:repo/:n/ai-review {note?, post?: boolean, mode?}  PR のブランチで Claude にレビューさせるセッションを起動。
 //                                  post=true ならレビュー結果を GitHub にコメントとして投稿させる
 //   POST /api/sessions/:id/create-pr {draft?: boolean}  実行中のセッションに「push して gh pr create して」と指示する。
