@@ -37,6 +37,7 @@ export function SidebarRepos() {
   const openProject = useHub((s) => s.openProject);
   const project = useHub((s) => s.project);
   const projectId = deskView === 'project' ? project?.repoId ?? null : null;
+  const [removing, setRemoving] = useState<RepoInfo | null>(null);
   return (
     <section className="side-repos" aria-label="プロジェクト">
       <div className="side-repos-head">
@@ -71,10 +72,21 @@ export function SidebarRepos() {
                 </span>
                 <PoolChips repo={r} worktrees={wtByRepo[r.id] ?? []} />
               </button>
+              <button className="side-repo-remove" onClick={() => setRemoving(r)} title={`${r.id} をプロジェクトから外す(登録解除)`} aria-label={`${r.name} の登録解除`}>
+                ×
+              </button>
             </div>
           ))
         )}
       </div>
+      {removing && (
+        <UnregisterModal
+          repo={removing}
+          onClose={() => setRemoving(null)}
+          // 開いている管理画面のプロジェクトを外したときだけ一覧に戻る
+          onRemoved={() => projectId === removing.id && setTopView('projects')}
+        />
+      )}
     </section>
   );
 }
@@ -426,7 +438,7 @@ export function RepoPage({ id, mobile = false, embedded = false }: { id: string;
   );
 }
 
-function UnregisterModal({ repo, onClose }: { repo: RepoInfo; onClose: () => void }) {
+function UnregisterModal({ repo, onClose, onRemoved }: { repo: RepoInfo; onClose: () => void; onRemoved?: () => void }) {
   const [purge, setPurge] = useState(false);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -438,7 +450,8 @@ function UnregisterModal({ repo, onClose }: { repo: RepoInfo; onClose: () => voi
     try {
       await repoApi.remove(repo.id, purge);
       removeRepo(repo.id);
-      openRepos({ page: 'list' });
+      if (onRemoved) onRemoved();
+      else openRepos({ page: 'list' });
       onClose();
     } catch (e) {
       setErr(
