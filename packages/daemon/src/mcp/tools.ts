@@ -9,6 +9,7 @@ import { infoSummary } from '../firebase/info';
 import { FIREBASE_TARGETS } from '../firebase/config';
 import type { InstructionsService, ProjectKey } from '../project/instructions';
 import { HttpError } from '../util';
+import { launchUnity, unityStatus } from '../unity/launcher';
 
 export class ToolInputError extends Error {}
 
@@ -139,6 +140,27 @@ export const TOOLS: ToolDef[] = [
       cwd: CWD_PROP,
     },
     required: ['content'],
+    readOnly: false,
+  },
+  {
+    name: 'unity_status',
+    description:
+      'cwd のフォルダ(またはその上位)の Unity プロジェクトについて、エディタのバージョン(ProjectVersion.txt)・そのバージョンがインストール済みか・' +
+      'いまエディタで開いているか(runningPid)を返します。読み取りのみです。',
+    props: { cwd: CWD_PROP },
+    required: ['cwd'],
+    readOnly: true,
+  },
+  {
+    name: 'launch_unity',
+    description:
+      'cwd のフォルダ(またはその上位)の Unity プロジェクトを、ProjectVersion.txt のバージョンの Unity エディタで開きます。' +
+      '既にこのプロジェクトを開いているエディタがあれば何もしません(launched: false)。' +
+      'エディタでの確認・Unity の MCP(unity-editor-mcp など)での操作が必要なとき、またはユーザーに頼まれたときに使ってください。' +
+      '起動直後はインポートやコンパイルで数十秒〜数分かかるので、エディタに接続する操作は少し待ってから行ってください。' +
+      'バージョンがインストールされていなければエラーになるので、その場合は Unity Hub でのインストールをユーザーに頼んでください。',
+    props: { cwd: CWD_PROP },
+    required: ['cwd'],
     readOnly: false,
   },
 ];
@@ -383,6 +405,17 @@ export async function callTool(name: string, rawArgs: unknown, d: McpDeps, ctx: 
         limit: ins.limit,
         ...(ins.warning ? { warning: ins.warning } : {}),
         message: ins.warning ? `保存しました。${ins.warning}` : '保存しました。次に起動するセッションから反映されます。',
+      };
+    }
+    case 'unity_status':
+      return await unityStatus(a.cwd);
+    case 'launch_unity': {
+      const r = await launchUnity(a.cwd);
+      return {
+        ...r,
+        message: r.launched
+          ? `Unity ${r.editorVersion} でプロジェクトを開きました(PID ${r.runningPid})。読み込みが終わるまで少し待ってください。`
+          : `このプロジェクトは既に Unity エディタで開いています(PID ${r.runningPid})。`,
       };
     }
   }

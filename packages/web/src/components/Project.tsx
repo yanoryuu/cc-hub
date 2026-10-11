@@ -1,7 +1,7 @@
 // フォルダ(プロジェクト)ごとの管理画面: セッション / 作業ツリーで何をしているか / アーティファクト / PR / Git / トークン
 // デスクトップは中央の表示(右パネルは畳む)、モバイルは全画面のページ(戻るボタン付き)
 import { useEffect, useMemo, useState } from 'react';
-import type { GitTarget, PrInfo, ProjectOverview, SessionInfo } from '@cc-hub/shared';
+import type { GitTarget, PrInfo, ProjectOverview, SessionInfo, UnityStatus } from '@cc-hub/shared';
 import { type ProjectRoute, type ProjectTab, isFinished, useHub } from '../store';
 import {
   type LiveTokens,
@@ -16,7 +16,7 @@ import {
   useProjectSessions,
 } from '../project';
 import { canMerge, fmtAgo, findSessionPr, mergeBlockers, needsAttention } from '../pr';
-import { errText, repoApi } from '../api';
+import { api, errText, pick, repoApi } from '../api';
 import { needsRelease } from '../repo';
 import { STATUS_ICON, fmtCost, fmtDate, useNow } from '../util';
 import { StatusBadge, toolText } from './common';
@@ -657,6 +657,32 @@ function WorktreeToolbar({ repoId, reload }: { repoId: string; reload: () => voi
   );
 }
 
+/** 「Unity で開く」: そのフォルダを ProjectVersion.txt のバージョンの Unity エディタで開く(開いていれば何もしない) */
+function UnityButton({ cwd }: { cwd: string }) {
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  const launch = async () => {
+    setBusy(true);
+    setMsg(null);
+    try {
+      const u = pick<UnityStatus & { launched: boolean }>(await api('/api/unity/launch', { cwd }), 'unity');
+      setMsg({ ok: true, text: u?.launched ? `Unity ${u.editorVersion} で開いています…` : '既に Unity で開いています' });
+    } catch (e) {
+      setMsg({ ok: false, text: errText(e, 'Unity を起動できませんでした') });
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <>
+      <button className="btn sm" disabled={busy} onClick={() => void launch()} title="このフォルダを Unity エディタで開く">
+        {busy ? '起動中…' : 'Unity で開く'}
+      </button>
+      {msg && <span className={`small ${msg.ok ? 'muted' : 'warn-text'}`}>{msg.text}</span>}
+    </>
+  );
+}
+
 function WorktreesTab({ data, gotoGit, reload }: { data: ProjectOverview; gotoGit: (id: string) => void; reload: () => void }) {
   const sessions = useHub((s) => s.sessions);
   const open = useHub((s) => s.open);
@@ -716,6 +742,7 @@ function WorktreesTab({ data, gotoGit, reload }: { data: ProjectOverview; gotoGi
               <button className="btn sm" onClick={() => gotoGit(t.id)}>
                 Git を開く
               </button>
+              {t.unity && <UnityButton cwd={t.path} />}
             </div>
           </article>
         );

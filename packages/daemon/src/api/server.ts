@@ -12,6 +12,7 @@ import type { ProjectService } from '../project/service';
 import type { NotifyService } from '../notify/service';
 import type { DeployService } from '../deploy/service';
 import type { RestartScheduler } from '../restart/scheduler';
+import { launchUnity, unityStatus } from '../unity/launcher';
 import type { InstructionsService } from '../project/instructions';
 import type { FirebaseInfoService } from '../firebase/info';
 import { handleMcp, type McpHttpDeps } from '../mcp/server';
@@ -404,6 +405,15 @@ async function handle(d: ServerDeps, req: http.IncomingMessage, res: http.Server
 
   if (p === '/api/git/push' && method === 'POST') {
     return json(res, 200, { ok: true, ...(await d.project.push(await readBody(req))) });
+  }
+
+  // ------------------------------------------------ Unity エディタ
+  if (p === '/api/unity' && method === 'GET') return json(res, 200, { ok: true, unity: await unityStatus(String(url.searchParams.get('cwd') || '')) });
+  if (p === '/api/unity/launch' && method === 'POST') {
+    const body = await readBody(req);
+    const cwd = typeof body?.cwd === 'string' ? body.cwd : '';
+    if (!cwd || !path.isAbsolute(cwd)) throw new HttpError(400, 'cwd を絶対パスで指定してください');
+    return json(res, 200, { ok: true, unity: await launchUnity(cwd) });
   }
 
   // ------------------------------------------------ CC Hub の再起動の予約

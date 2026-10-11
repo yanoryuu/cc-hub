@@ -7,6 +7,10 @@ import { buildPsCommand, buildTerminalArgv, launcherCommand, psArg, psQuote, ter
 import { isAllowedMime, sanitizeAttachmentName } from '../src/session/attach';
 import { activeBackgroundTasks } from '../src/util';
 import { overlaps } from '../src/repo/exec';
+import { findUnityProject, parseEditorVersion, projectPathArg } from '../src/unity/launcher';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 
 let passed = 0;
 function test(name: string, fn: () => void): void {
@@ -192,6 +196,21 @@ test('overlaps: 同じフォルダか、片方がもう片方の中', () => {
   assert.ok(overlaps('D:\\WorkTree', 'D:\\WorkTree\\game'));
   assert.ok(!overlaps('D:\\WorkTree\\game', 'D:\\WorkTree\\game-hub'));
   assert.ok(!overlaps('D:\\Unity\\game', 'D:\\WorkTree\\game'));
+});
+
+test('Unity: バージョン / -projectPath / プロジェクトのフォルダ', () => {
+  assert.equal(parseEditorVersion('m_EditorVersion: 6000.0.35f1\nm_EditorVersionWithRevision: 6000.0.35f1 (9a3b)'), '6000.0.35f1');
+  assert.equal(parseEditorVersion('x'), null);
+  assert.equal(projectPathArg('"C:\\U\\Unity.exe" -projectpath D:\\Unity\\Toms -useHub'), 'D:\\Unity\\Toms');
+  assert.equal(projectPathArg('Unity.exe -projectPath "D:\\My Game" -batchmode'), 'D:\\My Game');
+  assert.equal(projectPathArg('unity mcp'), null);
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cchub-unity-'));
+  fs.mkdirSync(path.join(root, 'ProjectSettings'));
+  fs.mkdirSync(path.join(root, 'Assets', 'Scripts'), { recursive: true });
+  fs.writeFileSync(path.join(root, 'ProjectSettings', 'ProjectVersion.txt'), 'm_EditorVersion: 6000.0.35f1');
+  assert.equal(findUnityProject(path.join(root, 'Assets', 'Scripts')), root);
+  assert.equal(findUnityProject(os.tmpdir()), null);
+  fs.rmSync(root, { recursive: true, force: true });
 });
 
 console.log(`\n${passed} passed${process.exitCode ? ', some FAILED' : ''}`);

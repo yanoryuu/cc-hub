@@ -33,6 +33,8 @@ test('ツールの一覧は契約どおり', () => {
       'request_firebase_deploy',
       'get_project_instructions',
       'update_project_instructions',
+      'unity_status',
+      'launch_unity',
     ],
   );
   const r = listToolsResult() as any;

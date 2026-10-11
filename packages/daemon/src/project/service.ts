@@ -387,6 +387,7 @@ export class ProjectService {
       kind: t.kind,
       label: t.label,
       path: t.path,
+      unity: fs.existsSync(path.join(t.path, 'ProjectSettings', 'ProjectVersion.txt')),
       branch: s.head,
       baseRef,
       upstream,

@@ -343,6 +343,8 @@ export interface GitTarget {
   kind: 'worktree' | 'base' | 'dir';
   label: string; // "wt-01" / ".base" / フォルダ名
   path: string;
+  /** Unity のプロジェクトか(「Unity で開く」を出す) */
+  unity?: boolean;
   branch: string | null;
   /** 比較対象(origin/<default>) */
   baseRef: string | null;
@@ -543,6 +545,21 @@ export interface DiscordBotStatus {
   error: string | null;
 }
 
+// ---------------------------------------------------------------- Unity エディタ
+
+/** GET /api/unity?cwd= / MCP の unity_status */
+export interface UnityStatus {
+  /** Unity プロジェクトのフォルダ(cwd かその上位) */
+  projectPath: string;
+  /** ProjectVersion.txt の m_EditorVersion */
+  editorVersion: string | null;
+  /** そのバージョンのエディタ(インストールされていなければ null) */
+  editorPath: string | null;
+  installedVersions: string[];
+  /** このプロジェクトを開いているエディタのプロセス ID(開いていなければ null) */
+  runningPid: number | null;
+}
+
 // ---------------------------------------------------------------- CC Hub の再起動の予約
 
 /** GET /api/restart */
@@ -725,6 +742,9 @@ export type ServerMessage =
 //          terminal: 新しい PowerShell で claude --resume(handedOff のセッションとして一覧に載る)
 //   GET  /api/fs/dirs?path=<フォルダ>                    → {ok, path, parent, dirs: DirEntry[]}(path 省略時はドライブ一覧とホーム。隠しフォルダ・node_modules 等は除く)
 //   Electron(デスクトップ)では window.ccHub.pickFolder(): Promise<string | null> で Windows のフォルダ選択ダイアログを使う
+//   --- Unity エディタ ---
+//   GET  /api/unity?cwd=                                 → {ok, unity: UnityStatus}(Unity プロジェクトでなければ 404)
+//   POST /api/unity/launch {cwd}                         → {ok, unity: UnityStatus & {launched}}(既に開いていれば launched: false)
 //   --- CC Hub の再起動 ---
 //   GET  /api/restart                                    → {ok, restart: RestartStatus}
 //   POST /api/restart {when: 'idle' | 'now', build?: boolean}  予約(idle = 作業中のセッションが無くなったら)。build 既定 true

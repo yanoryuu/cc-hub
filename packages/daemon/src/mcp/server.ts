@@ -16,6 +16,7 @@ const INSTRUCTIONS =
   'サーバーへのアップロードは request_deploy で申請し、ユーザーの承認を待ちます(直接は送信しません)。' +
   'Firebase へのデプロイは firebase_status で状況を確かめてから request_firebase_deploy で申請します(承認制。Hosting はまずプレビュー URL、本番への反映はユーザーが確認してから)。' +
   'プロジェクトの共通の指示は get_project_instructions / update_project_instructions で読み書きします。' +
+  'Unity のプロジェクトは launch_unity でエディタを開けます(unity_status で開いているか確認できます)。' +
   'cwd を受け取るツールには、必ずあなたの現在の作業ディレクトリの絶対パスを渡してください。';
 
 export interface McpHttpDeps extends McpDeps {
