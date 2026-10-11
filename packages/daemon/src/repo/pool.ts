@@ -20,6 +20,12 @@ import { installCommand, lockHash } from './kind';
 
 const RECONCILE_MS = 30_000;
 const FETCH_FRESH_MS = 30_000;
+/** git fetch をやり直すまでの待ち時間(一時的なネットワークの不調向け) */
+const FETCH_RETRY = [3_000, 10_000];
+/** 待機中の worktree を最新の main に合わせる間隔 */
+const REFRESH_MS = 15 * 60_000;
+/** worktree の作成に失敗したら、この間は新しく作らない(失敗が続いて上限まで増えるのを防ぐ) */
+const BROKEN_COOLDOWN_MS = 5 * 60_000;
 const INSTALL_TIMEOUT = 30 * 60_000;
 const ROBOCOPY_TIMEOUT = 2 * 3600_000;
 const DELETE_MAX_FAIL = 3;
@@ -39,6 +45,10 @@ interface RepoRuntime {
   again: boolean;
   removed: boolean;
   lastFetch: number;
+  /** 待機中の worktree を最新の main に合わせた時刻 */
+  lastRefresh: number;
+  /** 最後に worktree の作成に失敗した時刻 */
+  brokenAt: number;
 }
 
 export interface PoolDeps {
@@ -126,7 +136,7 @@ export class WorktreePool {
   private rt(repoId: string): RepoRuntime {
     let r = this.rts.get(repoId);
     if (!r) {
-      r = { mutex: new Mutex(), warm: new Semaphore(1), waiters: [], reconciling: false, again: false, removed: false, lastFetch: 0 };
+      r = { mutex: new Mutex(), warm: new Semaphore(1), waiters: [], reconciling: false, again: false, removed: false, lastFetch: 0, lastRefresh: Date.now(), brokenAt: 0 };
       this.rts.set(repoId, r);
     }
     return r;
@@ -153,6 +163,7 @@ export class WorktreePool {
 
   private broken(w: WorktreeRow, error: string): void {
     console.error(`[pool] ${w.id} → broken: ${error}`);
+    this.rt(w.repoId).brokenAt = Date.now();
     this.set(w, { state: 'broken', progress: null, error: error.slice(0, 500) });
   }
 
@@ -214,11 +225,15 @@ export class WorktreePool {
 
     // 削除のリトライ
     for (const w of list) if (w.state === 'deleting' && !this.busy.has(w.id)) void this.task(w, () => this.destroy(w));
+    // 待機中の worktree を最新の main に合わせる(ときどき)
+    this.refreshIdle(repo);
 
     const isReady = (s: WorktreeState) => s === 'creating' || s === 'warming' || s === 'idle';
     const ready = list.filter((w) => isReady(w.state)).length;
     const need = repo.poolMin + rt.waiters.length;
     let toCreate = Math.min(need - ready, repo.poolMax - list.length);
+    // 直前に作成に失敗していたら少し待つ(同じ原因で失敗し続けて上限まで増えないように)
+    if (toCreate > 0 && Date.now() - rt.brokenAt < BROKEN_COOLDOWN_MS) toCreate = 0;
 
     if (toCreate > 0) {
       const free = await freeDiskGB(repo.baseDir);
@@ -369,11 +384,52 @@ export class WorktreePool {
   }
 
   // ================================================================ 作成・ウォームアップ
+  /**
+   * git fetch --prune。一時的なネットワークの不調(DNS など)に備えて少し間を空けて 3 回まで試し、
+   * それでも失敗したら、前回取得済みの origin/<default> があればそれを使って続ける(無ければ例外)
+   */
   private async fetch(repo: RepoInfo, force: boolean, logFile?: string): Promise<void> {
     const rt = this.rt(repo.id);
     if (!force && Date.now() - rt.lastFetch < FETCH_FRESH_MS) return;
-    await gitOk(['-C', baseOf(repo), 'fetch', 'origin', '--prune'], { logFile, timeout: 5 * 60_000 });
-    rt.lastFetch = Date.now();
+    let last: unknown = null;
+    for (let i = 0; i <= FETCH_RETRY.length; i++) {
+      if (i > 0) await new Promise((r) => setTimeout(r, FETCH_RETRY[i - 1]));
+      try {
+        await gitOk(['-C', baseOf(repo), 'fetch', 'origin', '--prune'], { logFile, timeout: 5 * 60_000 });
+        rt.lastFetch = Date.now();
+        return;
+      } catch (e) {
+        last = e;
+      }
+    }
+    const have = await git(['-C', baseOf(repo), 'rev-parse', '--verify', '--quiet', `refs/remotes/origin/${repo.defaultBranch}`]);
+    if (have.code !== 0) throw last;
+    console.warn(`[pool] ${repo.id}: git fetch に失敗したため、前回取得した origin/${repo.defaultBranch} で続けます: ${errMsg(last)}`);
+  }
+
+  /** 待機中の worktree を origin/<default> の最新に合わせる(前回から REFRESH_MS 以上たっていれば) */
+  private refreshIdle(repo: RepoInfo): void {
+    const rt = this.rt(repo.id);
+    if (Date.now() - rt.lastRefresh < REFRESH_MS) return;
+    rt.lastRefresh = Date.now();
+    for (const w of this.forRepo(repo.id)) {
+      if (w.state !== 'idle' || this.busy.has(w.id)) continue;
+      void this.task(w, async () => {
+        if (w.state !== 'idle') return;
+        const logFile = this.logFile(w);
+        await this.rt(repo.id).mutex.run(async () => {
+          await this.fetch(repo, false, logFile);
+          const [head, latest] = await Promise.all([
+            git(['-C', w.path, 'rev-parse', 'HEAD']),
+            git(['-C', baseOf(repo), 'rev-parse', `refs/remotes/origin/${repo.defaultBranch}`]),
+          ]);
+          if (head.code !== 0 || latest.code !== 0 || head.stdout.trim() === latest.stdout.trim()) return;
+          await gitOk(['-C', w.path, 'reset', '--hard'], { logFile });
+          await gitOk(['-C', w.path, 'switch', '--detach', `origin/${repo.defaultBranch}`], { logFile });
+          console.log(`[pool] ${w.id} を origin/${repo.defaultBranch} の最新に合わせました`);
+        });
+      });
+    }
   }
 
   /** worktree を(作り直しも含めて)作成し、ウォームアップして idle にする */

@@ -24,6 +24,7 @@ import { InstructionsService } from './project/instructions';
 import { ReplyRouter } from './notify/replies';
 import { formatStatus } from './notify/status';
 import { RestartScheduler } from './restart/scheduler';
+import { startAutoRelease } from './repo/autorelease';
 import { createRunner } from './firebase/cli';
 import { FirebaseInfoService } from './firebase/info';
 
@@ -77,6 +78,14 @@ function main(): void {
   // アップロード / Firebase デプロイの承認ボタン(Bot が承認用チャンネルに投稿)
   notify.setDeployActions(deploy);
   // 再起動の予約: CC Hub のセッションに作業中のものが無くなったら scripts/deploy.ps1 で再起動する
+  // 作業が終わった worktree(セッション停止・変更なし・コミットなし or PR マージ済み)を解放して最新の main に戻す
+  const stopAutoRelease = startAutoRelease({
+    worktrees: () => Object.values(repos.pool.all()),
+    session: (id) => sessions.info(id),
+    isRunning: (id) => sessions.isRunning(id),
+    prs: () => github.list(),
+    release: (sid) => repos.release(sid, 'keep'),
+  });
   const restart = new RestartScheduler({
     busy: () => [
       ...Object.values(sessions.all())
@@ -176,6 +185,7 @@ function main(): void {
     stopCapture();
     notify.stop();
     restart.stop();
+    stopAutoRelease();
     wsHub.closeAll();
     server.close();
     setTimeout(() => process.exit(0), 500);

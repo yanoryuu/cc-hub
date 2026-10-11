@@ -8,6 +8,7 @@ import { isAllowedMime, sanitizeAttachmentName } from '../src/session/attach';
 import { activeBackgroundTasks } from '../src/util';
 import { overlaps } from '../src/repo/exec';
 import { findUnityProject, parseEditorVersion, projectPathArg } from '../src/unity/launcher';
+import { shouldAutoRelease } from '../src/repo/autorelease';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -211,6 +212,22 @@ test('Unity: バージョン / -projectPath / プロジェクトのフォルダ'
   assert.equal(findUnityProject(path.join(root, 'Assets', 'Scripts')), root);
   assert.equal(findUnityProject(os.tmpdir()), null);
   fs.rmSync(root, { recursive: true, force: true });
+});
+
+test('自動解放: セッションが止まっていて、変更も未 push のコミットも無いときだけ', () => {
+  const git = (o: Partial<{ changed: number; ahead: number; unpushed: number }>) =>
+    ({ changed: 0, insertions: 0, deletions: 0, ahead: 0, behind: 0, unpushed: 0, pushed: false, updatedAt: 0, ...o }) as any;
+  assert.ok(shouldAutoRelease({ git: git({}), sessionEnded: true, prMerged: false }));
+  // セッションが動いている / 状態が分からない
+  assert.ok(!shouldAutoRelease({ git: git({}), sessionEnded: false, prMerged: true }));
+  assert.ok(!shouldAutoRelease({ git: null, sessionEnded: true, prMerged: true }));
+  // 未コミットの変更がある
+  assert.ok(!shouldAutoRelease({ git: git({ changed: 1 }), sessionEnded: true, prMerged: true }));
+  // コミットがあって PR が未マージ / 未 push
+  assert.ok(!shouldAutoRelease({ git: git({ ahead: 2 }), sessionEnded: true, prMerged: false }));
+  assert.ok(!shouldAutoRelease({ git: git({ ahead: 2, unpushed: 1 }), sessionEnded: true, prMerged: true }));
+  // push 済みで PR がマージされた(スカッシュマージで ahead が残っていてもよい)
+  assert.ok(shouldAutoRelease({ git: git({ ahead: 2, unpushed: 0 }), sessionEnded: true, prMerged: true }));
 });
 
 console.log(`\n${passed} passed${process.exitCode ? ', some FAILED' : ''}`);
