@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import type {
+  IdleStopSettings,
   NotifyKind,
   ReleaseMode,
   SessionInfo,
@@ -14,6 +15,7 @@ import type {
 import { bus } from '../bus';
 import { emitNotify } from '../notify/emit';
 import { dataDir, type HubConfig } from '../config';
+import { IDLE_STOPPED_KEY, IDLE_STOP_KEY, isIdleTooLong, normalizeIdleStop } from './idlestop';
 
 // 終了したセッションの最後の画面(デーモン再起動後も「どう終わったか」を見られるように保存する)
 const SCREEN_MAX_BYTES = 512 * 1024;
@@ -121,6 +123,8 @@ export class SessionManager {
   private instructionsFor: ((info: SessionInfo) => string | null) | null = null;
   /** cwd → 登録リポジトリ(linkedDirs の中なら)。RepoManager が設定する */
   private repoForCwd: ((cwd: string) => string | null) | null = null;
+  /** 使っていないので自動で止めたセッション(作業ツリーの自動解放を見送るため、再起動をまたいで覚えておく) */
+  private readonly idleStoppedIds = new Set<string>();
 
   constructor(
     private readonly cfg: HubConfig,
@@ -304,8 +308,11 @@ export class SessionManager {
   /** SQLite から復元し、前回実行中だった managed セッションを --resume で再開する */
   restore(): void {
     const now = Date.now();
+    const idleCfg = this.idleStopSettings();
+    for (const id of this.store.getSetting<string[]>(IDLE_STOPPED_KEY) ?? []) this.idleStoppedIds.add(id);
     for (const r of this.store.loadSessions()) {
       const info = this.rowToInfo(r);
+      if (this.idleStoppedIds.has(info.id)) info.idleStopped = true;
       const e = this.newEntry(info);
       e.endedAt = r.ended_at;
       if (r.claude_session_id && r.claude_session_id !== info.id) {
@@ -326,7 +333,12 @@ export class SessionManager {
       if (info.managed) {
         if (r.ended_at == null) {
           // デーモン停止で PTY ごと落ちたセッション
-          if (this.cfg.autoResume && findTranscript(this.resumeId(e)) && fs.existsSync(info.cwd)) {
+          if (isIdleTooLong(info, now, idleCfg)) {
+            // 入力待ちのまま長く使っていないものは再開しない(メモリを空けておく。「再開」で続きから)
+            this.setIdleStopped(e, true);
+            this.markEnded(e, 'stopped', null);
+            console.log(`[session] 使っていないので再開しません: ${info.name} (${info.id})`);
+          } else if (this.cfg.autoResume && findTranscript(this.resumeId(e)) && fs.existsSync(info.cwd)) {
             info.status = 'starting';
             info.approval = null;
             info.currentTool = null;
@@ -564,6 +576,7 @@ export class SessionManager {
   /** claude を PTY で起動する。CLAUDE* 環境変数は全部取り除く(検証 X2) */
   private spawn(e: Entry, o: { resume: boolean; prompt?: string }): void {
     const info = e.info;
+    this.setIdleStopped(e, false);
     const args = o.resume ? ['--resume', this.resumeId(e)] : ['--session-id', info.id];
     args.push('--permission-mode', this.cfg.permissionMode, '-n', info.name, ...this.instructionArgs(info), ...this.cfg.claudeArgs);
     if (o.prompt) args.push(o.prompt);
@@ -672,6 +685,7 @@ export class SessionManager {
       if (e.detectTimer) clearTimeout(e.detectTimer);
       if (e.tokenTimer) clearTimeout(e.tokenTimer);
       e.host?.dispose();
+      this.setIdleStopped(e, false);
       this.sessions.delete(id);
       this.store.deleteSession(id);
       this.agents.removeSession(id);
@@ -1321,6 +1335,40 @@ export class SessionManager {
 
   // ================================================================ 終了
   /** デーモン終了: PTY を閉じるが状態は「実行中」のまま残す(次回 --resume で再開) */
+  // ================================================================ 使っていないセッションの自動停止
+  idleStopSettings(): IdleStopSettings {
+    return normalizeIdleStop(this.store.getSetting(IDLE_STOP_KEY));
+  }
+
+  setIdleStopSettings(v: unknown): IdleStopSettings {
+    const s = normalizeIdleStop(v);
+    this.store.setSetting(IDLE_STOP_KEY, s);
+    return s;
+  }
+
+  private setIdleStopped(e: Entry, on: boolean): void {
+    if (!!e.info.idleStopped === on) return;
+    e.info.idleStopped = on;
+    if (on) this.idleStoppedIds.add(e.info.id);
+    else this.idleStoppedIds.delete(e.info.id);
+    this.store.setSetting(IDLE_STOPPED_KEY, [...this.idleStoppedIds]);
+  }
+
+  /** 入力待ちのまま長く動きの無いセッションを止める(会話は残る)。止めたセッション名を返す */
+  stopIdle(now = Date.now()): string[] {
+    const cfg = this.idleStopSettings();
+    const stopped: string[] = [];
+    for (const e of this.sessions.values()) {
+      if (!e.host?.alive || e.preparing || !isIdleTooLong(e.info, now, cfg)) continue;
+      this.setIdleStopped(e, true);
+      e.userStopped = true;
+      e.host.kill();
+      stopped.push(e.info.name);
+      console.log(`[session] ${cfg.hours} 時間使われていないので停止します: ${e.info.name} (${e.info.id})`);
+    }
+    return stopped;
+  }
+
   shutdown(): void {
     this.shuttingDown = true;
     for (const e of this.sessions.values()) {

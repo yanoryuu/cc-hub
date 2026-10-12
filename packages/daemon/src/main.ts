@@ -25,6 +25,7 @@ import { ReplyRouter } from './notify/replies';
 import { formatStatus } from './notify/status';
 import { RestartScheduler } from './restart/scheduler';
 import { startAutoRelease } from './repo/autorelease';
+import { IDLE_CHECK_MS } from './session/idlestop';
 import { createRunner } from './firebase/cli';
 import { FirebaseInfoService } from './firebase/info';
 
@@ -172,6 +173,9 @@ function main(): void {
   });
 
   setInterval(() => agents.gc(), 600_000).unref();
+  // 入力待ちのまま長く使っていないセッションを止めてメモリを空ける(設定 → CC Hub)
+  const idleTimer = setInterval(() => sessions.stopIdle(), IDLE_CHECK_MS);
+  idleTimer.unref();
 
   let exiting = false;
   const shutdown = (sig: string) => {
@@ -186,6 +190,7 @@ function main(): void {
     notify.stop();
     restart.stop();
     stopAutoRelease();
+    clearInterval(idleTimer);
     wsHub.closeAll();
     server.close();
     setTimeout(() => process.exit(0), 500);

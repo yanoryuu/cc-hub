@@ -67,6 +67,15 @@ export interface SessionInfo {
   task?: string | null;
   /** トークン使用量(statusLine と transcript から。リアルタイムに更新) */
   tokens?: SessionTokens | null;
+  /** 使っていないので CC Hub が自動で止めた(「再開」で続きから。作業ツリーは自動解放しない) */
+  idleStopped?: boolean;
+}
+
+/** 使っていないセッションの自動停止(GET / PUT /api/idle-stop) */
+export interface IdleStopSettings {
+  enabled: boolean;
+  /** 入力待ちのまま、この時間(時間単位)動きが無ければ止める。CC Hub の再起動時もこれを超えたものは再開しない */
+  hours: number;
 }
 
 export interface SessionTokens {
@@ -749,6 +758,9 @@ export type ServerMessage =
 //   GET  /api/restart                                    → {ok, restart: RestartStatus}
 //   POST /api/restart {when: 'idle' | 'now', build?: boolean}  予約(idle = 作業中のセッションが無くなったら)。build 既定 true
 //   POST /api/restart/cancel                             予約を取り消す
+//   GET  /api/idle-stop                                  → {ok, settings: IdleStopSettings}
+//   PUT  /api/idle-stop  IdleStopSettings                使っていないセッションの自動停止の設定(入力待ちのまま hours 時間動きが無ければ停止。
+//                                                        再起動時もこれを超えた入力待ちのセッションは再開しない)
 //   --- 通知 ---
 //   GET  /api/notify/settings                            → {ok, settings: NotifySettings}
 //   PUT  /api/notify/settings  NotifySettings(discord[].webhookUrl に新しい URL を入れたときだけ更新。空なら据え置き)

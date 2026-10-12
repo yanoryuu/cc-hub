@@ -1,7 +1,17 @@
 // 設定画面: 通知(Windows / Discord)・アップロード先のサーバー・Claude との連携(CC Hub の MCP)
 // デスクトップは中央の表示(上部バーの ⚙)、モバイルは「その他 → 設定」
 import { useEffect, useMemo, useState } from 'react';
-import type { DiscordBotSettings, DiscordBotStatus, DiscordTarget, NotifySettings, NotifyTopic, RestartStatus, ServerInfo, ServerProtocol } from '@cc-hub/shared';
+import type {
+  DiscordBotSettings,
+  DiscordBotStatus,
+  DiscordTarget,
+  IdleStopSettings,
+  NotifySettings,
+  NotifyTopic,
+  RestartStatus,
+  ServerInfo,
+  ServerProtocol,
+} from '@cc-hub/shared';
 import { type SettingsTab, useHub } from '../store';
 import { api, errText, pick } from '../api';
 import {
@@ -145,6 +155,7 @@ function HubSection() {
           )}
         </div>
       </section>
+      <IdleStopCard />
       {confirmNow && (
         <ConfirmModal
           title="今すぐ再起動しますか?"
@@ -160,6 +171,67 @@ function HubSection() {
         </ConfirmModal>
       )}
     </div>
+  );
+}
+
+// ---------------------------------------------------------------- 使っていないセッションの自動停止
+
+const IDLE_HOURS = [1, 2, 3, 6, 12, 24];
+
+function IdleStopCard() {
+  const [st, setSt] = useState<IdleStopSettings | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  useEffect(() => {
+    api('/api/idle-stop')
+      .then((r) => setSt(pick<IdleStopSettings>(r, 'settings') ?? null))
+      .catch((e) => setErr(errText(e, '設定を取得できませんでした')));
+  }, []);
+  const save = async (next: IdleStopSettings) => {
+    setBusy(true);
+    setErr(null);
+    try {
+      setSt(pick<IdleStopSettings>(await api('/api/idle-stop', next, { method: 'PUT' }), 'settings') ?? next);
+    } catch (e) {
+      setErr(errText(e, '保存できませんでした'));
+    } finally {
+      setBusy(false);
+    }
+  };
+  const hours = st && !IDLE_HOURS.includes(st.hours) ? [...IDLE_HOURS, st.hours].sort((a, b) => a - b) : IDLE_HOURS;
+  return (
+    <section className="rp-card set-card" aria-labelledby="set-idle-stop">
+      <div className="set-card-head">
+        <h3 id="set-idle-stop" className="set-h">
+          使っていないセッションの自動停止
+        </h3>
+      </div>
+      <p className="muted small">
+        入力待ちのまま一定時間動きの無いセッションを止めて、メモリ(と C ドライブのページファイル)を空けます。止めるのは Claude
+        のプロセスだけで、会話は残ります。「再開」を押すと続きからできます。作業ツリーも残したままにします。
+        CC Hub の再起動のときも、この時間を超えて入力待ちだったセッションは再開しません。作業中・承認待ちのセッションは止めません。
+      </p>
+      {err && <div className="rp-alert error">{err}</div>}
+      {st && (
+        <div className="set-actions">
+          <label className="check-inline set-inline">
+            <input type="checkbox" checked={st.enabled} disabled={busy} onChange={(e) => void save({ ...st, enabled: e.target.checked })} />
+            自動で停止する
+          </label>
+          <label className="check-inline set-inline">
+            入力待ちのまま
+            <select value={st.hours} disabled={busy || !st.enabled} onChange={(e) => void save({ ...st, hours: Number(e.target.value) })}>
+              {hours.map((h) => (
+                <option key={h} value={h}>
+                  {h} 時間
+                </option>
+              ))}
+            </select>
+            たったら
+          </label>
+        </div>
+      )}
+    </section>
   );
 }
 

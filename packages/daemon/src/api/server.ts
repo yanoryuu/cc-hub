@@ -423,6 +423,10 @@ async function handle(d: ServerDeps, req: http.IncomingMessage, res: http.Server
   if (p === '/api/restart' && method === 'POST') return json(res, 200, { ok: true, restart: d.restart.request(await readBody(req)) });
   if (p === '/api/restart/cancel' && method === 'POST') return json(res, 200, { ok: true, restart: d.restart.cancel() });
 
+  // ------------------------------------------------ 使っていないセッションの自動停止
+  if (p === '/api/idle-stop' && method === 'GET') return json(res, 200, { ok: true, settings: d.sessions.idleStopSettings() });
+  if (p === '/api/idle-stop' && method === 'PUT') return json(res, 200, { ok: true, settings: d.sessions.setIdleStopSettings(await readBody(req)) });
+
   // ------------------------------------------------ 通知
   if (p === '/api/notify/settings' && method === 'GET') {
     const out: Record<string, unknown> = { ok: true, settings: d.notify.getSettings() };

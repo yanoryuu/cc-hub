@@ -61,6 +61,11 @@ function SessionRow({
               {STATUS_ICON[s.status]}
             </span>
             {STATUS_LABEL[s.status]}
+            {s.idleStopped && s.status === 'stopped' && (
+              <span className="muted" title="入力待ちのまま長く使われていなかったので、メモリを空けるため CC Hub が停止しました。「再開」で続きからできます">
+                (未使用のため)
+              </span>
+            )}
           </span>
           {sub && (
             <span className="srow-tool" title={sub}>

@@ -91,5 +91,7 @@ export function useSessionWorktree(session: SessionInfo): WorktreeInfo | null {
 
 /** 停止済みで、worktree がまだこのセッションに割り当てられている = 解放が必要 */
 export function needsRelease(session: SessionInfo, wt: WorktreeInfo | null): boolean {
+  // 使っていないので自動で止めたセッションは「再開」で続ける前提なので、解放を促さない
+  if (session.idleStopped) return false;
   return !!wt && wt.state === 'assigned' && (session.status === 'stopped' || session.status === 'error');
 }

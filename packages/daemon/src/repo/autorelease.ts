@@ -4,6 +4,7 @@
 // - 未コミットの変更が無い
 // - main より進んだコミットが無い、または push 済みでそのブランチの PR がマージされている
 // 未 push のコミットや変更が残っているものは解放しない(管理画面に「要解放」として残る)
+// 使っていないので自動で止めたセッション(idleStopped)の worktree も解放しない(「再開」で続けられるように)
 import type { PrInfo, SessionInfo, WorktreeGitStat, WorktreeInfo } from '@cc-hub/shared';
 
 const CHECK_MS = 60_000;
@@ -30,6 +31,8 @@ export function startAutoRelease(d: AutoReleaseDeps): () => void {
     for (const w of d.worktrees()) {
       if (w.state !== 'assigned' || !w.sessionId || pending.has(w.id)) continue;
       const s = d.session(w.sessionId);
+      // 使っていないので自動で止めたセッションは「再開」で続けられるよう作業ツリーを残す
+      if (s?.idleStopped) continue;
       const sessionEnded = !s || ((s.status === 'stopped' || s.status === 'error') && !d.isRunning(s.id));
       const prMerged = !!w.branch && prs.some((p) => p.repoId === w.repoId && p.headRefName === w.branch && p.state === 'MERGED');
       if (!shouldAutoRelease({ git: w.git, sessionEnded, prMerged })) continue;
