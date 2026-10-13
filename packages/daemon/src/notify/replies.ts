@@ -1,5 +1,5 @@
 // Discord での質問を、そのセッションへの「横からの質問」(/btw のように)として扱う。
-// 作業の指示や承認は CC Hub から行うので、質問はセッションに送らない(アップロードの承認は approvals.ts のボタンで行う)。
+// 作業の指示や承認は CC Hub から行うので、質問はセッションに送らない(承認は approvals.ts / session-approvals.ts のボタンで行う)。
 // claude -p --resume <id> --fork-session で会話を写して答えさせ、ファイルは変更させない。
 // 同じスレッドでの続けての質問には、それまでのやり取りを一緒に渡す(毎回会話を写し直すため、前の答えを覚えていない)。
 import type { SessionInfo } from '@cc-hub/shared';

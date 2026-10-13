@@ -69,7 +69,7 @@ function main(): void {
     session: (id) => sessions.info(id),
     desktopClients: () => ws?.desktopCount() ?? 0,
   });
-  // Discord の通知への返信 / スレッドへの書き込み → そのセッションへの横からの質問(作業の指示や承認は CC Hub から行う)
+  // Discord の通知への返信 / スレッドへの書き込み → そのセッションへの横からの質問(作業の指示は CC Hub から行う。承認は承認用チャンネルのボタンで答える)
   const replies = new ReplyRouter({
     info: (id) => sessions.info(id),
     resumeIdFor: (id) => sessions.resumeIdFor(id),
@@ -78,6 +78,8 @@ function main(): void {
   notify.setReplyHandler((req, io) => replies.handle(req, io));
   // アップロード / Firebase デプロイの承認ボタン(Bot が承認用チャンネルに投稿)
   notify.setDeployActions(deploy);
+  // セッション中の承認(選択肢)も Discord のボタンで答えられる
+  notify.setSessionApprove((id, option) => sessions.approve(id, option));
   // 再起動の予約: CC Hub のセッションに作業中のものが無くなったら scripts/deploy.ps1 で再起動する
   // 作業が終わった worktree(セッション停止・変更なし・コミットなし or PR マージ済み)を解放して最新の main に戻す
   const stopAutoRelease = startAutoRelease({

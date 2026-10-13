@@ -13,6 +13,7 @@ import type { NotifyMeta } from './emit';
 import { DiscordSender, buildPayload, type SendResult } from './discord';
 import { DiscordBot, splitMessage, type BotInteraction, type BotReply } from './bot';
 import { DeployApprovals, type DeployActions } from './approvals';
+import { SessionApprovals } from './session-approvals';
 import { HISTORY_TURNS, type BtwIO, type BtwRequest, type QaTurn } from './replies';
 import { Throttle, route, throttleKey, topicOf, type FocusState, type RouteDecision } from './topic';
 import { loadStored, mergeUpdate, toPublic, type StoredNotifySettings } from './settings';
@@ -59,8 +60,12 @@ export class NotifyService {
   /** 直近の振り分け結果(検証・デバッグ用。GET /api/notify/settings?debug=1 で返す) */
   readonly recent: { ts: number; title: string; topic: NotifyTopic | null; decision: RouteDecision | { skipped: string } }[] = [];
   private readonly approvals: DeployApprovals;
+  private readonly sessionApprovals: SessionApprovals;
   private statusText: (() => string) | null = null;
-  private readonly onState = (msg: ServerMessage) => this.approvals.onState(msg);
+  private readonly onState = (msg: ServerMessage) => {
+    this.approvals.onState(msg);
+    this.sessionApprovals.onState(msg);
+  };
   private readonly onNotify = (ev: NotifyEvent, meta: NotifyMeta) => {
     this.dispatch(ev, meta ?? {}).catch((e) => console.warn(`[notify] 振り分けに失敗: ${(e as Error).message}`));
   };
@@ -79,6 +84,16 @@ export class NotifyService {
       // 承認ボタンのメッセージも、返信・スレッドで申請したセッションに質問できるようにする
       remember: (messageId, sessionId) => this.remember(messageId, sessionId, 'deploy_request'),
     });
+    // セッション中の承認(選択肢をボタンにして同じ承認用チャンネルに出す)
+    this.sessionApprovals = new SessionApprovals({
+      channelId: () => (this.settings.bot.enabled && this.bot.connected() ? this.settings.bot.approvalChannelId : ''),
+      allowed: (userId) => this.settings.bot.allowedUserIds.includes(userId),
+      session: (id) => this.d.session(id),
+      post: (ch, body) => this.bot.post(ch, body),
+      edit: (ch, id, body) => this.bot.edit(ch, id, body),
+      respond: (i, type, data) => this.bot.respond(i, type, data),
+      remember: (messageId, sessionId) => this.remember(messageId, sessionId, 'approval'),
+    });
     this.bot.onInteraction = (i) => void this.onInteraction(i);
     this.loadMessages();
     bus.on('notify', this.onNotify);
@@ -89,6 +104,7 @@ export class NotifyService {
   stop(): void {
     bus.off('notify', this.onNotify);
     bus.off('state', this.onState);
+    this.sessionApprovals.stop();
     this.bot.stop();
   }
 
@@ -97,13 +113,21 @@ export class NotifyService {
     this.approvals.setActions(a);
   }
 
+  /** セッションの承認に答える関数(main で SessionManager.approve をつなぐ) */
+  setSessionApprove(fn: (id: string, option: string) => void): void {
+    this.sessionApprovals.setApprove(fn);
+  }
+
   /** Discord の /status で返す文章(main でつなぐ) */
   setStatusProvider(fn: () => string): void {
     this.statusText = fn;
   }
 
   private async onInteraction(i: BotInteraction): Promise<void> {
-    if (i.kind === 'button') return this.approvals.onInteraction(i);
+    if (i.kind === 'button') {
+      if (i.customId.startsWith('cchub:appr:')) return this.sessionApprovals.onInteraction(i);
+      return this.approvals.onInteraction(i);
+    }
     if (i.command !== 'status') return;
     try {
       if (!this.settings.bot.allowedUserIds.includes(i.userId)) {
