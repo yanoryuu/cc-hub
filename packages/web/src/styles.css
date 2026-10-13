@@ -771,11 +771,11 @@ kbd {
   opacity: 0;
   pointer-events: none;
 }
-/* 停止 / 再開(× の左隣) */
+/* 停止 / 再開(右上に常に出す。× は右下にマウスを乗せた時だけ) */
 .srow-act {
   position: absolute;
   top: 6px;
-  right: 36px;
+  right: 6px;
   width: 26px;
   height: 26px;
   display: grid;
@@ -786,16 +786,18 @@ kbd {
   color: var(--muted);
   font-size: 11px;
   line-height: 1;
-  opacity: 0;
-  pointer-events: none;
 }
-.srow-wrap:hover .srow-act,
-.srow-wrap:focus-within .srow-act {
-  opacity: 1;
-  pointer-events: auto;
+.srow-act.stop:hover,
+.srow-act.stop:focus-visible {
+  color: var(--danger-fg);
+  background: var(--danger-bg);
+  border-color: var(--danger-border);
 }
-.srow-act:hover,
-.srow-act:focus-visible {
+.srow-act.resume {
+  color: var(--accent, var(--fg));
+}
+.srow-act.resume:hover,
+.srow-act.resume:focus-visible {
   color: var(--fg);
   background: var(--panel-3);
 }
@@ -803,14 +805,12 @@ kbd {
   opacity: 0.5;
   cursor: progress;
 }
-@media (hover: none) {
-  .srow-act {
-    opacity: 0.6;
-    pointer-events: auto;
-  }
-  .srow-wrap .srow:has(~ .srow-act) {
-    padding-right: 70px;
-  }
+.srow-wrap .srow:has(~ .srow-act) {
+  padding-right: 38px;
+}
+.srow-act ~ .srow-del {
+  top: auto;
+  bottom: 6px;
 }
 .srow-wrap:hover .srow-del,
 .srow-wrap:focus-within .srow-del {
@@ -834,6 +834,9 @@ kbd {
   }
   .srow-wrap .srow {
     padding-right: 40px;
+  }
+  .srow-wrap .srow:has(~ .srow-act) {
+    padding-right: 38px;
   }
 }
 .srow {
