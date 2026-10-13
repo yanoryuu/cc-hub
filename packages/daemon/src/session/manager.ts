@@ -14,6 +14,7 @@ import type {
 } from '@cc-hub/shared';
 import { bus } from '../bus';
 import { emitNotify } from '../notify/emit';
+import { artifactExcerpt, artifactFromHook, type ArtifactPublish } from '../notify/artifact';
 import { dataDir, type HubConfig } from '../config';
 import { IDLE_STOPPED_KEY, IDLE_STOP_KEY, isIdleTooLong, normalizeIdleStop } from './idlestop';
 
@@ -1075,6 +1076,17 @@ export class SessionManager {
     }, ms);
   }
 
+  private notifyArtifact(e: Entry, art: ArtifactPublish, cwd: string): void {
+    const ex = artifactExcerpt(art.filePath, cwd);
+    const title = art.title || ex.title || 'アーティファクト';
+    const body = [art.description, ex.text].filter(Boolean).join('\n\n');
+    console.log(`[session] アーティファクトを公開: ${e.info.name} → ${art.url}`);
+    emitNotify(
+      { kind: 'done', sessionId: e.info.id, title: `アーティファクト: ${title}`, body, ts: Date.now() },
+      { topic: 'artifact', url: art.url, urlLabel: 'アーティファクト' },
+    );
+  }
+
   private notify(e: Entry, kind: NotifyKind, title: string, body: string): void {
     const now = Date.now();
     const last = e.lastNotify.get(kind) ?? 0;
@@ -1114,6 +1126,10 @@ export class SessionManager {
     if (!info.managed && !info.worktreeId && typeof b.cwd === 'string' && b.cwd) info.cwd = b.cwd;
 
     this.agents.handleHook(info.id, b);
+
+    // Claude がアーティファクトを公開したら、内容の抜粋と URL を通知する(Discord に送る)
+    const art = artifactFromHook(b);
+    if (art) this.notifyArtifact(e, art, typeof b.cwd === 'string' ? b.cwd : info.cwd);
 
     // バックグラウンド待機中に最後のエージェントが終わったら、少し待っても再開しなければ「入力待ち」にする
     if (ev === 'SubagentStop' && info.currentTool?.name === '待機' && this.agents.runningCount(info.id) === 0) {

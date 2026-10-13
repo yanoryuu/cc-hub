@@ -508,6 +508,7 @@ export type NotifyTopic =
   | 'pr_merged'
   | 'deploy_request' // Claude からのアップロード申請(承認待ち)
   | 'deploy_done' // アップロード完了 / 失敗
+  | 'artifact' // Claude がアーティファクト(claude.ai のページ)を公開した
   | 'test';
 
 export interface DiscordTarget {

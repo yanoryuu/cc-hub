@@ -23,6 +23,8 @@ export interface StoredBotSettings {
 export interface StoredNotifySettings extends Omit<NotifySettings, 'discord' | 'bot'> {
   discord: StoredDiscordTarget[];
   bot: StoredBotSettings;
+  /** 保存形式の版(新しい種類を既存の送信先に足したか) */
+  topicsRev: number;
 }
 
 /** Discord のユーザー ID(数字 17〜20 桁)だけ残す */
@@ -69,7 +71,9 @@ async function mergeBot(cur: StoredBotSettings, b: any, protect: (plain: string)
 }
 
 export const DEFAULT_WINDOWS_TOPICS: NotifyTopic[] = ['approval', 'input', 'error', 'pr_ci_failed', 'pr_review', 'pr_merged', 'deploy_request', 'deploy_done'];
-export const DEFAULT_DISCORD_TOPICS: NotifyTopic[] = ['approval', 'error', 'pr_ci_failed', 'pr_merged', 'deploy_request', 'deploy_done'];
+export const DEFAULT_DISCORD_TOPICS: NotifyTopic[] = ['approval', 'error', 'pr_ci_failed', 'pr_merged', 'deploy_request', 'deploy_done', 'artifact'];
+/** 保存形式の版。2 = 既存の Discord 送信先に 'artifact' を足した */
+export const TOPICS_REV = 2;
 
 export function defaultSettings(): StoredNotifySettings {
   return {
@@ -77,6 +81,7 @@ export function defaultSettings(): StoredNotifySettings {
     discord: [],
     throttleSeconds: 30,
     bot: { enabled: false, allowedUserIds: [], tokenEnc: '', approvalChannelId: '' },
+    topicsRev: TOPICS_REV,
   };
 }
 
@@ -90,6 +95,8 @@ export function loadStored(raw: unknown): StoredNotifySettings {
   const d = defaultSettings();
   const r = (raw && typeof raw === 'object' ? raw : {}) as Partial<StoredNotifySettings>;
   const w = (r.windows ?? {}) as Partial<NotifySettings['windows']>;
+  // 版 2 より前に作った Discord の送信先には、アーティファクトの公開を足す(後から外せる)
+  const addArtifact = !(Number(r.topicsRev) >= 2);
   return {
     windows: {
       enabled: w.enabled !== false,
@@ -105,13 +112,18 @@ export function loadStored(raw: unknown): StoredNotifySettings {
             webhookMasked: String(t.webhookMasked ?? ''),
             webhookEnc: t.webhookEnc,
             repoIds: Array.isArray(t.repoIds) ? t.repoIds.map(String) : [],
-            topics: topics(t.topics, DEFAULT_DISCORD_TOPICS),
+            topics: withArtifact(topics(t.topics, DEFAULT_DISCORD_TOPICS), addArtifact),
             enabled: t.enabled !== false,
           }))
       : [],
     throttleSeconds: clampThrottle(r.throttleSeconds, d.throttleSeconds),
     bot: loadBot(r.bot),
+    topicsRev: TOPICS_REV,
   };
+}
+
+function withArtifact(list: NotifyTopic[], add: boolean): NotifyTopic[] {
+  return add && !list.includes('artifact') ? [...list, 'artifact'] : list;
 }
 
 function clampThrottle(v: unknown, def: number): number {
@@ -150,6 +162,7 @@ export async function mergeUpdate(
     discord: [],
     throttleSeconds: body.throttleSeconds == null ? cur.throttleSeconds : clampThrottle(body.throttleSeconds, cur.throttleSeconds),
     bot: await mergeBot(cur.bot, body.bot, protect),
+    topicsRev: TOPICS_REV,
   };
   const list = body.discord == null ? null : body.discord;
   if (list == null) {

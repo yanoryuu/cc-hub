@@ -60,6 +60,8 @@ export function colorOf(ev: NotifyEvent, topic: NotifyTopic | null, failed = fal
       return 0x22c55e; // 緑
     case 'pr_review':
       return 0x8b5cf6; // 紫
+    case 'artifact':
+      return 0x14b8a6; // 青緑
     default:
       return ev.kind === 'deploy' ? 0x22c55e : 0x64748b;
   }
@@ -76,6 +78,8 @@ export interface EmbedContext {
   urlLabel?: string | null;
   /** 失敗の通知か(アップロード失敗など。色を赤にする) */
   failed?: boolean;
+  /** 本文の長さの上限(既定 DESCRIPTION_MAX。アーティファクトは内容の抜粋を載せるので長め) */
+  descriptionMax?: number;
 }
 
 /** Webhook に送る本文 */
@@ -90,12 +94,14 @@ export function buildPayload(ev: NotifyEvent, ctx: EmbedContext): Record<string,
   if (ctx.url && /^https?:\/\//.test(ctx.url)) fields.push({ name: clip(ctx.urlLabel || 'URL', 256), value: clip(ctx.url, FIELD_MAX) });
   const embed: Record<string, unknown> = {
     title: clip(redact(ev.title), TITLE_MAX),
-    description: clip(redact(ev.body || ''), DESCRIPTION_MAX),
+    description: clip(redact(ev.body || ''), Math.min(4000, ctx.descriptionMax ?? DESCRIPTION_MAX)),
     color: colorOf(ev, ctx.topic, ctx.failed),
     timestamp: new Date(ev.ts || Date.now()).toISOString(),
     footer: { text: 'CC Hub' },
   };
   if (fields.length) embed.fields = fields;
+  // アーティファクトはタイトルを押すとページが開くようにする
+  if (ctx.topic === 'artifact' && ctx.url && /^https:\/\/claude\.ai\//.test(ctx.url)) embed.url = ctx.url;
   // @everyone などのメンションを無効にする(本文は Claude の発言を含むため)
   return { username: 'CC Hub', embeds: [embed], allowed_mentions: { parse: [] } };
 }

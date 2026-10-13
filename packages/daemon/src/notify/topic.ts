@@ -11,6 +11,7 @@ export const ALL_TOPICS: NotifyTopic[] = [
   'pr_merged',
   'deploy_request',
   'deploy_done',
+  'artifact',
   'test',
 ];
 
@@ -98,7 +99,8 @@ export function route(r: RouteInput): RouteDecision {
   const s = r.settings;
   // 表示中の抑制: Windows は表示中なら止める。Discord は画面の前にいる(最近操作した)ときだけ止める
   const viewing = s.windows.suppressWhenViewing && isViewing(r.focus, r.event.sessionId, r.now);
-  const attending = viewing && isAttending(r.focus, r.event.sessionId, r.now);
+  // アーティファクトは共有・あとで見る用なので、画面の前にいても送る
+  const attending = viewing && r.topic !== 'artifact' && isAttending(r.focus, r.event.sessionId, r.now);
   if (attending) return none('表示中のセッション');
   let windows: RouteDecision['windows'] = null;
   if (!viewing && s.windows.enabled && s.windows.topics.includes(r.topic)) windows = r.desktopConnected ? 'app' : 'daemon';

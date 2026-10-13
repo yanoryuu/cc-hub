@@ -28,6 +28,7 @@ export const TOPIC_ORDER: Exclude<NotifyTopic, 'test'>[] = [
   'pr_merged',
   'deploy_request',
   'deploy_done',
+  'artifact',
 ];
 
 export const TOPIC_LABEL: Record<NotifyTopic, string> = {
@@ -39,6 +40,7 @@ export const TOPIC_LABEL: Record<NotifyTopic, string> = {
   pr_merged: 'マージ',
   deploy_request: 'アップロードの申請',
   deploy_done: 'アップロード完了・失敗',
+  artifact: 'アーティファクトの公開',
   test: 'テスト',
 };
 

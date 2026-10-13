@@ -10,6 +10,7 @@ import { emitNotify } from '../src/notify/emit';
 import { bus } from '../src/bus';
 import { BOT_COMMANDS, parseInteraction, parseReply, splitMessage } from '../src/notify/bot';
 import { formatStatus } from '../src/notify/status';
+import { artifactFromHook, htmlToText } from '../src/notify/artifact';
 import { RestartScheduler } from '../src/restart/scheduler';
 import { DeployApprovals, buttons, cardText, customId, parseCustomId } from '../src/notify/approvals';
 import { HISTORY_TURNS, btwPrompt, decideReply } from '../src/notify/replies';
@@ -535,6 +536,37 @@ test('再起動の予約: 作業が無い状態が続いたら再起動 / 取り
   assert.throws(() => new RestartScheduler({ busy: () => [], script: 'Z:/none.ps1', logFile: 'x.log', launch: () => undefined }).request({}));
   r.stop();
   r2.stop();
+});
+
+test('artifact: 公開の hooks から URL・タイトルを取り出す', () => {
+  const url = 'https://claude.ai/code/artifact/0b1c2d3e-aaaa-bbbb-cccc-1234567890ab';
+  const base = { hook_event_name: 'PostToolUse', tool_name: 'Artifact', tool_input: { file_path: 'C:/x/report-page.html', description: '説明' } };
+  const a = artifactFromHook({ ...base, tool_response: { content: [{ type: 'text', text: `Published: ${url}` }] } });
+  assert.deepEqual(a, { url, title: 'report-page', description: '説明', filePath: 'C:/x/report-page.html' });
+  assert.equal(artifactFromHook({ ...base, tool_response: `ok ${url}` })?.url, url);
+  // 公開以外(read / 素材のアップロード)・別のツール・URL なしは対象外
+  assert.equal(artifactFromHook({ ...base, tool_input: { action: 'read', url }, tool_response: url }), null);
+  assert.equal(artifactFromHook({ ...base, tool_input: { url, asset: true, file_path: 'a.png' }, tool_response: url }), null);
+  assert.equal(artifactFromHook({ ...base, tool_name: 'Write', tool_response: url }), null);
+  assert.equal(artifactFromHook({ ...base, tool_response: 'failed' }), null);
+});
+
+test('artifact: HTML から本文を取り出す', () => {
+  const r = htmlToText('<html><head><title>週報 &amp; 計画</title><style>p{}</style></head><body><h1>見出し</h1><script>x()</script><p>本文 &lt;1&gt;</p><ul><li>A</li></ul></body></html>');
+  assert.equal(r.title, '週報 & 計画');
+  assert.equal(r.text, '見出し\n本文 <1>\n・A');
+});
+
+test('artifact: 既存の Discord 送信先に種類を足し、本文は長めに載せる', () => {
+  const old = loadStored({ discord: [{ id: 'a', name: 'x', webhookMasked: '', webhookEnc: 'e', repoIds: [], topics: ['approval'] }] });
+  assert.deepEqual(old.discord[0].topics, ['approval', 'artifact']);
+  const kept = loadStored({ topicsRev: 2, discord: [{ id: 'a', name: 'x', webhookMasked: '', webhookEnc: 'e', repoIds: [], topics: ['approval'] }] });
+  assert.deepEqual(kept.discord[0].topics, ['approval']);
+  const url = 'https://claude.ai/code/artifact/abc';
+  const p = buildPayload({ kind: 'done', sessionId: 's', title: 'アーティファクト: t', body: 'あ'.repeat(1000), ts: 1 }, { topic: 'artifact', url, descriptionMax: 2000 }) as any;
+  assert.equal(p.embeds[0].url, url);
+  assert.equal(p.embeds[0].description.length, 1000);
+  assert.equal(topicOf({ kind: 'done', sessionId: 's', title: 't', body: '', ts: 1 }, { topic: 'artifact' }), 'artifact');
 });
 
 void Promise.all(pending).then(() => console.log(`\nnotify: ${passed} passed`));

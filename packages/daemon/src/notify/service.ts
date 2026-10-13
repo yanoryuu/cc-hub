@@ -256,7 +256,8 @@ export class NotifyService {
       now,
     });
     if (decision.skipped) return record(decision);
-    if (!this.throttle.allow(throttleKey(ev, topic), this.settings.throttleSeconds, now)) return record({ skipped: '間引き' });
+    // アーティファクトは 1 件ずつ別のページなので間引かない
+    if (topic !== 'artifact' && !this.throttle.allow(throttleKey(ev, topic), this.settings.throttleSeconds, now)) return record({ skipped: '間引き' });
     record(decision);
     if (decision.windows) this.showWindows(ev, decision.windows);
     for (const id of decision.discord) {
@@ -271,6 +272,7 @@ export class NotifyService {
         url: meta.url ?? null,
         urlLabel: meta.urlLabel ?? null,
         failed: ev.kind === 'deploy' && /失敗/.test(ev.title),
+        descriptionMax: topic === 'artifact' ? 2000 : undefined,
       });
       void this.sendDiscord(t.id, payload).then((r) => {
         if (!r.ok) console.warn(`[notify] Discord(${t.name})への送信に失敗: ${r.error}`);
