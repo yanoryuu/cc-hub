@@ -771,6 +771,47 @@ kbd {
   opacity: 0;
   pointer-events: none;
 }
+/* 停止 / 再開(× の左隣) */
+.srow-act {
+  position: absolute;
+  top: 6px;
+  right: 36px;
+  width: 26px;
+  height: 26px;
+  display: grid;
+  place-items: center;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1;
+  opacity: 0;
+  pointer-events: none;
+}
+.srow-wrap:hover .srow-act,
+.srow-wrap:focus-within .srow-act {
+  opacity: 1;
+  pointer-events: auto;
+}
+.srow-act:hover,
+.srow-act:focus-visible {
+  color: var(--fg);
+  background: var(--panel-3);
+}
+.srow-act:disabled {
+  opacity: 0.5;
+  cursor: progress;
+}
+@media (hover: none) {
+  .srow-act {
+    opacity: 0.6;
+    pointer-events: auto;
+  }
+  .srow-wrap .srow:has(~ .srow-act) {
+    padding-right: 70px;
+  }
+}
 .srow-wrap:hover .srow-del,
 .srow-wrap:focus-within .srow-del {
   opacity: 1;

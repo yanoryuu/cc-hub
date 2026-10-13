@@ -26,6 +26,22 @@ function SessionRow({
   const showTitle = title && title !== s.name ? title : '';
   const sub = s.status === 'awaiting_approval' ? s.approval?.question ?? '' : toolText(s);
   const [removing, setRemoving] = useState(false);
+  const [acting, setActing] = useState(false);
+  // 停止 / 再開(CC Hub が起動したセッションだけ。会話は残るので、止めても「再開」で続きから)
+  const live = s.managed && s.status !== 'stopped' && s.status !== 'error';
+  const lostWorktree = !!s.worktreeId && !(wt && wt.state === 'assigned' && wt.sessionId === s.id);
+  const canResume = s.managed && !live && !lostWorktree;
+  const toggleRun = async () => {
+    if (live && !window.confirm(`「${s.name}」を停止しますか?(会話は残ります。「再開」で続きから)`)) return;
+    setActing(true);
+    try {
+      await sessionApi.control(s.id, live ? 'stop' : 'restart');
+    } catch (e) {
+      window.alert(`${live ? '停止' : '再開'}できませんでした: ${e instanceof Error ? e.message : String(e)}`);
+    } finally {
+      setActing(false);
+    }
+  };
   const remove = async () => {
     const live = s.managed && s.status !== 'stopped' && s.status !== 'error';
     if (!window.confirm(`「${s.name}」を一覧から削除しますか?(会話の記録は残ります)${live ? '\n実行中のプロセスも終了します。' : ''}`)) return;
@@ -96,6 +112,18 @@ function SessionRow({
         )}
       </span>
     </button>
+      {(live && s.managed) || canResume ? (
+        <button
+          type="button"
+          className={`srow-act ${live ? 'stop' : 'resume'}`}
+          onClick={() => void toggleRun()}
+          disabled={acting || s.status === 'starting'}
+          title={live ? '停止(会話は残ります)' : '再開(続きから)'}
+          aria-label={`「${s.name}」を${live ? '停止' : '再開'}`}
+        >
+          {live ? '■' : '▶'}
+        </button>
+      ) : null}
       <button
         type="button"
         className="srow-del"
