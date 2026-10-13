@@ -1,7 +1,7 @@
 // セッション一覧(並び順を選べる / リポジトリ・cwd ごとにまとめる)。デスクトップのサイドバーとモバイルの一覧で共用
 import { useState } from 'react';
 import type { SessionInfo } from '@cc-hub/shared';
-import { api, sessionApi } from '../api';
+import { api, errText, isConflict, repoApi, sessionApi } from '../api';
 import { SORT_LABEL, type SortMode, groupSessions, isFinished, useHub } from '../store';
 import { STATUS_ICON, STATUS_LABEL, projectLabel } from '../util';
 import { needsRelease, useSessionWorktree } from '../repo';
@@ -43,13 +43,36 @@ function SessionRow({
     }
   };
   const remove = async () => {
-    const live = s.managed && s.status !== 'stopped' && s.status !== 'error';
-    if (!window.confirm(`「${s.name}」を一覧から削除しますか?(会話の記録は残ります)${live ? '\n実行中のプロセスも終了します。' : ''}`)) return;
+    // 作業ツリーを持ったままでは削除できない(409)ので、ブランチを残して解放してから削除する
+    const holds = !!wt && wt.state === 'assigned' && wt.sessionId === s.id;
+    const dirty = holds ? wt?.git?.changed ?? 0 : 0;
+    const msg = [
+      `「${s.name}」を一覧から削除しますか?(会話の記録は残ります)`,
+      live ? '実行中のプロセスも終了します。' : '',
+      holds ? `作業ツリー ${wt?.name} も解放します(ブランチ ${wt?.branch ?? s.branch ?? ''} は残ります)。` : '',
+      dirty > 0 ? `※ コミットしていない変更 ${dirty} ファイルは消えます。` : '',
+    ]
+      .filter(Boolean)
+      .join('\n');
+    if (!window.confirm(msg)) return;
     setRemoving(true);
     try {
+      if (holds) {
+        if (live) await sessionApi.control(s.id, 'stop');
+        // 停止直後はまだプロセスが残っていることがあるので、少し待って解放をやり直す
+        for (let i = 0; ; i++) {
+          try {
+            await repoApi.release(s.id, 'keep');
+            break;
+          } catch (e) {
+            if (!isConflict(e) || i >= 10) throw e;
+            await new Promise((r) => setTimeout(r, 500));
+          }
+        }
+      }
       await sessionApi.control(s.id, 'remove');
     } catch (e) {
-      window.alert(`削除できませんでした: ${e instanceof Error ? e.message : String(e)}`);
+      window.alert(`削除できませんでした: ${errText(e)}`);
       setRemoving(false);
     }
   };

@@ -2,7 +2,7 @@
 import { useState } from 'react';
 import type { ReleaseMode, SessionInfo } from '@cc-hub/shared';
 import { errText, isConflict, repoApi } from '../api';
-import { needsRelease, useSessionWorktree } from '../repo';
+import { canRelease, useSessionWorktree } from '../repo';
 import { ConfirmModal, Spinner } from './RepoCommon';
 
 export function ReleaseBanner({ session, compact = false }: { session: SessionInfo; compact?: boolean }) {
@@ -23,7 +23,7 @@ export function ReleaseBanner({ session, compact = false }: { session: SessionIn
       </div>
     );
   }
-  if (!needsRelease(session, wt)) return null;
+  if (!canRelease(session, wt)) return null;
 
   const branch = wt.branch ?? session.branch ?? '(ブランチ不明)';
 
@@ -50,7 +50,7 @@ export function ReleaseBanner({ session, compact = false }: { session: SessionIn
         <strong>作業ツリーを解放</strong>
         <span>
           セッションは停止しています。<span className="mono">{wt.name}</span>(
-          <span className="mono">{branch}</span>)はまだこのセッションに割り当てられています。解放するとプールに戻り、次のセッションで使えます。
+          <span className="mono">{branch}</span>)はまだこのセッションに割り当てられています。解放するとプールに戻り、次のセッションで使えます。{session.idleStopped ? '(続きから作業するなら解放せず「再開」してください)' : ''}
         </span>
       </div>
       <div className="release-buttons">
