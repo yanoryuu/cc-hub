@@ -25,6 +25,13 @@ interface Props {
   fontSize: number;
   /** false のときは入力を送らない(停止中など) */
   interactive: boolean;
+  /** 入力・リサイズの送り先(既定: セッション。PowerShell では shellApi を渡す) */
+  io?: TerminalIo;
+}
+
+export interface TerminalIo {
+  input(id: string, data: string): Promise<unknown>;
+  resize(id: string, cols: number, rows: number): Promise<unknown>;
 }
 
 const THEME = {
@@ -52,7 +59,7 @@ const THEME = {
 };
 
 export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalView(
-  { sessionId, fontSize, interactive },
+  { sessionId, fontSize, interactive, io = sessionApi },
   ref,
 ) {
   const wrapRef = useRef<HTMLDivElement>(null);
@@ -67,7 +74,7 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
 
   const sendInput = (data: string) => {
     if (!interactiveRef.current) return;
-    sessionApi.input(sessionId, data).catch(() => {});
+    io.input(sessionId, data).catch(() => {});
   };
 
   const scrollView = (lines: number) => {
@@ -150,7 +157,7 @@ export const TerminalView = forwardRef<TerminalHandle, Props>(function TerminalV
       postTimer = setTimeout(() => {
         serverCols = cols;
         serverRows = rows;
-        if (interactiveRef.current) sessionApi.resize(sessionId, cols, rows).catch(() => {});
+        if (interactiveRef.current) io.resize(sessionId, cols, rows).catch(() => {});
       }, 150);
     };
     fitNowRef.current = fitNow;

@@ -9,6 +9,7 @@ import type { ClientMessage, HubState, NotifyEvent, ServerMessage, Topic } from 
 import { bus } from '../bus';
 import type { Auth } from './auth';
 import type { SessionManager } from '../session/manager';
+import { isShellId, type ShellManager } from '../shell/manager';
 
 interface Client {
   ws: WebSocket;
@@ -26,6 +27,7 @@ export class WsHub {
   constructor(
     private readonly auth: Auth,
     private readonly sessions: SessionManager,
+    private readonly shells: ShellManager,
     private readonly getState: () => HubState,
   ) {
     bus.on('state', (msg: ServerMessage) => {
@@ -117,7 +119,8 @@ export class WsHub {
       // 購読開始: スナップショットができるまでの出力は溜めておき、スナップショットの後に流す
       const queue: ServerMessage[] = [];
       c.terms.set(sid, queue);
-      this.sessions.snapshot(sid, (data, cols, rows) => {
+      const source = isShellId(sid) ? this.shells : this.sessions;
+      source.snapshot(sid, (data, cols, rows) => {
         if (c.terms.get(sid) !== queue) return; // 途中で購読解除・再購読された
         this.send(c, { t: 'term.snapshot', sid, data, cols, rows });
         c.terms.set(sid, null);

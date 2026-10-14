@@ -81,6 +81,12 @@ function handle(msg: ServerMessage): void {
     case 'deploy.upsert':
       st.upsertDeploy(msg.deploy);
       break;
+    case 'shell.upsert':
+      st.upsertShell(msg.shell);
+      break;
+    case 'shell.remove':
+      st.removeShell(msg.id);
+      break;
     case 'term.snapshot':
       emitTerm(msg.sid, { t: 'snapshot', data: msg.data, cols: msg.cols, rows: msg.rows });
       break;

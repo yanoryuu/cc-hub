@@ -6,6 +6,7 @@ import { type RightTab, orderedSessions, useHub } from '../store';
 import { TopBar } from './TopBar';
 import { SessionList, SortControl } from './SessionList';
 import { SessionPane } from './SessionPane';
+import { ShellScreen } from './Shell';
 import { AgentTree } from './AgentTree';
 import { SessionDetails } from './SessionDetails';
 import { ApprovalList, useApprovalCount } from './Approval';
@@ -112,7 +113,7 @@ function RightPanel({ session }: { session: SessionInfo }) {
 function SideNav() {
   const view = useHub((s) => s.deskView);
   const setView = useHub((s) => s.setDeskView);
-  const item = (v: 'skills' | 'mcp' | 'game', label: string, ico: string) => (
+  const item = (v: 'skills' | 'mcp' | 'game' | 'shell', label: string, ico: string) => (
     <button
       className={`side-nav-btn ${view === v ? 'on' : ''}`}
       aria-current={view === v ? 'page' : undefined}
@@ -129,6 +130,7 @@ function SideNav() {
       {item('skills', 'スキル', '✦')}
       {item('mcp', 'MCP', '⛁')}
       {item('game', 'ゲーム', '▶')}
+      {item('shell', 'PowerShell', '›_')}
     </nav>
   );
 }
@@ -197,6 +199,8 @@ export function DesktopApp() {
         <main className="center">
           {view === 'game' ? (
             <GameView />
+          ) : view === 'shell' ? (
+            <ShellScreen />
           ) : view === 'home' || (view === 'repos' && repoRoute.page === 'list') ? (
             <div className="repo-scroll">
               <HomeScreen />

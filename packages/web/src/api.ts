@@ -1,5 +1,5 @@
 // REST ヘルパー。401 を受けたら PIN 画面を出し、ログイン成功後に同じリクエストを再試行する。
-import type { BranchInfo, HubState, McpServerInfo, MergeMethod, PrDetail, PrReviewEvent, RegisterRepoRequest, RescanResult, ReleaseMode, RepoInfo, SessionMode, SkillInfo } from '@cc-hub/shared';
+import type { BranchInfo, HubState, McpServerInfo, MergeMethod, PrDetail, PrReviewEvent, RegisterRepoRequest, RescanResult, ReleaseMode, RepoInfo, SessionMode, ShellInfo, SkillInfo } from '@cc-hub/shared';
 
 export class AuthError extends Error {
   constructor() {
@@ -96,6 +96,16 @@ export function pick<T>(r: any, key: string): T | undefined {
 }
 
 // セッション操作ショートカット
+/** CC Hub から開く PowerShell(ほかの端末からコマンドを打つ用) */
+export const shellApi = {
+  start: (cwd?: string) => api<{ shell?: ShellInfo }>('/api/shells', cwd ? { cwd } : {}),
+  input: (id: string, data: string, submit = false) =>
+    api(`/api/shells/${encodeURIComponent(id)}/input`, submit ? { data, submit: true } : { data }),
+  resize: (id: string, cols: number, rows: number) => api(`/api/shells/${encodeURIComponent(id)}/resize`, { cols, rows }),
+  rename: (id: string, name: string) => api(`/api/shells/${encodeURIComponent(id)}/rename`, { name }),
+  close: (id: string) => api(`/api/shells/${encodeURIComponent(id)}/close`, {}),
+};
+
 export const sessionApi = {
   input: (id: string, data: string, submit = false) =>
     api(`/api/sessions/${encodeURIComponent(id)}/input`, submit ? { data, submit: true } : { data }),

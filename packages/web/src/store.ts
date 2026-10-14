@@ -1,6 +1,6 @@
 // アプリ全体の状態(zustand)。デーモンが唯一の正なので、ここはその写し + UI 状態だけ。
 import { create } from 'zustand';
-import type { AgentNode, DeployJob, HubState, NotifyEvent, PrInfo, RepoInfo, ServerInfo, SessionInfo, SessionStatus, Usage, WorktreeInfo } from '@cc-hub/shared';
+import type { AgentNode, DeployJob, HubState, NotifyEvent, PrInfo, RepoInfo, ServerInfo, SessionInfo, ShellInfo, SessionStatus, Usage, WorktreeInfo } from '@cc-hub/shared';
 import { resolveNotifyPr } from './pr';
 import { readLocal, writeLocal } from './util';
 
@@ -10,9 +10,9 @@ export type MobileTab = 'projects' | 'sessions' | 'approvals' | 'prs' | 'more';
 export type TopView = 'projects' | 'sessions' | 'history' | 'prs';
 export const TOP_VIEW_LABEL: Record<TopView, string> = { projects: 'プロジェクト', sessions: 'セッション', history: '履歴', prs: 'PR' };
 /** モバイル「その他」タブの中身 */
-export type MoreView = 'menu' | 'history' | 'skills' | 'mcp' | 'game' | 'settings';
+export type MoreView = 'menu' | 'history' | 'skills' | 'mcp' | 'game' | 'settings' | 'shell';
 /** デスクトップ中央の表示 */
-export type DeskView = 'home' | 'history' | 'session' | 'game' | 'repos' | 'prs' | 'skills' | 'mcp' | 'project' | 'settings';
+export type DeskView = 'home' | 'history' | 'session' | 'game' | 'repos' | 'prs' | 'skills' | 'mcp' | 'project' | 'settings' | 'shell';
 /** 設定画面のセクション */
 export type SettingsTab = 'notify' | 'servers' | 'mcp' | 'hub';
 
@@ -96,6 +96,8 @@ interface Store {
   servers: Record<string, ServerInfo>;
   /** アップロード(申請中 / 実行中 / 最近のもの) */
   deploys: Record<string, DeployJob>;
+  /** CC Hub から開いた PowerShell */
+  shells: Record<string, ShellInfo>;
   usage: Usage | null;
   daemon: HubState['daemon'] | null;
   /** 初回の状態を受け取ったか */
@@ -146,6 +148,8 @@ interface Store {
   upsertServer(s: ServerInfo): void;
   removeServer(id: string): void;
   upsertDeploy(d: DeployJob): void;
+  upsertShell(s: ShellInfo): void;
+  removeShell(id: string): void;
   /** 設定画面を開く(デスクトップ: 中央 / モバイル: その他 → 設定) */
   openSettings(tab?: SettingsTab): void;
   setSettingsTab(t: SettingsTab): void;
@@ -202,6 +206,7 @@ export const useHub = create<Store>((set, get) => ({
   prs: {},
   servers: {},
   deploys: {},
+  shells: {},
   usage: null,
   daemon: null,
   loaded: false,
@@ -247,6 +252,7 @@ export const useHub = create<Store>((set, get) => ({
         prs: s.prs ?? {},
         servers: s.servers ?? {},
         deploys: s.deploys ?? {},
+        shells: s.shells ?? {},
         usage: s.usage,
         daemon: s.daemon,
         loaded: true,
@@ -318,6 +324,14 @@ export const useHub = create<Store>((set, get) => ({
       return { servers };
     }),
   upsertDeploy: (d) => set((st) => ({ deploys: { ...st.deploys, [d.id]: d } })),
+  upsertShell: (sh) => set((st) => ({ shells: { ...st.shells, [sh.id]: sh } })),
+  removeShell: (id) =>
+    set((st) => {
+      if (!st.shells[id]) return {};
+      const shells = { ...st.shells };
+      delete shells[id];
+      return { shells };
+    }),
   openSettings: (tab) =>
     set((st) => ({
       settingsTab: tab ?? st.settingsTab,

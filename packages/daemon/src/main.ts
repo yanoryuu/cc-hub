@@ -16,6 +16,7 @@ import { ProjectService } from './project/service';
 import { setGhPath } from './github/gh';
 import { createServer } from './api/server';
 import { WsHub } from './api/ws';
+import { ShellManager } from './shell/manager';
 import { stopCapture } from './game/capture';
 import { dpapi } from './dpapi';
 import { NotifyService } from './notify/service';
@@ -108,6 +109,8 @@ function main(): void {
   /** cwd がリポジトリ(.base / worktree / 紐付けたクローン済みのフォルダ)の中なら repoId */
   const repoIdForCwd = (cwd: string): string | null => repos.repoForCwd(cwd)?.id ?? null;
   const startedAt = Date.now();
+  // ほかの端末から開く PowerShell(Claude は動かさない端末)
+  const shells = new ShellManager();
 
   const getState = (): HubState => ({
     sessions: sessions.all(),
@@ -119,11 +122,13 @@ function main(): void {
     deploys: deploy.allJobs(),
     usage: usage.usage,
     daemon: { version: VERSION, startedAt, port: config.port },
+    shells: shells.list(),
   });
 
   const server = createServer({
     auth,
     sessions,
+    shells,
     repos,
     github,
     prs,
@@ -152,7 +157,7 @@ function main(): void {
       else sessions.handleStatusline(null, body);
     },
   });
-  const wsHub = new WsHub(auth, sessions, getState);
+  const wsHub = new WsHub(auth, sessions, shells, getState);
   ws = wsHub;
   server.on('upgrade', (req, socket, head) => wsHub.handleUpgrade(req, socket, head));
 
@@ -185,6 +190,7 @@ function main(): void {
     exiting = true;
     console.log(`[daemon] ${sig} を受けたので終了します`);
     sessions.shutdown();
+    shells.stopAll();
     repos.stop();
     gitStat.stop();
     github.stop();

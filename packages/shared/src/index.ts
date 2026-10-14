@@ -436,6 +436,22 @@ export interface HubState {
   deploys?: Record<string, DeployJob>;
   usage: Usage | null;
   daemon: { version: string; startedAt: number; port: number };
+  /** CC Hub から開いた PowerShell(デーモンを再起動すると消える) */
+  shells?: Record<string, ShellInfo>;
+}
+
+/** CC Hub から開いた PowerShell(ほかの端末からコマンドを打つ用。Claude は動かない) */
+export interface ShellInfo {
+  /** 'sh-' で始まる(ターミナルの購読 term:<id> はセッションと共用) */
+  id: string;
+  name: string;
+  cwd: string;
+  /** 動いているか(exit したら false。画面は残る) */
+  alive: boolean;
+  exitCode: number | null;
+  startedAt: number;
+  cols: number;
+  rows: number;
 }
 
 // ---------------------------------------------------------------- 起動リクエスト
@@ -730,6 +746,8 @@ export type ServerMessage =
   | { t: 'server.upsert'; server: ServerInfo }
   | { t: 'server.remove'; id: string }
   | { t: 'deploy.upsert'; deploy: DeployJob }
+  | { t: 'shell.upsert'; shell: ShellInfo }
+  | { t: 'shell.remove'; id: string }
   | { t: 'term.snapshot'; sid: string; data: string; cols: number; rows: number }
   | { t: 'term.data'; sid: string; data: string }
   | { t: 'term.resize'; sid: string; cols: number; rows: number }
@@ -800,6 +818,9 @@ export type ServerMessage =
 //   POST /api/sessions/:id/control {action: 'stop'|'restart'|'remove'}
 //   POST /api/sessions/:id/approve {option: string}      (番号 / 'y' / 'n')
 //   POST /api/sessions/:id/rename  {name}
+//   POST /api/shells               {cwd?, cols?, rows?}  → {ok, shell: ShellInfo}  PowerShell を開く(Claude は動かさない。最大 8 個)
+//   POST /api/shells/:id/input     {data, submit?} / resize {cols, rows} / rename {name} / close {}
+//                                  ターミナルの購読は term:<id>(セッションと共用)。デーモンを再起動すると消える
 //   --- フェーズ 2 ---
 //   POST /api/sessions/:id/release {mode: ReleaseMode}  セッション停止後、worktree を初期化してプールに戻す
 //                                                         (実行中なら 409。keep=ブランチを残す / discard=ブランチ削除)

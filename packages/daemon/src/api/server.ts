@@ -5,6 +5,7 @@ import http from 'node:http';
 import type { HubState, RegisterRepoRequest, ReleaseMode, StartSessionRequest } from '@cc-hub/shared';
 import type { Auth } from './auth';
 import type { SessionManager } from '../session/manager';
+import type { ShellManager } from '../shell/manager';
 import type { RepoManager } from '../repo/manager';
 import type { GitHubWatcher } from '../github/watcher';
 import type { PrActions } from '../github/actions';
@@ -72,6 +73,7 @@ const PLACEHOLDER = `<!doctype html><html lang="ja"><head><meta charset="utf-8">
 export interface ServerDeps {
   auth: Auth;
   sessions: SessionManager;
+  shells: ShellManager;
   repos: RepoManager;
   github: GitHubWatcher;
   prs: PrActions;
@@ -551,6 +553,26 @@ async function handle(d: ServerDeps, req: http.IncomingMessage, res: http.Server
     const body = await readBody(req);
     const worktree = await d.repos.release(decodeURIComponent(rel[1]), body.mode as ReleaseMode);
     return json(res, 200, { ok: true, worktree });
+  }
+
+  // PowerShell(ほかの端末からコマンドを打つ用)
+  if (p === '/api/shells' && method === 'POST') return json(res, 200, { ok: true, shell: d.shells.start(await readBody(req)) });
+  const sh = /^\/api\/shells\/([^/]+)\/(input|resize|rename|close)$/.exec(p);
+  if (sh && method === 'POST') {
+    const id = decodeURIComponent(sh[1]);
+    const body = await readBody(req);
+    switch (sh[2]) {
+      case 'input':
+        d.shells.input(id, body.data, body.submit);
+        return json(res, 200, { ok: true });
+      case 'resize':
+        return json(res, 200, { ok: true, ...d.shells.resize(id, body.cols, body.rows) });
+      case 'rename':
+        return json(res, 200, { ok: true, shell: d.shells.rename(id, body.name) });
+      case 'close':
+        d.shells.close(id);
+        return json(res, 200, { ok: true });
+    }
   }
 
   const m = /^\/api\/sessions\/([^/]+)\/(input|resize|control|approve|rename)$/.exec(p);

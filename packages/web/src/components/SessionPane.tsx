@@ -34,7 +34,7 @@ const QUICK_KEYS: { label: string; title?: string; key?: string; cmd?: string; s
   { label: '/help', cmd: '/help' },
 ];
 
-function useFontSize(): [number, (d: number) => void] {
+export function useFontSize(): [number, (d: number) => void] {
   const [size, setSize] = useState(() => {
     const def = window.matchMedia('(min-width: 900px)').matches ? '14' : '13';
     // 旧既定(13 / 12)のままの人は新しい既定に上げる(読みやすさの改善。A−/A+ で変えた値はそのまま)

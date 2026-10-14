@@ -8265,3 +8265,126 @@ th[aria-sort='descending'] .th-arrow {
   white-space: nowrap;
   min-width: 0;
 }
+
+/* PowerShell 画面(ほかの端末からコマンドを打つ) */
+.shell-screen {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.shell-tabs {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 8px;
+  background: var(--panel);
+  border-bottom: 1px solid var(--border);
+  overflow-x: auto;
+}
+.shell-tab {
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--panel-2);
+  white-space: nowrap;
+}
+.shell-tab.on {
+  border-color: var(--accent);
+  background: var(--accent-bg);
+}
+.shell-tab > button {
+  border: 0;
+  background: none;
+  color: inherit;
+  padding: 4px 8px;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.shell-tab-x {
+  color: var(--muted) !important;
+  padding: 4px 6px 4px 2px !important;
+}
+.shell-tab-x:hover {
+  color: var(--fg) !important;
+}
+.shell-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--muted);
+}
+.shell-dot.live {
+  background: var(--st-running);
+}
+.shell-font {
+  margin-left: auto;
+}
+.shell-cwd {
+  flex: none;
+  padding: 4px 12px;
+  background: var(--bg-term);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.shell-bar {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px;
+  background: var(--panel);
+  border-top: 1px solid var(--border);
+}
+.shell-keys {
+  display: flex;
+  gap: 4px;
+  overflow-x: auto;
+}
+.shell-keys .btn {
+  flex: none;
+}
+.shell-cmd {
+  display: flex;
+  gap: 6px;
+}
+.shell-cmd input {
+  flex: 1;
+  min-width: 0;
+}
+.shell-more {
+  flex: none;
+  padding: 4px 12px 8px;
+  background: var(--panel);
+  font-size: 13px;
+}
+.shell-more summary {
+  cursor: pointer;
+  color: var(--muted);
+}
+.shell-empty {
+  padding: 24px 16px;
+  max-width: 640px;
+}
+.shell-empty p {
+  margin-bottom: 12px;
+  color: var(--fg-2);
+}
+.shell-new {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 6px;
+}
+.shell-new input {
+  flex: 1 1 260px;
+  min-width: 0;
+}
+.shell-new .form-error {
+  flex-basis: 100%;
+}

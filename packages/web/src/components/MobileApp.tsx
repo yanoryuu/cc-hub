@@ -6,6 +6,7 @@ import { SessionPane } from './SessionPane';
 import { ApprovalList, useApprovalCount } from './Approval';
 import { SettingsScreen } from './Settings';
 import { GameView } from './GameView';
+import { ShellScreen } from './Shell';
 import { AgentTree } from './AgentTree';
 import { SessionDetails } from './SessionDetails';
 import { SkillsView } from './Skills';
@@ -195,6 +196,7 @@ const MORE_ITEMS: { v: Exclude<MoreView, 'menu'>; label: string; ico: string; de
   { v: 'skills', label: 'スキル', ico: '✦', desc: '使えるスキルとコマンドの一覧。タップで入力欄に入れる' },
   { v: 'mcp', label: 'MCP の接続状況', ico: '⛁', desc: 'MCP サーバーがつながっているか' },
   { v: 'game', label: 'ゲームキャプチャ', ico: '▶', desc: 'PC のウィンドウを見ながら操作' },
+  { v: 'shell', label: 'PowerShell', ico: '›_', desc: 'PC の PowerShell を開いてコマンドを打つ(npm run auth など)' },
   { v: 'settings', label: '設定', ico: '⚙', desc: '通知(Windows / Discord)・アップロード先のサーバー・Claude との連携' },
 ];
 
@@ -229,6 +231,23 @@ function MoreScreen() {
           <span className="m-title">ゲームキャプチャ</span>
         </div>
         <GameView />
+      </div>
+    );
+  }
+  if (view === 'shell') {
+    return (
+      <div className="m-screen">
+        <ShellScreen
+          mobile
+          head={
+            <div className="m-head">
+              <button className="icon-btn back" onClick={() => openMore('menu')} aria-label="その他へ戻る">
+                ‹
+              </button>
+              <span className="m-title">PowerShell</span>
+            </div>
+          }
+        />
       </div>
     );
   }
