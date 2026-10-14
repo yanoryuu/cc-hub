@@ -1,7 +1,7 @@
 // 新規セッションダイアログ(プロジェクトから(worktree)/ フォルダで直接 / 履歴から再開)
 import { useEffect, useMemo, useRef, useState } from 'react';
-import type { HistoryEntry, SessionInfo, SessionMode, StartSessionRequest } from '@cc-hub/shared';
-import { api, errText, pick, repoApi } from '../api';
+import type { HistoryEntry, SessionDraft, SessionInfo, SessionMode, StartSessionRequest } from '@cc-hub/shared';
+import { api, draftApi, errText, pick, repoApi } from '../api';
 import { useHub } from '../store';
 import { fmtAgo, fmtDate, projectLabel } from '../util';
 import { matchQuery, useProjectCatalog, useRecentProjects } from '../home';
@@ -51,14 +51,81 @@ function Dialog({ onClose }: { onClose: () => void }) {
   const [tab, setTab] = useState<Tab>(() => (presetCwd ? 'folder' : presetRepo || readyRepos.length > 0 ? 'repo' : 'folder'));
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  // 下書き: 一覧(デーモンに保存)・開いている下書き・フォームの作り直し用のキー
+  const [drafts, setDrafts] = useState<SessionDraft[] | null>(null);
+  const [draft, setDraft] = useState<SessionDraft | null>(null);
+  const [formKey, setFormKey] = useState(0);
+  const [savedNote, setSavedNote] = useState<string | null>(null);
+  /** 今のフォームの内容を返す関数(タブが登録する)と、最後に保存した内容 */
+  const fieldsRef = useRef<(() => DraftFields) | null>(null);
+  const savedRef = useRef<string>('');
+  const startedRef = useRef(false);
+
+  useEffect(() => {
+    draftApi
+      .list()
+      .then((r) => setDrafts(r.drafts ?? []))
+      .catch(() => setDrafts([]));
+  }, []);
+
+  const saveDraft = async (silent = false): Promise<void> => {
+    const f = fieldsRef.current?.();
+    if (!f || !(f.instruction.trim() || f.name.trim() || f.branchSlug.trim())) {
+      if (!silent) setErr('指示を入力してから保存してください');
+      return;
+    }
+    const sig = JSON.stringify(f);
+    if (silent && sig === savedRef.current) return;
+    try {
+      const r = await draftApi.put(draft?.id ?? null, f);
+      const d = r.draft;
+      if (d) {
+        setDraft(d);
+        setDrafts((list) => [d, ...(list ?? []).filter((x) => x.id !== d.id)]);
+      }
+      savedRef.current = sig;
+      if (!silent) {
+        setErr(null);
+        setSavedNote('下書きに保存しました(どの端末からでも開けます)');
+      }
+    } catch (e) {
+      if (!silent) setErr(errText(e, '下書きを保存できませんでした'));
+    }
+  };
+
+  // 閉じるとき、書きかけの指示があれば下書きに残す(起動した場合は残さない)
+  const close = () => {
+    if (!startedRef.current) void saveDraft(true);
+    onClose();
+  };
+
+  const loadDraft = (d: SessionDraft) => {
+    setDraft(d);
+    setTab(d.kind);
+    setErr(null);
+    setSavedNote(null);
+    savedRef.current = JSON.stringify(toFields(d));
+    setFormKey((k) => k + 1);
+  };
+
+  const removeDraft = async (d: SessionDraft) => {
+    if (!window.confirm('この下書きを削除しますか?')) return;
+    try {
+      await draftApi.remove(d.id);
+      setDrafts((list) => (list ?? []).filter((x) => x.id !== d.id));
+      if (draft?.id === d.id) setDraft(null);
+    } catch (e) {
+      setErr(errText(e, '下書きを削除できませんでした'));
+    }
+  };
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose();
+      if (e.key === 'Escape') close();
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [onClose]);
+  });
 
   const start = async (req: StartSessionRequest) => {
     setBusy(true);
@@ -71,6 +138,9 @@ function Dialog({ onClose }: { onClose: () => void }) {
         st.upsertSession(s);
         st.open(s.id);
       }
+      startedRef.current = true;
+      // 下書きから起動したら、その下書きは消す
+      if (draft) void draftApi.remove(draft.id).catch(() => {});
       onClose();
     } catch (e) {
       setErr(errText(e, '起動に失敗しました'));
@@ -87,21 +157,39 @@ function Dialog({ onClose }: { onClose: () => void }) {
       onClick={() => {
         setTab(t);
         setErr(null);
+        setSavedNote(null);
       }}
     >
       {label}
     </button>
   );
 
+  const tabProps = {
+    busy,
+    err,
+    setErr: (e: string | null) => {
+      setErr(e);
+      if (e) setSavedNote(null);
+    },
+    start,
+    onClose: close,
+    fieldsRef,
+    onSaveDraft: () => void saveDraft(),
+    savedNote,
+  };
+
   return (
-    <div className="modal-backdrop" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
+    <div className="modal-backdrop" onMouseDown={(e) => e.target === e.currentTarget && close()}>
       <div className="modal" role="dialog" aria-modal="true" aria-labelledby="ns-title">
         <div className="modal-head">
           <h2 id="ns-title">新規セッション</h2>
-          <button className="icon-btn" onClick={onClose} aria-label="閉じる">
+          <button className="icon-btn" onClick={close} aria-label="閉じる">
             ✕
           </button>
         </div>
+        {drafts && drafts.length > 0 && tab !== 'history' && (
+          <DraftList drafts={drafts} current={draft} onLoad={loadDraft} onRemove={(d) => void removeDraft(d)} />
+        )}
         <div className="seg ns-tabs" role="tablist" aria-label="始め方">
           {tabBtn('repo', 'プロジェクトから(worktree)')}
           {tabBtn('folder', 'フォルダで直接')}
@@ -109,11 +197,21 @@ function Dialog({ onClose }: { onClose: () => void }) {
         </div>
 
         {tab === 'repo' ? (
-          <RepoTab preset={presetRepo} busy={busy} err={err} setErr={setErr} start={start} onClose={onClose} />
+          <RepoTab
+            key={`r${formKey}`}
+            preset={draft?.kind === 'repo' ? draft.repoId : presetRepo}
+            draft={draft?.kind === 'repo' ? draft : null}
+            {...tabProps}
+          />
         ) : tab === 'folder' ? (
-          <FolderTab preset={presetCwd} busy={busy} err={err} setErr={setErr} start={start} onClose={onClose} />
+          <FolderTab
+            key={`f${formKey}`}
+            preset={draft?.kind === 'folder' ? draft.cwd : presetCwd}
+            draft={draft?.kind === 'folder' ? draft : null}
+            {...tabProps}
+          />
         ) : (
-          <HistoryTab onClose={onClose} />
+          <HistoryTab onClose={close} />
         )}
       </div>
     </div>
@@ -126,11 +224,96 @@ interface TabProps {
   setErr: (e: string | null) => void;
   start: (req: StartSessionRequest) => Promise<void>;
   onClose: () => void;
+  /** 下書き: 開いた下書き(フォームの初期値)・今の内容を返す関数の登録先・保存 */
+  draft: SessionDraft | null;
+  fieldsRef: React.MutableRefObject<(() => DraftFields) | null>;
+  onSaveDraft: () => void;
+  savedNote: string | null;
+}
+
+type DraftFields = Omit<SessionDraft, 'id' | 'updatedAt'>;
+
+function toFields(d: SessionDraft): DraftFields {
+  const { id: _id, updatedAt: _u, ...f } = d;
+  return f;
+}
+
+/** 下書きの見出し(指示の 1 行目) */
+function draftLabel(d: SessionDraft): string {
+  const line = d.instruction
+    .split(/\r?\n/)
+    .map((l) => l.trim())
+    .find(Boolean);
+  return line || d.name || (d.branchSlug ? `feat/${d.branchSlug}` : '(無題)');
+}
+
+/** 下書きの一覧(開く / 削除) */
+function DraftList({
+  drafts,
+  current,
+  onLoad,
+  onRemove,
+}: {
+  drafts: SessionDraft[];
+  current: SessionDraft | null;
+  onLoad: (d: SessionDraft) => void;
+  onRemove: (d: SessionDraft) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="ns-drafts">
+      <button type="button" className="ns-drafts-head" onClick={() => setOpen((v) => !v)} aria-expanded={open}>
+        <span aria-hidden="true">{open ? '▾' : '▸'}</span> 下書き <span className="count-pill">{drafts.length}</span>
+        {current && <span className="muted small ns-drafts-cur">「{draftLabel(current)}」を編集中</span>}
+      </button>
+      {open && (
+        <ul className="ns-draft-list">
+          {drafts.map((d) => (
+            <li key={d.id} className={`ns-draft ${current?.id === d.id ? 'on' : ''}`}>
+              <button
+                type="button"
+                className="ns-draft-open"
+                onClick={() => {
+                  onLoad(d);
+                  setOpen(false);
+                }}
+                title={d.instruction}
+              >
+                <span className="ns-draft-title">{draftLabel(d)}</span>
+                <span className="ns-draft-sub muted small">
+                  {d.kind === 'repo' ? (d.repoId ?? 'プロジェクト未選択') : d.cwd ? projectLabel(d.cwd) : 'フォルダ未選択'} · {d.mode} ·{' '}
+                  {fmtAgo(d.updatedAt)}
+                </span>
+              </button>
+              <button type="button" className="icon-btn" onClick={() => onRemove(d)} aria-label="この下書きを削除" title="削除">
+                ×
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
+/** フッター左: 下書きに保存 */
+function DraftButton({ onSaveDraft, busy }: { onSaveDraft: () => void; busy: boolean }) {
+  return (
+    <button
+      type="button"
+      className="btn ghost ns-draft-save"
+      onClick={onSaveDraft}
+      disabled={busy}
+      title="指示などを下書きに保存します(閉じたときも自動で残ります)。どの端末からでも開けます"
+    >
+      下書きに保存
+    </button>
+  );
 }
 
 // ---------------------------------------------------------------- リポジトリから
 
-function RepoTab({ preset, busy, err, setErr, start, onClose }: TabProps & { preset: string | null }) {
+function RepoTab({ preset, busy, err, setErr, start, onClose, draft, fieldsRef, onSaveDraft, savedNote }: TabProps & { preset: string | null }) {
   const repos = useRepoList();
   const wtByRepo = useWorktreesByRepo();
   const openRepos = useHub((s) => s.openRepos);
@@ -144,11 +327,13 @@ function RepoTab({ preset, busy, err, setErr, start, onClose }: TabProps & { pre
     if (cur && ready.some((r) => r.id === cur)) return cur;
     return ready[0]?.id ?? '';
   });
-  const [mode, setMode] = useState<SessionMode>('commander');
-  const [instruction, setInstruction] = useState('');
-  const [name, setName] = useState('');
-  const [slug, setSlug] = useState('');
-  const [slugEdited, setSlugEdited] = useState(false);
+  const [mode, setMode] = useState<SessionMode>(draft?.mode ?? 'commander');
+  const [instruction, setInstruction] = useState(draft?.instruction ?? '');
+  const [name, setName] = useState(draft?.name ?? '');
+  const [slug, setSlug] = useState(draft?.branchSlug ?? '');
+  const [slugEdited, setSlugEdited] = useState(!!draft?.branchSlug);
+  // 下書き用に今の内容を渡す(ブランチ名は自分で編集したときだけ残す)
+  fieldsRef.current = () => ({ kind: 'repo', repoId: repoId || null, cwd: null, instruction, name, branchSlug: slugEdited ? slug.trim() : '', mode });
   const [slugLoading, setSlugLoading] = useState(false);
   /** 候補の取得待ち(入力直後〜応答まで)。この間に起動したら slug は送らずデーモンに任せる */
   const [slugPending, setSlugPending] = useState(false);
@@ -348,7 +533,9 @@ function RepoTab({ preset, busy, err, setErr, start, onClose }: TabProps & { pre
         <input value={name} onChange={(e) => setName(e.target.value)} placeholder="省略時はブランチ名" />
       </label>
       {err && <div className="form-error">{err}</div>}
+      {savedNote && !err && <div className="form-ok">{savedNote}</div>}
       <div className="modal-foot">
+        <DraftButton onSaveDraft={onSaveDraft} busy={busy} />
         <button type="button" className="btn" onClick={onClose}>
           キャンセル
         </button>
@@ -362,14 +549,15 @@ function RepoTab({ preset, busy, err, setErr, start, onClose }: TabProps & { pre
 
 // ---------------------------------------------------------------- フォルダで直接
 
-function FolderTab({ preset, busy, err, setErr, start, onClose }: TabProps & { preset: string | null }) {
+function FolderTab({ preset, busy, err, setErr, start, onClose, draft, fieldsRef, onSaveDraft, savedNote }: TabProps & { preset: string | null }) {
   const cat = useProjectCatalog();
   const recent = useRecentProjects();
   const [cwd, setCwd] = useState(preset ?? '');
   const [q, setQ] = useState('');
-  const [mode, setMode] = useState<SessionMode>('commander');
-  const [name, setName] = useState('');
-  const [instruction, setInstruction] = useState('');
+  const [mode, setMode] = useState<SessionMode>(draft?.mode ?? 'commander');
+  const [name, setName] = useState(draft?.name ?? '');
+  const [instruction, setInstruction] = useState(draft?.instruction ?? '');
+  fieldsRef.current = () => ({ kind: 'folder', repoId: null, cwd: cwd.trim() || null, instruction, name, branchSlug: '', mode });
 
   // 候補: ホームのフォルダ(セッションのあるフォルダ + 最近のプロジェクト)。先頭を自動選択はしない
   // (意図しない実プロジェクトで起動してしまうのを防ぐ)
@@ -463,7 +651,9 @@ function FolderTab({ preset, busy, err, setErr, start, onClose }: TabProps & { p
         <input value={name} onChange={(e) => setName(e.target.value)} placeholder="例: login-fix" />
       </label>
       {err && <div className="form-error">{err}</div>}
+      {savedNote && !err && <div className="form-ok">{savedNote}</div>}
       <div className="modal-foot">
+        <DraftButton onSaveDraft={onSaveDraft} busy={busy} />
         <button type="button" className="btn" onClick={onClose}>
           キャンセル
         </button>

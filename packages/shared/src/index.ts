@@ -440,6 +440,21 @@ export interface HubState {
   shells?: Record<string, ShellInfo>;
 }
 
+/** 新規セッションの下書き(デーモンに保存。どの端末からも開ける) */
+export interface SessionDraft {
+  id: string;
+  /** repo = プロジェクトから(worktree) / folder = フォルダで直接 */
+  kind: 'repo' | 'folder';
+  repoId: string | null;
+  cwd: string | null;
+  instruction: string;
+  name: string;
+  /** feat/ の後ろ(空 = 自動生成) */
+  branchSlug: string;
+  mode: SessionMode;
+  updatedAt: number;
+}
+
 /** CC Hub から開いた PowerShell(ほかの端末からコマンドを打つ用。Claude は動かない) */
 export interface ShellInfo {
   /** 'sh-' で始まる(ターミナルの購読 term:<id> はセッションと共用) */
@@ -818,6 +833,9 @@ export type ServerMessage =
 //   POST /api/sessions/:id/control {action: 'stop'|'restart'|'remove'}
 //   POST /api/sessions/:id/approve {option: string}      (番号 / 'y' / 'n')
 //   POST /api/sessions/:id/rename  {name}
+//   GET  /api/drafts                                   → {ok, drafts: SessionDraft[]}  新規セッションの下書き(新しい順・最大 50 件)
+//   PUT  /api/drafts/:id          Partial<SessionDraft> → {ok, draft}   上書き保存(id が 'new' なら新規)
+//   DELETE /api/drafts/:id
 //   POST /api/shells               {cwd?, cols?, rows?}  → {ok, shell: ShellInfo}  PowerShell を開く(Claude は動かさない。最大 8 個)
 //   POST /api/shells/:id/input     {data, submit?} / resize {cols, rows} / rename {name} / close {}
 //                                  ターミナルの購読は term:<id>(セッションと共用)。デーモンを再起動すると消える

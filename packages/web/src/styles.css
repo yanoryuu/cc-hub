@@ -8388,3 +8388,76 @@ th[aria-sort='descending'] .th-arrow {
 .shell-new .form-error {
   flex-basis: 100%;
 }
+
+/* 新規セッションの下書き */
+.ns-drafts {
+  margin: 0 16px 4px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--panel-2);
+}
+.ns-drafts-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 6px 10px;
+  border: 0;
+  background: none;
+  color: inherit;
+  font-weight: 600;
+  cursor: pointer;
+  text-align: left;
+  min-width: 0;
+}
+.ns-drafts-cur {
+  font-weight: 400;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+.ns-draft-list {
+  list-style: none;
+  max-height: 220px;
+  overflow-y: auto;
+  border-top: 1px solid var(--border);
+}
+.ns-draft {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding-right: 6px;
+}
+.ns-draft + .ns-draft {
+  border-top: 1px solid var(--border);
+}
+.ns-draft.on {
+  background: var(--accent-bg);
+}
+.ns-draft-open {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 6px 10px;
+  border: 0;
+  background: none;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.ns-draft-title,
+.ns-draft-sub {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ns-draft-save {
+  margin-right: auto;
+}
+.form-ok {
+  color: var(--st-running);
+  font-size: 13px;
+}

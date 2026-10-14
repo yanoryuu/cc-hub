@@ -1,5 +1,5 @@
 // REST ヘルパー。401 を受けたら PIN 画面を出し、ログイン成功後に同じリクエストを再試行する。
-import type { BranchInfo, HubState, McpServerInfo, MergeMethod, PrDetail, PrReviewEvent, RegisterRepoRequest, RescanResult, ReleaseMode, RepoInfo, SessionMode, ShellInfo, SkillInfo } from '@cc-hub/shared';
+import type { BranchInfo, HubState, McpServerInfo, MergeMethod, PrDetail, PrReviewEvent, RegisterRepoRequest, RescanResult, ReleaseMode, RepoInfo, SessionDraft, SessionMode, ShellInfo, SkillInfo } from '@cc-hub/shared';
 
 export class AuthError extends Error {
   constructor() {
@@ -96,6 +96,15 @@ export function pick<T>(r: any, key: string): T | undefined {
 }
 
 // セッション操作ショートカット
+/** 新規セッションの下書き(デーモンに保存。どの端末からも開ける) */
+export const draftApi = {
+  list: () => api<{ drafts?: SessionDraft[] }>('/api/drafts'),
+  /** id = null なら新規 */
+  put: (id: string | null, d: Omit<SessionDraft, 'id' | 'updatedAt'>) =>
+    api<{ draft?: SessionDraft }>(`/api/drafts/${encodeURIComponent(id ?? 'new')}`, d, { method: 'PUT' }),
+  remove: (id: string) => api(`/api/drafts/${encodeURIComponent(id)}`, undefined, { method: 'DELETE' }),
+};
+
 /** CC Hub から開く PowerShell(ほかの端末からコマンドを打つ用) */
 export const shellApi = {
   start: (cwd?: string) => api<{ shell?: ShellInfo }>('/api/shells', cwd ? { cwd } : {}),

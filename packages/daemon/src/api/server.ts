@@ -6,6 +6,7 @@ import type { HubState, RegisterRepoRequest, ReleaseMode, StartSessionRequest } 
 import type { Auth } from './auth';
 import type { SessionManager } from '../session/manager';
 import type { ShellManager } from '../shell/manager';
+import type { SessionDrafts } from '../session/drafts';
 import type { RepoManager } from '../repo/manager';
 import type { GitHubWatcher } from '../github/watcher';
 import type { PrActions } from '../github/actions';
@@ -74,6 +75,7 @@ export interface ServerDeps {
   auth: Auth;
   sessions: SessionManager;
   shells: ShellManager;
+  drafts: SessionDrafts;
   repos: RepoManager;
   github: GitHubWatcher;
   prs: PrActions;
@@ -553,6 +555,18 @@ async function handle(d: ServerDeps, req: http.IncomingMessage, res: http.Server
     const body = await readBody(req);
     const worktree = await d.repos.release(decodeURIComponent(rel[1]), body.mode as ReleaseMode);
     return json(res, 200, { ok: true, worktree });
+  }
+
+  // 新規セッションの下書き
+  if (p === '/api/drafts' && method === 'GET') return json(res, 200, { ok: true, drafts: d.drafts.list() });
+  const dm = /^\/api\/drafts\/([^/]+)$/.exec(p);
+  if (dm && method === 'PUT') {
+    const id = decodeURIComponent(dm[1]);
+    return json(res, 200, { ok: true, draft: d.drafts.put(id === 'new' ? null : id, await readBody(req)) });
+  }
+  if (dm && method === 'DELETE') {
+    d.drafts.remove(decodeURIComponent(dm[1]));
+    return json(res, 200, { ok: true });
   }
 
   // PowerShell(ほかの端末からコマンドを打つ用)

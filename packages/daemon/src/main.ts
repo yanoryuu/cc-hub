@@ -17,6 +17,7 @@ import { setGhPath } from './github/gh';
 import { createServer } from './api/server';
 import { WsHub } from './api/ws';
 import { ShellManager } from './shell/manager';
+import { SessionDrafts } from './session/drafts';
 import { stopCapture } from './game/capture';
 import { dpapi } from './dpapi';
 import { NotifyService } from './notify/service';
@@ -129,6 +130,7 @@ function main(): void {
     auth,
     sessions,
     shells,
+    drafts: new SessionDrafts(store),
     repos,
     github,
     prs,
