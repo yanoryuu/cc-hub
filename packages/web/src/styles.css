@@ -1563,6 +1563,28 @@ kbd {
 .agent-none {
   margin: 4px 0 0 14px;
 }
+/* 開く / 閉じるの三角 */
+.agent-caret {
+  flex: none;
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  border: 0;
+  border-radius: 3px;
+  background: none;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 16px;
+  cursor: pointer;
+}
+.agent-caret:hover,
+.agent-caret:focus-visible {
+  color: var(--fg);
+  background: var(--panel-3);
+}
+.agent-caret.empty {
+  cursor: default;
+}
 .adot {
   flex: none;
   width: 8px;
