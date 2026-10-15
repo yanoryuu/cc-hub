@@ -67,6 +67,8 @@ export interface SessionInfo {
   task?: string | null;
   /** トークン使用量(statusLine と transcript から。リアルタイムに更新) */
   tokens?: SessionTokens | null;
+  /** 「アプリを開く」ボタン(Unity エディタや自作ツールなど)。ユーザーか Claude(MCP の set_app_launcher)が登録する */
+  launchers?: AppLauncher[];
   /** 使っていないので CC Hub が自動で止めた(「再開」で続きから。作業ツリーは自動解放しない) */
   idleStopped?: boolean;
 }
@@ -206,6 +208,40 @@ export interface WorktreeInfo {
   error: string | null;
   /** フェーズ 3: assigned 中の変更状況(数秒ごとに更新)。それ以外の状態では null */
   git?: WorktreeGitStat | null;
+  /**
+   * 使用中か(割り当て先のセッションが動いている / PowerShell に移して動いている / 準備・初期化の途中)。
+   * true の間は rebase と削除はできない(UI はボタンを押せなくする)
+   */
+  inUse?: boolean;
+}
+
+/** セッションごとの「アプリを開く」ボタン */
+export interface AppLauncher {
+  id: string;
+  /** ボタンの表示名(例: 「Unity」「マップエディタ」) */
+  label: string;
+  /** 'unity' = そのフォルダの Unity プロジェクトを Unity エディタで開く(既存の launch_unity と同じ処理)。'command' = command を実行 */
+  kind: 'unity' | 'command';
+  /**
+   * kind 'command' のときのコマンドライン(例: "npm run tool" / "C:\Tools\MapEditor.exe {cwd}\maps")。
+   * {cwd} はセッションの作業フォルダ(worktree)に置き換わる。作業フォルダで実行する
+   */
+  command: string | null;
+  addedBy: 'user' | 'claude';
+  lastRunAt: number | null;
+  /** 直近の実行結果(起動に失敗したときのメッセージ) */
+  lastError: string | null;
+}
+
+export interface RebaseResult {
+  result: 'up_to_date' | 'rebased' | 'conflict' | 'failed';
+  /** conflict のときぶつかったファイル(rebase は中止して元に戻してある) */
+  conflicts: string[];
+  /** rebase 前後の HEAD と、取り込んだ main のコミット数 */
+  before: string | null;
+  after: string | null;
+  pulled: number;
+  message: string;
 }
 
 /** worktree の変更状況(git status / diff --stat / rev-list) */
@@ -944,3 +980,12 @@ export interface ProjectInstructions {
 //   (Claude からの申請は MCP の request_firebase_deploy → pending_approval → POST /api/deploys/:id/approve)
 // Firebase 公式の MCP サーバー(Claude が Firestore / Auth / ログ等を調べる)は integrations/mcp/install-firebase.js で
 //   `claude mcp add --scope user firebase -- cmd /c firebase mcp` として登録する
+
+// --- アプリを開くボタン / worktree の rebase・削除 ---
+//   PUT  /api/sessions/:id/launchers {launchers: AppLauncher[]}   一覧をまとめて保存(id が無いものは新規)→ {ok, session}
+//   POST /api/sessions/:id/launchers/:launcherId/run              起動 → {ok, message}(切り離して起動。終了は待たない)
+//   MCP: set_app_launcher({cwd, label, command?, kind?})           Claude が自分のセッションにボタンを登録 / 更新(同じ label は上書き)
+//        remove_app_launcher({cwd, label})
+//   POST /api/worktrees/:id/rebase   使用中でなければ、最新の origin/<default> に rebase → {ok, rebase: RebaseResult}
+//                                     衝突したら rebase --abort で元に戻し、conflict と衝突ファイルを返す。使用中は 409
+//   DELETE /api/worktrees/:id        使用中でなければ削除(割り当て済みでも、セッションが止まっていれば可。ブランチは残す)。使用中は 409
