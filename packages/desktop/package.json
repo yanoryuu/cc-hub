@@ -4,7 +4,7 @@
   "private": true,
   "main": "dist/main.js",
   "scripts": {
-    "build": "esbuild src/main.ts src/preload.ts --bundle --platform=node --target=node20 --format=cjs --outdir=dist --external:electron --sourcemap",
+    "build": "esbuild src/main.ts src/preload.ts --bundle --platform=node --target=node22 --format=cjs --outdir=dist --external:electron --sourcemap",
     "start": "npm run build && electron .",
     "typecheck": "tsc -p tsconfig.json"
   },

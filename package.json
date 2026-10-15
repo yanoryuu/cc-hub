@@ -14,6 +14,15 @@
     "desktop": "npm run start -w @cc-hub/desktop"
   },
   "engines": {
-    "node": ">=20.12"
+    "node": ">=22"
+  },
+  "allowScripts": {
+    "electron@33.4.11": true,
+    "esbuild@0.24.2": true,
+    "esbuild@0.25.12": true,
+    "better-sqlite3": false,
+    "cpu-features": false,
+    "dtrace-provider": false,
+    "ssh2": false
   }
 }
