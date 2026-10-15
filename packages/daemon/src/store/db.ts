@@ -30,6 +30,8 @@ export interface SessionRow {
   task?: string | null;
   /** トークン使用量 {tokens: SessionTokens, sl: statusLine の累計 | null} の JSON(列の追加前の行は null) */
   tokens_json?: string | null;
+  /** 「アプリを開く」ボタン AppLauncher[] の JSON(列の追加前の行・ボタンなしは null) */
+  launchers_json?: string | null;
 }
 
 /** worktree の内部情報(WorktreeInfo に含めないもの) */
@@ -84,6 +86,7 @@ export class Store {
     this.addColumn('sessions', 'handed_off', 'INTEGER');
     this.addColumn('sessions', 'task', 'TEXT');
     this.addColumn('sessions', 'tokens_json', 'TEXT');
+    this.addColumn('sessions', 'launchers_json', 'TEXT');
     this.addColumn('repos', 'linked_dirs_json', 'TEXT');
   }
 
@@ -98,10 +101,10 @@ export class Store {
       .prepare(
         `INSERT INTO sessions (id, name, cwd, mode, status, managed, created_at, ended_at, last_event_at,
            context_pct, cost_usd, model, permission_mode, last_message, exit_code,
-           repo_id, worktree_id, branch, claude_session_id, handed_off, task, tokens_json)
+           repo_id, worktree_id, branch, claude_session_id, handed_off, task, tokens_json, launchers_json)
          VALUES (@id, @name, @cwd, @mode, @status, @managed, @created_at, @ended_at, @last_event_at,
            @context_pct, @cost_usd, @model, @permission_mode, @last_message, @exit_code,
-           @repo_id, @worktree_id, @branch, @claude_session_id, @handed_off, @task, @tokens_json)
+           @repo_id, @worktree_id, @branch, @claude_session_id, @handed_off, @task, @tokens_json, @launchers_json)
          ON CONFLICT(id) DO UPDATE SET name=excluded.name, cwd=excluded.cwd, mode=excluded.mode,
            status=excluded.status, managed=excluded.managed, ended_at=excluded.ended_at,
            last_event_at=excluded.last_event_at, context_pct=excluded.context_pct,
@@ -109,7 +112,8 @@ export class Store {
            last_message=excluded.last_message, exit_code=excluded.exit_code,
            repo_id=excluded.repo_id, worktree_id=excluded.worktree_id, branch=excluded.branch,
            claude_session_id=excluded.claude_session_id, handed_off=excluded.handed_off,
-           task=excluded.task, tokens_json=COALESCE(excluded.tokens_json, sessions.tokens_json)`,
+           task=excluded.task, tokens_json=COALESCE(excluded.tokens_json, sessions.tokens_json),
+           launchers_json=excluded.launchers_json`,
       )
       .run({
         id: s.id,
@@ -134,6 +138,7 @@ export class Store {
         handed_off: s.handedOff ? 1 : 0,
         task: s.task ?? null,
         tokens_json: tokensJson,
+        launchers_json: s.launchers?.length ? JSON.stringify(s.launchers) : null,
       });
   }
 

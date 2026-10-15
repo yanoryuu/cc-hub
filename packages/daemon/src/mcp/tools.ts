@@ -2,7 +2,7 @@
 // 呼び出し元の claude は自分が誰かを名乗らないため、セッション / プロジェクトは引数の cwd(作業フォルダ)から推定する。
 // (ヘッダー X-CC-Hub-Session が展開済みで届いた場合はそれを優先する)
 import path from 'node:path';
-import type { DeployJob, ServerInfo, SessionInfo } from '@cc-hub/shared';
+import type { AppLauncher, DeployJob, ServerInfo, SessionInfo } from '@cc-hub/shared';
 import type { DeployService } from '../deploy/service';
 import type { FirebaseInfoService } from '../firebase/info';
 import { infoSummary } from '../firebase/info';
@@ -10,11 +10,12 @@ import { FIREBASE_TARGETS } from '../firebase/config';
 import type { InstructionsService, ProjectKey } from '../project/instructions';
 import { HttpError } from '../util';
 import { launchUnity, unityStatus } from '../unity/launcher';
+import { LAUNCHER_COMMAND_MAX, LAUNCHER_LABEL_MAX, LAUNCHER_MAX, unityMessage } from '../session/launchers';
 
 export class ToolInputError extends Error {}
 
 type PropSpec =
-  | { type: 'string'; description: string; maxLength?: number }
+  | { type: 'string'; description: string; maxLength?: number; enum?: string[] }
   | { type: 'boolean'; description: string }
   | { type: 'array'; description: string; items: string[] };
 
@@ -163,6 +164,38 @@ export const TOOLS: ToolDef[] = [
     required: ['cwd'],
     readOnly: false,
   },
+  {
+    name: 'set_app_launcher',
+    description:
+      'このセッションに「アプリを開く」ボタンを登録します。ユーザーが CC Hub のボタンからいつでも起動できるようにする。' +
+      "Unity プロジェクトなら kind: 'unity'(command は不要。そのフォルダの Unity プロジェクトを Unity エディタで開きます)。" +
+      "自作ツールならそのツールを起動するコマンド(kind: 'command'。例: npm run tool / python tools\\map_editor.py / \"C:\\Tools\\Viewer.exe\" \"{cwd}\\out\")。" +
+      '{cwd} は作業フォルダ(このセッションの worktree)に置き換わり、コマンドは作業フォルダで切り離して起動されます(終了は待ちません)。' +
+      `同じ label のボタンがあれば上書きします。label は短い表示名(${LAUNCHER_LABEL_MAX} 文字まで)、ボタンは 1 セッション ${LAUNCHER_MAX} 個まで。` +
+      'ツールを作った・起動方法が決まったときに登録し、登録したことをユーザーに伝えてください。結果は登録後のボタンの一覧です。',
+    props: {
+      cwd: CWD_PROP,
+      label: { type: 'string', description: `ボタンの表示名(例: 「Unity」「マップエディタ」)。${LAUNCHER_LABEL_MAX} 文字まで`, maxLength: LAUNCHER_LABEL_MAX + 20 },
+      kind: { type: 'string', description: "'command'(既定。command を実行)か 'unity'(Unity エディタで開く)", enum: ['command', 'unity'] },
+      command: {
+        type: 'string',
+        description: `kind 'command' のとき必須。起動するコマンドライン(1 行、${LAUNCHER_COMMAND_MAX} 文字まで)。{cwd} は作業フォルダに置き換わります`,
+        maxLength: LAUNCHER_COMMAND_MAX,
+      },
+    },
+    required: ['cwd', 'label'],
+    readOnly: false,
+  },
+  {
+    name: 'remove_app_launcher',
+    description: 'set_app_launcher で登録した「アプリを開く」ボタンを label で削除します。ユーザーに頼まれたとき、またはツールが無くなったときに使ってください。',
+    props: {
+      cwd: CWD_PROP,
+      label: { type: 'string', description: '削除するボタンの表示名', maxLength: LAUNCHER_LABEL_MAX + 20 },
+    },
+    required: ['cwd', 'label'],
+    readOnly: false,
+  },
 ];
 
 /** MCP の tools/list に返す形 */
@@ -177,7 +210,7 @@ export function listToolsResult(): { tools: unknown[] } {
           Object.entries(t.props).map(([k, p]) => {
             if (p.type === 'array') return [k, { type: 'array', description: p.description, items: { type: 'string', enum: p.items }, minItems: 1, uniqueItems: true }];
             if (p.type === 'boolean') return [k, { type: 'boolean', description: p.description }];
-            return [k, { type: p.type, description: p.description, ...(p.maxLength ? { maxLength: p.maxLength } : {}) }];
+            return [k, { type: p.type, description: p.description, ...(p.maxLength ? { maxLength: p.maxLength } : {}), ...(p.enum ? { enum: p.enum } : {}) }];
           }),
         ),
         required: t.required,
@@ -216,6 +249,7 @@ export function validateArgs(name: string, args: unknown): ToolArgs {
     }
     if (typeof v !== 'string') throw new ToolInputError(`${k} は文字列で指定してください`);
     if (p.maxLength && v.length > p.maxLength) throw new ToolInputError(`${k} が長すぎます(${p.maxLength} 文字まで)`);
+    if (p.enum && !p.enum.includes(v)) throw new ToolInputError(`${k} に使えない値です: ${v}(使えるもの: ${p.enum.join(', ')})`);
     out[k] = v;
   }
   for (const k of t.required) {
@@ -235,6 +269,15 @@ export interface McpDeps {
   instructions: InstructionsService;
   /** cwd がプールのリポジトリ(.base / worktree)なら repoId */
   repoIdForCwd: (cwd: string) => string | null;
+  /** 「アプリを開く」ボタンの登録 / 削除(SessionManager)。無ければ set_app_launcher はエラー */
+  launchers?: {
+    upsert: (sessionId: string, spec: { label: string; kind: string; command: string | null }) => AppLauncher[];
+    remove: (sessionId: string, label: string) => AppLauncher[];
+  } | null;
+}
+
+function launcherSummary(l: AppLauncher) {
+  return { label: l.label, kind: l.kind, command: l.command, addedBy: l.addedBy, lastRunAt: l.lastRunAt ? new Date(l.lastRunAt).toISOString() : null, lastError: l.lastError };
 }
 
 export interface CallContext {
@@ -411,11 +454,23 @@ export async function callTool(name: string, rawArgs: unknown, d: McpDeps, ctx: 
       return await unityStatus(a.cwd);
     case 'launch_unity': {
       const r = await launchUnity(a.cwd);
+      return { ...r, message: unityMessage(r) };
+    }
+    case 'set_app_launcher':
+    case 'remove_app_launcher': {
+      if (!d.launchers) throw new ToolInputError('アプリを開くボタンの機能は使えません');
+      const s = caller();
+      if (!s) throw new ToolInputError(`この作業フォルダの CC Hub のセッションが見つかりません: ${a.cwd}(CC Hub で起動したセッションから呼んでください)`);
+      if (name === 'remove_app_launcher') {
+        const list = d.launchers.remove(s.id, a.label);
+        return { session: s.name, launchers: list.map(launcherSummary), message: `ボタン「${String(a.label).trim()}」を削除しました。` };
+      }
+      const kind = a.kind ?? 'command';
+      const list = d.launchers.upsert(s.id, { label: a.label, kind, command: kind === 'command' ? (a.command ?? null) : null });
       return {
-        ...r,
-        message: r.launched
-          ? `Unity ${r.editorVersion} でプロジェクトを開きました(PID ${r.runningPid})。読み込みが終わるまで少し待ってください。`
-          : `このプロジェクトは既に Unity エディタで開いています(PID ${r.runningPid})。`,
+        session: s.name,
+        launchers: list.map(launcherSummary),
+        message: `CC Hub のセッション「${s.name}」に「${String(a.label).trim()}」ボタンを登録しました。ユーザーはこのボタンからいつでも起動できます。`,
       };
     }
   }

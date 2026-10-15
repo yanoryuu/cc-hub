@@ -10,13 +10,14 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
-import type { ReleaseMode, RepoInfo, WorktreeGitStat, WorktreeInfo, WorktreeState } from '@cc-hub/shared';
+import type { RebaseResult, ReleaseMode, RepoInfo, WorktreeGitStat, WorktreeInfo, WorktreeState } from '@cc-hub/shared';
 import { bus } from '../bus';
 import type { HubConfig } from '../config';
 import type { Store, WorktreeRow } from '../store/db';
 import { HttpError } from '../util';
 import { Mutex, Semaphore, freeDiskGB, git, gitOk, normPath, run, tail } from './exec';
 import { installCommand, lockHash } from './kind';
+import { DIRTY_MSG, IN_USE_DELETE_MSG, IN_USE_REBASE_MSG, classifyRebase, computeInUse, parseConflictFiles, parseCount } from './worktree-ops';
 
 const RECONCILE_MS = 30_000;
 const FETCH_FRESH_MS = 30_000;
@@ -60,6 +61,8 @@ export interface PoolDeps {
   setRepoError: (id: string, error: string | null) => void;
   /** そのハブセッションが存在するか(起動時の復旧で使う) */
   sessionExists: (id: string) => boolean;
+  /** そのセッションが動いているか(PTY が生きている / 起動準備中 / PowerShell で動作中)。inUse の判定に使う */
+  sessionLive?: (id: string) => boolean;
 }
 
 export function baseOf(repo: RepoInfo): string {
@@ -110,7 +113,19 @@ export class WorktreePool {
   private pub(w: WorktreeRow): WorktreeInfo {
     const { installHash: _h, failCount: _f, ...info } = w;
     // 変更状況(フェーズ 3)は assigned の間だけ見せる
-    return { ...info, git: w.state === 'assigned' ? (w.git ?? null) : null };
+    return { ...info, git: w.state === 'assigned' ? (w.git ?? null) : null, inUse: this.isInUse(w) };
+  }
+
+  /** 使用中か(rebase・削除できない) */
+  isInUse(w: WorktreeRow): boolean {
+    return computeInUse(w.state, w.sessionId, (id) => this.d.sessionLive?.(id) ?? false);
+  }
+
+  /** セッションの動作状態が変わった: そのセッションの worktree を配信し直す(inUse が変わるため) */
+  republishForSession(sessionId: string): void {
+    for (const w of this.wts.values()) {
+      if (w.sessionId === sessionId) bus.state({ t: 'worktree.upsert', worktree: this.pub(w) });
+    }
   }
 
   /** 変更状況を更新して配信する(DB には保存しない)。assigned でなければ何もしない */
@@ -687,16 +702,100 @@ export class WorktreePool {
     void this.task(w, () => this.build(w));
   }
 
-  /** 待機中 / broken の worktree を削除する */
-  async remove(id: string): Promise<void> {
+  /**
+   * worktree を削除する: 待機中 / broken / 割り当て済み(セッションが止まっている)。使用中は 409。
+   * 割り当て済みのものはブランチを残す(worktree remove はブランチを消さない)。戻り値 = 割り当てていたセッション(解放済みにする)
+   */
+  async remove(id: string): Promise<string | null> {
     const w = this.wts.get(id);
     if (!w) throw new HttpError(404, 'worktree が見つかりません');
-    if (w.state !== 'idle' && w.state !== 'broken' && w.state !== 'deleting') {
+    if (this.isInUse(w)) throw new HttpError(409, w.state === 'assigned' ? IN_USE_DELETE_MSG : `準備・初期化の途中(${w.state})なので削除できません`);
+    if (w.state !== 'idle' && w.state !== 'broken' && w.state !== 'assigned') {
       throw new HttpError(409, `この状態(${w.state})の worktree は削除できません`);
     }
     if (this.busy.has(w.id)) throw new HttpError(409, 'worktree は処理中です');
+    const sessionId = w.state === 'assigned' ? w.sessionId : null;
+    if (w.state === 'assigned') {
+      console.log(`[pool] ${w.id} を削除します(割り当て先のセッションは停止中${w.branch ? `、ブランチ ${w.branch} は残す` : ''})`);
+      // セッションとの紐付けを外す(解放と同じ扱い。削除に失敗して broken になっても、セッションは解放済みになる)
+      this.set(w, { sessionId: null, branch: null, git: null });
+    }
     await this.task(w, () => this.destroy(w));
     if (this.wts.has(id)) throw new HttpError(500, `削除に失敗しました: ${w.error ?? ''}`);
+    return sessionId;
+  }
+
+  // ================================================================ rebase(UI)
+  /**
+   * 最新の origin/<default> を取り込む。使用中は 409。
+   * - 待機中(detached): fetch して switch --detach origin/<default>
+   * - 割り当て済み(セッション停止中): 未コミットの変更があれば 409。git rebase origin/<default>。衝突・失敗したら --abort で元に戻す
+   */
+  async rebase(id: string): Promise<RebaseResult> {
+    const w = this.wts.get(id);
+    if (!w) throw new HttpError(404, 'worktree が見つかりません');
+    if (this.isInUse(w)) throw new HttpError(409, w.state === 'assigned' ? IN_USE_REBASE_MSG : `準備・初期化の途中(${w.state})なので rebase できません`);
+    if (w.state !== 'idle' && w.state !== 'assigned') throw new HttpError(409, `この状態(${w.state})の worktree は rebase できません`);
+    if (this.busy.has(w.id)) throw new HttpError(409, 'worktree は処理中です');
+    const repo = this.d.getRepo(w.repoId);
+    if (!repo) throw new HttpError(404, 'リポジトリが見つかりません');
+    const base = `origin/${repo.defaultBranch}`;
+    const logFile = this.logFile(w);
+    const head = async () => {
+      const r = await git(['-C', w.path, 'rev-parse', 'HEAD']);
+      return r.code === 0 ? r.stdout.trim() : null;
+    };
+    this.busy.add(w.id);
+    let result: RebaseResult;
+    try {
+      result = await this.rt(repo.id).mutex.run(async (): Promise<RebaseResult> => {
+        // ミューテックスを待つ間にセッションが再開されていないか
+        if (this.isInUse(w)) throw new HttpError(409, IN_USE_REBASE_MSG);
+        try {
+          await this.fetch(repo, true, logFile);
+        } catch (e) {
+          throw new HttpError(502, `git fetch に失敗しました: ${errMsg(e)}`);
+        }
+        const before = await head();
+        const behind = parseCount((await git(['-C', w.path, 'rev-list', '--count', `HEAD..${base}`])).stdout);
+        if (w.state === 'idle') {
+          const latest = await git(['-C', w.path, 'rev-parse', base]);
+          if (latest.code === 0 && latest.stdout.trim() === before) {
+            return { result: 'up_to_date', conflicts: [], before, after: before, pulled: 0, message: `既に ${base} の最新です` };
+          }
+          // 待機中は作業内容を持たない(解放時に初期化済み)ので、そのまま最新に付け替える
+          await gitOk(['-C', w.path, 'reset', '--hard'], { logFile });
+          await gitOk(['-C', w.path, 'switch', '--detach', base], { logFile });
+          return { result: 'rebased', conflicts: [], before, after: await head(), pulled: behind, message: `${base} の最新に合わせました` };
+        }
+        // 割り当て済み: 未コミットの変更があれば何もしない(stash はしない)
+        const st = await git(['-C', w.path, 'status', '--porcelain']);
+        if (st.code !== 0) throw new HttpError(500, `git status に失敗しました: ${tail(st)}`);
+        if (st.stdout.trim()) throw new HttpError(409, DIRTY_MSG);
+        for (const name of ['rebase-merge', 'rebase-apply']) {
+          const gp = await git(['-C', w.path, 'rev-parse', '--git-path', name]);
+          if (gp.code === 0 && fs.existsSync(path.resolve(w.path, gp.stdout.trim()))) {
+            throw new HttpError(409, 'rebase の途中の状態です。git rebase --continue / --abort で終わらせてから実行してください');
+          }
+        }
+        if (behind === 0) return { result: 'up_to_date', conflicts: [], before, after: before, pulled: 0, message: `既に ${base} の最新を取り込んでいます` };
+        const r = await git(['-C', w.path, 'rebase', base], { logFile, env: { GIT_EDITOR: 'true', GIT_SEQUENCE_EDITOR: 'true' } });
+        let conflicts: string[] = [];
+        if (r.code !== 0) {
+          conflicts = parseConflictFiles((await git(['-C', w.path, 'diff', '--name-only', '--diff-filter=U'])).stdout);
+          const ab = await git(['-C', w.path, 'rebase', '--abort'], { logFile });
+          if (ab.code !== 0) console.warn(`[pool] ${w.id}: rebase --abort に失敗: ${tail(ab)}`);
+        }
+        const c = classifyRebase(r, conflicts, base);
+        return { ...c, before, after: await head(), pulled: c.result === 'rebased' ? behind : 0 };
+      });
+    } finally {
+      this.busy.delete(w.id);
+    }
+    console.log(`[pool] rebase ${w.name} (${w.id}): ${result.result}${result.conflicts.length ? ` [${result.conflicts.join(', ')}]` : ''}${result.result === 'failed' ? ` ${result.message}` : ''}`);
+    // 配信し直す(待機中の HEAD が変わった / 割り当て済みの変更状況は呼ぶ側で更新する)
+    this.set(w, {});
+    return result;
   }
 
   /** リポジトリの登録解除: 補充を止めて全 worktree を削除する(使用中があれば呼ぶ側で 409) */

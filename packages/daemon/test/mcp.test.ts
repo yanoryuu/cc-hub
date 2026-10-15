@@ -35,6 +35,8 @@ test('ツールの一覧は契約どおり', () => {
       'update_project_instructions',
       'unity_status',
       'launch_unity',
+      'set_app_launcher',
+      'remove_app_launcher',
     ],
   );
   const r = listToolsResult() as any;

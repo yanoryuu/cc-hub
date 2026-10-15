@@ -7,6 +7,7 @@ import { useHub } from '../store';
 import { WT_STATE_LABEL, useSessionWorktree } from '../repo';
 import { StatusBadge, WhereTag } from './common';
 import { PowerShellButton, TakeoverButton } from './Handoff';
+import { LauncherManager } from './Launchers';
 
 export function SessionControls({ session, onDone }: { session: SessionInfo; onDone?: () => void }) {
   const [busy, setBusy] = useState(false);
@@ -121,6 +122,8 @@ export function SessionDetails({ session }: { session: SessionInfo }) {
   const wt = useSessionWorktree(session);
   const openRepos = useHub((s) => s.openRepos);
   return (
+    <>
+    <LauncherManager session={session} />
     <section className="panel-sec">
       <h3 className="sec-title">セッション</h3>
       <dl className="kv">
@@ -185,5 +188,6 @@ export function SessionDetails({ session }: { session: SessionInfo }) {
       {/* 解放バナーはセッション画面側(SessionPane)にだけ出す。ここにも出すと二重になる */}
       <SessionControls session={session} />
     </section>
+    </>
   );
 }

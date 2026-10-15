@@ -20,7 +20,7 @@ import { api, errText, pick, repoApi } from '../api';
 import { needsRelease } from '../repo';
 import { STATUS_ICON, fmtCost, fmtDate, useNow } from '../util';
 import { StatusBadge, toolText } from './common';
-import { PoolChips, Spinner } from './RepoCommon';
+import { PoolChips, Spinner, WtBadge } from './RepoCommon';
 import { CheckIcon, ConflictDialog, MergeDialog, PrChip, PrRow } from './Prs';
 import { RepoPage } from './Repos';
 import { ArtifactsTab } from './ProjectArtifacts';
@@ -28,6 +28,7 @@ import { GitTab } from './ProjectGit';
 import { TokenTotals, TokensTab } from './ProjectTokens';
 import { HistoryView } from './History';
 import { InstructionsTab } from './Instructions';
+import { InUseTag, WtOps, wtInUse } from './WorktreeOps';
 import { PublishTab } from './Deploy';
 import { FirebaseTab } from './Firebase';
 import { deployInProject, firebaseCwdFor, useFirebaseInfo } from '../firebase';
@@ -685,14 +686,49 @@ function UnityButton({ cwd }: { cwd: string }) {
 
 function WorktreesTab({ data, gotoGit, reload }: { data: ProjectOverview; gotoGit: (id: string) => void; reload: () => void }) {
   const sessions = useHub((s) => s.sessions);
+  const allWt = useHub((s) => s.worktrees);
   const open = useHub((s) => s.open);
   const now = useNow(30000);
   const toolbar = data.key.repoId ? <WorktreeToolbar repoId={data.key.repoId} reload={reload} /> : null;
+  // targets(使用中 + ベース)に出てこない作業ツリー(待機中・準備中・エラーなど)も一覧に出して、rebase / 削除できるようにする
+  const others = data.key.repoId
+    ? Object.values(allWt)
+        .filter((w) => w.repoId === data.key.repoId && !data.targets.some((t) => t.id === `wt:${w.id}`))
+        .sort((a, b) => a.name.localeCompare(b.name))
+    : [];
+  const othersSection =
+    others.length > 0 ? (
+      <section className="wtree-others">
+        <h3 className="sec-h">
+          待機中・その他の作業ツリー <span className="count">{others.length}</span>
+        </h3>
+        <div className="wtree-cards">
+          {others.map((w) => (
+            <article key={w.id} className="wtree-card">
+              <header className="wtree-head">
+                <span className="mono strong">{w.name}</span>
+                <WtBadge state={w.state} inUse={w.inUse} />
+                {w.branch ? <span className="mono accent wtree-branch">{w.branch}</span> : <span className="muted">ブランチなし</span>}
+                {wtInUse(w, sessions) && <InUseTag />}
+                <span className="spacer" />
+                <span className="muted small" title={fmtDate(w.lastUsedAt)}>
+                  最終使用 {fmtAgo(w.lastUsedAt, now)}
+                </span>
+              </header>
+              {(w.progress || w.error) && <div className={`small ${w.error ? 'warn-text' : 'muted'}`}>{w.error ?? w.progress}</div>}
+              <div className="ctl-row">
+                <WtOps w={w} layout="card" />
+              </div>
+            </article>
+          ))}
+        </div>
+      </section>
+    ) : null;
   if (data.targets.length === 0)
     return (
       <>
         {toolbar}
-        <div className="rp-empty">作業ツリーはありません。</div>
+        {othersSection ?? <div className="rp-empty">作業ツリーはありません。</div>}
       </>
     );
   const KIND = { worktree: '作業ツリー', base: 'ベース', dir: 'フォルダ' } as const;
@@ -703,12 +739,15 @@ function WorktreesTab({ data, gotoGit, reload }: { data: ProjectOverview; gotoGi
       {data.targets.map((t) => {
         const s = t.sessionId ? sessions[t.sessionId] : undefined;
         const d = diffTotals(t);
+        // CC Hub が管理する worktree(id = "wt:<worktreeId>")だけ rebase / 削除できる
+        const w = t.kind === 'worktree' ? allWt[t.id.slice(3)] : undefined;
         return (
           <article key={t.id} className="wtree-card">
             <header className="wtree-head">
               <span className="mono strong">{t.label}</span>
               <span className="tag">{KIND[t.kind]}</span>
               {t.branch ? <span className="mono accent wtree-branch">{t.branch}</span> : <span className="muted">ブランチなし</span>}
+              {w && wtInUse(w, sessions) && <InUseTag />}
               <span className="spacer" />
               <span className="muted small" title={fmtDate(t.updatedAt)}>
                 更新 {fmtAgo(t.updatedAt, now)}
@@ -743,11 +782,13 @@ function WorktreesTab({ data, gotoGit, reload }: { data: ProjectOverview; gotoGi
                 Git を開く
               </button>
               {t.unity && <UnityButton cwd={t.path} />}
+              {w && <WtOps w={w} layout="card" />}
             </div>
           </article>
         );
       })}
     </div>
+    {othersSection}
     </>
   );
 }

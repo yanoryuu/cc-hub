@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import type {
+  AppLauncher,
   IdleStopSettings,
   NotifyKind,
   ReleaseMode,
@@ -48,6 +49,8 @@ import { TranscriptTail, combineTokens } from './tokens';
 import { PtyHost } from './pty-host';
 import { approvalKeys, detectApproval, type DetectedApproval } from './approval';
 import { buildTerminalArgv, launchTerminal, terminalEnv, type TerminalSpec } from './terminal';
+import { expandCommand, normalizeLaunchers, removeLauncher, spawnDetached, unityMessage, upsertLauncher } from './launchers';
+import { launchUnity } from '../unity/launcher';
 
 const DEFAULT_COLS = 120;
 const DEFAULT_ROWS = 32;
@@ -126,6 +129,9 @@ export class SessionManager {
   private repoForCwd: ((cwd: string) => string | null) | null = null;
   /** 使っていないので自動で止めたセッション(作業ツリーの自動解放を見送るため、再起動をまたいで覚えておく) */
   private readonly idleStoppedIds = new Set<string>();
+  /** 前回配信したときの isRunning(変化したときだけ liveListeners を呼ぶ) */
+  private readonly liveCache = new Map<string, boolean>();
+  private readonly liveListeners: ((id: string, live: boolean) => void)[] = [];
 
   constructor(
     private readonly cfg: HubConfig,
@@ -249,6 +255,25 @@ export class SessionManager {
   private touch(e: Entry, persist = true): void {
     if (persist) this.store.saveSession(e.info, e.endedAt, e.claudeId, this.tokensJson(e));
     bus.state({ t: 'session.upsert', session: { ...e.info } });
+    this.checkLive(e.info.id);
+  }
+
+  /** 「動いているか」(isRunning)が変わったら知らせる(worktree の inUse を配信し直すため) */
+  private checkLive(id: string): void {
+    const live = this.isRunning(id);
+    if (this.liveCache.get(id) === live) return;
+    this.liveCache.set(id, live);
+    for (const fn of this.liveListeners) {
+      try {
+        fn(id, live);
+      } catch (err) {
+        console.warn(`[session] liveness listener: ${(err as Error).message}`);
+      }
+    }
+  }
+
+  onLiveChange(fn: (id: string, live: boolean) => void): void {
+    this.liveListeners.push(fn);
   }
 
   private newEntry(info: SessionInfo): Entry {
@@ -385,6 +410,14 @@ export class SessionManager {
       handedOff: !!r.handed_off && !r.managed,
       task: r.task ?? null,
     });
+    if (r.launchers_json) {
+      try {
+        const l = JSON.parse(r.launchers_json);
+        if (Array.isArray(l) && l.length) info.launchers = l;
+      } catch {
+        /* 壊れていたら無し */
+      }
+    }
     return info;
   }
 
@@ -688,6 +721,7 @@ export class SessionManager {
       e.host?.dispose();
       this.setIdleStopped(e, false);
       this.sessions.delete(id);
+      this.liveCache.delete(id);
       this.store.deleteSession(id);
       this.agents.removeSession(id);
       fs.rm(screenFile(id), { force: true }, () => {});
@@ -729,6 +763,74 @@ export class SessionManager {
     if (!n) throw new HttpError(400, 'name が空です');
     e.info.name = n;
     this.touch(e);
+  }
+
+  // ================================================================ 「アプリを開く」ボタン
+  /** 一覧をまとめて保存する(PUT /api/sessions/:id/launchers)。外部セッションでも可 */
+  setLaunchers(id: string, input: unknown): SessionInfo {
+    const e = this.require(id);
+    const next = normalizeLaunchers(input, e.info.launchers ?? []);
+    e.info.launchers = next.length ? next : undefined;
+    this.touch(e);
+    return { ...e.info };
+  }
+
+  /** Claude(MCP の set_app_launcher)からの登録 / 更新。同じ名前は上書き */
+  upsertLauncher(id: string, spec: unknown, by: 'user' | 'claude'): AppLauncher[] {
+    const e = this.require(id);
+    const next = upsertLauncher(e.info.launchers ?? [], spec, by);
+    e.info.launchers = next;
+    this.touch(e);
+    return next;
+  }
+
+  removeLauncher(id: string, label: string): AppLauncher[] {
+    const e = this.require(id);
+    const next = removeLauncher(e.info.launchers ?? [], label);
+    e.info.launchers = next.length ? next : undefined;
+    this.touch(e);
+    return next;
+  }
+
+  /** ボタンを押した: Unity を開く / コマンドを作業フォルダで切り離して起動する。結果は lastRunAt / lastError に残す */
+  async runLauncher(id: string, launcherId: string): Promise<{ message: string; session: SessionInfo }> {
+    const e = this.require(id);
+    const l = (e.info.launchers ?? []).find((x) => x.id === launcherId);
+    if (!l) throw new HttpError(404, 'ボタンが見つかりません');
+    const cwd = e.info.cwd;
+    let isDir = false;
+    try {
+      isDir = !!cwd && fs.statSync(cwd).isDirectory();
+    } catch {
+      isDir = false;
+    }
+    if (!isDir) throw new HttpError(409, `作業フォルダがありません: ${cwd || '(不明)'}`);
+    const record = (err: string | null) => {
+      // 実行中に一覧が書き換えられていても、同じ id が残っていれば記録する
+      const cur = (e.info.launchers ?? []).find((x) => x.id === launcherId);
+      if (cur) Object.assign(cur, { lastRunAt: Date.now(), lastError: err ? err.slice(0, 300) : null });
+      if (this.sessions.get(id) === e) this.touch(e);
+    };
+    if (l.kind === 'unity') {
+      console.log(`[launcher] ${e.info.name} ${l.label}: (Unity) ${cwd}`);
+      try {
+        const r = await launchUnity(cwd);
+        record(null);
+        return { message: unityMessage(r), session: { ...e.info } };
+      } catch (err) {
+        record((err as Error).message);
+        throw err instanceof HttpError ? err : new HttpError(500, `Unity を開けませんでした: ${(err as Error).message}`);
+      }
+    }
+    const line = expandCommand(l.command ?? '', cwd);
+    console.log(`[launcher] ${e.info.name} ${l.label}: ${line}`);
+    const err = await spawnDetached(line, cwd);
+    record(err);
+    if (err) {
+      console.warn(`[launcher] ${e.info.name} ${l.label}: ${err}`);
+      throw new HttpError(500, err);
+    }
+    return { message: `「${l.label}」を起動しました`, session: { ...e.info } };
   }
 
   /**

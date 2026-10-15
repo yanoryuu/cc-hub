@@ -351,12 +351,16 @@ async function handle(d: ServerDeps, req: http.IncomingMessage, res: http.Server
     }
   }
 
-  const wm = /^\/api\/worktrees\/([^/]+)(\/rebuild)?$/.exec(p);
+  const wm = /^\/api\/worktrees\/([^/]+)(\/rebuild|\/rebase)?$/.exec(p);
   if (wm) {
     const id = decodeURIComponent(wm[1]);
-    if (wm[2] && method === 'POST') {
+    if (wm[2] === '/rebuild' && method === 'POST') {
       d.repos.rebuildWorktree(id);
       return json(res, 200, { ok: true });
+    }
+    // 使用中でなければ最新の origin/<default> を取り込む(衝突したら中止して元に戻す)
+    if (wm[2] === '/rebase' && method === 'POST') {
+      return json(res, 200, { ok: true, rebase: await d.repos.rebaseWorktree(id) });
     }
     if (!wm[2] && method === 'DELETE') {
       await d.repos.removeWorktree(id);
@@ -547,6 +551,20 @@ async function handle(d: ServerDeps, req: http.IncomingMessage, res: http.Server
         const body = await readBody(req, Math.ceil((ATTACH_MAX_BYTES * 4) / 3) + 64 * 1024);
         return json(res, 200, { ok: true, path: await saveAttachment(info.cwd, body) });
       }
+    }
+  }
+
+  // 「アプリを開く」ボタン(保存 / 起動)
+  const lm = /^\/api\/sessions\/([^/]+)\/launchers(?:\/([^/]+)\/run)?$/.exec(p);
+  if (lm) {
+    const id = decodeURIComponent(lm[1]);
+    if (!lm[2] && method === 'PUT') {
+      const body = await readBody(req);
+      return json(res, 200, { ok: true, session: d.sessions.setLaunchers(id, body?.launchers) });
+    }
+    if (lm[2] && method === 'POST') {
+      const r = await d.sessions.runLauncher(id, decodeURIComponent(lm[2]));
+      return json(res, 200, { ok: true, message: r.message, session: r.session });
     }
   }
 

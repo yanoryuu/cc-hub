@@ -9,6 +9,7 @@ import { GameView } from './GameView';
 import { ShellScreen } from './Shell';
 import { AgentTree } from './AgentTree';
 import { SessionDetails } from './SessionDetails';
+import { LauncherBar } from './Launchers';
 import { SkillsView } from './Skills';
 import { McpView } from './Mcp';
 import { mcpCounts, useMcp, useScopeCwd } from '../ext';
@@ -178,6 +179,11 @@ function SessionDetailView() {
               ⓘ
             </button>
           </div>
+          {(session.launchers?.length ?? 0) > 0 && (
+            <div className="m-launchers">
+              <LauncherBar session={session} />
+            </div>
+          )}
           {info && (
             <div className="m-info">
               <AgentTree session={session} />

@@ -196,6 +196,24 @@ const s8 = mkSession({
 });
 for (const s of [s1, s2, s3, s4, s5, s6, s7, s8]) sessions[s.id] = s;
 
+// ---------------------------------------------------------------- アプリを開くボタン(mock)
+function mkLauncher(label, kind, command, p = {}) {
+  return { id: crypto.randomUUID().slice(0, 8), label, kind, command, addedBy: 'user', lastRunAt: null, lastError: null, ...p };
+}
+s1.launchers = [
+  mkLauncher('Unity', 'unity', null, { lastRunAt: now - 25 * MIN }),
+  mkLauncher('マップエディタ', 'command', '"C:\\Tools\\MapEditor\\MapEditor.exe" {cwd}\\maps', { addedBy: 'claude' }),
+  mkLauncher('Storybook', 'command', 'npm run storybook', { lastRunAt: now - 3 * 60 * MIN, lastError: 'ポート 6006 は使用中です(EADDRINUSE)' }),
+];
+s4.launchers = [mkLauncher('プレビュー', 'command', 'npm run preview -- --open', { lastRunAt: now - 80 * MIN })];
+s5.launchers = [
+  mkLauncher('プレビュー', 'command', 'npm run preview -- --open'),
+  mkLauncher('Storybook', 'command', 'npm run storybook'),
+  mkLauncher('DB ビューア', 'command', '"C:\\Tools\\DBViewer\\DBViewer.exe" {cwd}\\db\\dev.sqlite', { addedBy: 'claude' }),
+  mkLauncher('ログを開く', 'command', 'notepad {cwd}\\logs\\app.log', { lastError: 'logs\\app.log が見つかりません' }),
+  mkLauncher('VS Code', 'command', 'code {cwd}'),
+];
+
 // ---------------------------------------------------------------- リポジトリ / worktree プール
 const repos = {};
 const worktrees = {};
@@ -266,10 +284,18 @@ for (const w of [
 function upsertRepo(r) {
   broadcast('state', { t: 'repo.upsert', repo: r });
 }
+/** 使用中か(割り当て先のセッションが動いている / PowerShell に移して動いている / 準備・初期化の途中) */
+function inUseOf(w) {
+  if (['creating', 'warming', 'releasing', 'deleting'].includes(w.state)) return true;
+  const s = w.sessionId && sessions[w.sessionId];
+  return !!s && s.status !== 'stopped' && s.status !== 'error';
+}
 function upsertWt(w) {
+  w.inUse = inUseOf(w);
   broadcast('state', { t: 'worktree.upsert', worktree: w });
 }
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+let rebaseSeq = 0;
 function repoWts(id) {
   return Object.values(worktrees).filter((w) => w.repoId === id);
 }
@@ -580,7 +606,7 @@ function mkGit(p) {
 worktrees[`${REPO_WEB}#wt-01`].git = mkGit({ changed: 3, insertions: 120, deletions: 34, ahead: 4, behind: 2, unpushed: 1, pushed: true });
 worktrees[`${REPO_WEB}#wt-02`].git = mkGit({ changed: 7, insertions: 310, deletions: 188, ahead: 2, behind: 0, unpushed: 2, pushed: true });
 worktrees[`${REPO_WEB}#wt-04`].git = mkGit({ changed: 1, insertions: 64, deletions: 5, ahead: 2, behind: 1, unpushed: 2, pushed: false });
-worktrees[`${REPO_WEB}#wt-03`].git = mkGit({ changed: 0, insertions: 35, deletions: 1, ahead: 3, behind: 0, unpushed: 0, pushed: true });
+worktrees[`${REPO_WEB}#wt-03`].git = mkGit({ changed: 0, insertions: 35, deletions: 1, ahead: 3, behind: 4, unpushed: 2, pushed: true });
 worktrees[`${REPO_WEB}#wt-08`].git = mkGit({ changed: 2, insertions: 88, deletions: 12, ahead: 1, behind: 0, unpushed: 1, pushed: false });
 
 // ブランチ一覧(固定の追加分 + 使用中の worktree のブランチ)
@@ -750,11 +776,15 @@ function broadcast(topic, msg) {
   for (const c of clients) if (c.topics.has(topic)) send(c, msg);
 }
 function fullState() {
+  for (const w of Object.values(worktrees)) w.inUse = inUseOf(w);
   return { sessions, agents, repos, worktrees, prs, servers: ops.servers, deploys: ops.deploys, usage, daemon: { version: '0.0.0-mock', startedAt: now, port: PORT } };
 }
 function upsertSession(s) {
   s.lastEventAt = Date.now();
   broadcast('state', { t: 'session.upsert', session: s });
+  // セッションが止まった / 動き出したら、割り当て先の worktree の「使用中」も変わる
+  const w = s.worktreeId && worktrees[s.worktreeId];
+  if (w && w.sessionId === s.id && w.inUse !== inUseOf(w)) upsertWt(w);
 }
 function termWrite(sid, data) {
   termBuf[sid] = (termBuf[sid] || '') + data;
@@ -899,17 +929,43 @@ const server = http.createServer(async (req, res) => {
       return json(res, 200, { ok: true });
     }
   }
-  const wm = p.match(/^\/api\/worktrees\/([^/]+)(\/rebuild)?$/);
+  const wm = p.match(/^\/api\/worktrees\/([^/]+)(\/rebuild|\/rebase)?$/);
   if (wm) {
     const w = worktrees[decodeURIComponent(wm[1])];
     if (!w) return json(res, 404, { ok: false, error: 'worktree not found' });
-    if (wm[2] && req.method === 'POST') {
+    if (wm[2] === '/rebase' && req.method === 'POST') {
+      if (inUseOf(w)) return json(res, 409, { ok: false, error: `${w.name} は使用中です` });
+      await sleep(900);
+      // 結果は呼ぶたびに 衝突 → 取り込み → 最新 → … と順番に返す(画面確認用)
+      const kind = ['conflict', 'rebased', 'up_to_date'][rebaseSeq++ % 3];
+      const head = crypto.randomBytes(4).toString('hex');
+      let rebase;
+      if (kind === 'conflict') {
+        rebase = {
+          result: 'conflict',
+          conflicts: ['src/components/Header.tsx', 'src/hooks/useCart.ts', 'package-lock.json'],
+          before: head,
+          after: head,
+          pulled: 0,
+          message: 'origin/main との衝突のため rebase を中止しました(git rebase --abort)',
+        };
+      } else if (kind === 'rebased') {
+        const pulled = w.git?.behind || 5;
+        if (w.git) w.git.behind = 0;
+        rebase = { result: 'rebased', conflicts: [], before: head, after: crypto.randomBytes(4).toString('hex'), pulled, message: `origin/main の ${pulled} コミットを取り込みました` };
+        upsertWt(w);
+      } else {
+        rebase = { result: 'up_to_date', conflicts: [], before: head, after: head, pulled: 0, message: 'すでに最新です' };
+      }
+      console.log('[rebase]', w.id, kind);
+      return json(res, 200, { ok: true, rebase });
+    }
+    if (wm[2] === '/rebuild' && req.method === 'POST') {
       void warm(w);
       return json(res, 200, { ok: true });
     }
     if (req.method === 'DELETE') {
-      if (w.state !== 'idle' && w.state !== 'broken')
-        return json(res, 409, { ok: false, error: `${w.name} は ${w.state} のため削除できません` });
+      if (inUseOf(w)) return json(res, 409, { ok: false, error: `${w.name} は使用中のため削除できません` });
       w.state = 'deleting';
       w.progress = 'git worktree remove';
       upsertWt(w);
@@ -945,6 +1001,43 @@ const server = http.createServer(async (req, res) => {
       termWrite(s.id, `${C.green}●${C.reset} 準備できました。\r\n> `);
     }, 1500);
     return json(res, 200, { ok: true, session: s });
+  }
+  // ---------------- アプリを開くボタン
+  const lm = p.match(/^\/api\/sessions\/([^/]+)\/launchers(?:\/([^/]+)\/run)?$/);
+  if (lm) {
+    const s = sessions[lm[1]];
+    if (!s) return json(res, 404, { ok: false, error: 'session not found' });
+    if (!lm[2] && req.method === 'PUT') {
+      const b = await readBody(req).catch(() => ({}));
+      if (!Array.isArray(b.launchers)) return json(res, 400, { ok: false, error: 'launchers が必要です' });
+      s.launchers = b.launchers.map((l) =>
+        mkLauncher(String(l.label || ''), l.kind === 'unity' ? 'unity' : 'command', l.kind === 'unity' ? null : String(l.command || ''), {
+          addedBy: l.addedBy === 'claude' ? 'claude' : 'user',
+          lastRunAt: l.lastRunAt ?? null,
+          lastError: l.lastError ?? null,
+          id: l.id || crypto.randomUUID().slice(0, 8),
+        }),
+      );
+      upsertSession(s);
+      return json(res, 200, { ok: true, session: s });
+    }
+    if (lm[2] && req.method === 'POST') {
+      const l = (s.launchers || []).find((x) => x.id === decodeURIComponent(lm[2]));
+      if (!l) return json(res, 404, { ok: false, error: 'ボタンが見つかりません' });
+      await sleep(700);
+      l.lastRunAt = Date.now();
+      // Storybook / 「fail」を含むコマンドは失敗させる(エラー表示の確認用)
+      if (/storybook|fail/i.test(l.command || '')) {
+        l.lastError = 'ポート 6006 は使用中です(EADDRINUSE)';
+        upsertSession(s);
+        return json(res, 500, { ok: false, error: `起動できませんでした: ${l.lastError}` });
+      }
+      l.lastError = null;
+      upsertSession(s);
+      const cmd = (l.command || '').split('{cwd}').join(s.cwd);
+      console.log('[launcher run]', s.name, l.label, cmd);
+      return json(res, 200, { ok: true, message: l.kind === 'unity' ? 'Unity 6000.0.23f1 で開いています…' : `起動しました: ${cmd}` });
+    }
   }
   const m = p.match(/^\/api\/sessions\/([^/]+)\/(input|resize|control|approve|rename|release)$/);
   if (m && req.method === 'POST') {

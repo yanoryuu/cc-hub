@@ -7,12 +7,17 @@ export function Spinner({ label }: { label?: string }) {
   return <span className="spinner" role="status" aria-label={label ?? '処理中'} />;
 }
 
-export function WtBadge({ state }: { state: WorktreeState }) {
+/** inUse: false のとき、割り当て済みでもセッションが止まっている(rebase・削除できる)ことを示す */
+export function WtBadge({ state, inUse }: { state: WorktreeState; inUse?: boolean }) {
   const busy = state === 'creating' || state === 'warming' || state === 'releasing' || state === 'deleting';
+  const idleAssigned = state === 'assigned' && inUse === false;
   return (
-    <span className={`wtbadge wt-${state}`}>
+    <span
+      className={`wtbadge wt-${state} ${idleAssigned ? 'stopped' : ''}`}
+      title={idleAssigned ? 'セッションに割り当て済み(セッションは停止中のため、rebase・削除できます)' : undefined}
+    >
       {busy ? <Spinner /> : <span className="wtdot" aria-hidden="true" />}
-      {WT_STATE_LABEL[state]}
+      {idleAssigned ? '割り当て済み(停止中)' : WT_STATE_LABEL[state]}
     </span>
   );
 }

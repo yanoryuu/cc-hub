@@ -9,6 +9,7 @@ import { ConfirmModal, PoolChips, RepoStatusBadge, Spinner, WtBadge } from './Re
 import { StatusDot } from './common';
 import { BranchSection } from './Branches';
 import { FolderInput } from './FolderPicker';
+import { WtOps } from './WorktreeOps';
 
 // ---------------------------------------------------------------- URL の正規化(表示用プレビュー)
 
@@ -523,7 +524,7 @@ function WorktreeTable({ worktrees, mobile }: { worktrees: WorktreeInfo[]; mobil
                 {w.name}
               </td>
               <td>
-                <WtBadge state={w.state} />
+                <WtBadge state={w.state} inUse={w.inUse} />
               </td>
               <td className="mono wt-branch">{w.branch ?? <span className="dim">—</span>}</td>
               <td>
@@ -549,7 +550,7 @@ function WorktreeCard({ w }: { w: WorktreeInfo }) {
     <div className={`wt-card wt-${w.state}`}>
       <div className="wt-card-top">
         <span className="mono strong">{w.name}</span>
-        <WtBadge state={w.state} />
+        <WtBadge state={w.state} inUse={w.inUse} />
         <span className="spacer" />
         <span className="muted small">{w.lastUsedAt ? fmtDate(w.lastUsedAt) : ''}</span>
       </div>
@@ -560,7 +561,7 @@ function WorktreeCard({ w }: { w: WorktreeInfo }) {
         </div>
       )}
       <WtProgress w={w} />
-      <WtActions w={w} />
+      <WtActions w={w} layout="card" />
     </div>
   );
 }
@@ -585,7 +586,7 @@ function WtProgress({ w }: { w: WorktreeInfo }) {
   return null;
 }
 
-function WtActions({ w }: { w: WorktreeInfo }) {
+function WtActions({ w, layout = 'row' }: { w: WorktreeInfo; layout?: 'row' | 'card' }) {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const run = async (fn: () => Promise<unknown>) => {
@@ -594,18 +595,12 @@ function WtActions({ w }: { w: WorktreeInfo }) {
     try {
       await fn();
     } catch (e) {
-      setErr(
-        isConflict(e)
-          ? `${errText(e)}(使用中の worktree は削除できません。先にセッションから解放してください)`
-          : errText(e),
-      );
+      setErr(errText(e));
     } finally {
       setBusy(false);
     }
   };
   const canRebuild = w.state === 'broken';
-  const canDelete = w.state === 'idle' || w.state === 'broken';
-  if (!canRebuild && !canDelete && !err) return null;
   return (
     <span className="wt-act">
       {canRebuild && (
@@ -613,17 +608,8 @@ function WtActions({ w }: { w: WorktreeInfo }) {
           作り直す
         </button>
       )}
-      {canDelete && (
-        <button
-          className="btn sm danger"
-          disabled={busy}
-          onClick={() => {
-            if (confirm(`${w.name} を削除しますか?\n${w.path}`)) void run(() => repoApi.deleteWorktree(w.id));
-          }}
-        >
-          削除
-        </button>
-      )}
+      {/* main に rebase / 削除(使用中は押せない) */}
+      <WtOps w={w} layout={layout} />
       {err && <span className="form-error">{err}</span>}
     </span>
   );

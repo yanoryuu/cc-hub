@@ -1,5 +1,5 @@
 // REST ヘルパー。401 を受けたら PIN 画面を出し、ログイン成功後に同じリクエストを再試行する。
-import type { BranchInfo, HubState, McpServerInfo, MergeMethod, PrDetail, PrReviewEvent, RegisterRepoRequest, RescanResult, ReleaseMode, RepoInfo, SessionDraft, SessionMode, ShellInfo, SkillInfo } from '@cc-hub/shared';
+import type { AppLauncher, BranchInfo, HubState, RebaseResult, SessionInfo, McpServerInfo, MergeMethod, PrDetail, PrReviewEvent, RegisterRepoRequest, RescanResult, ReleaseMode, RepoInfo, SessionDraft, SessionMode, ShellInfo, SkillInfo } from '@cc-hub/shared';
 
 export class AuthError extends Error {
   constructor() {
@@ -138,6 +138,25 @@ export const sessionApi = {
   },
 };
 
+// ---------------------------------------------------------------- アプリを開くボタン
+
+/** 保存用の 1 件(新規は id を空にする。デーモンが採番する) */
+export type LauncherEdit = Omit<AppLauncher, 'id'> & { id?: string };
+
+export const launcherApi = {
+  /** 一覧をまとめて保存 → 保存後のセッション(返らなければ undefined) */
+  save: async (sessionId: string, launchers: LauncherEdit[]): Promise<SessionInfo | undefined> => {
+    const r = await api(`/api/sessions/${encodeURIComponent(sessionId)}/launchers`, { launchers }, { method: 'PUT' });
+    const s = r?.session ?? r?.data?.session;
+    return s && typeof s.id === 'string' ? (s as SessionInfo) : undefined;
+  },
+  /** 起動(切り離して起動するので終了は待たない)→ 表示用メッセージ */
+  run: async (sessionId: string, launcherId: string): Promise<string> => {
+    const r = await api(`/api/sessions/${encodeURIComponent(sessionId)}/launchers/${encodeURIComponent(launcherId)}/run`, {});
+    return typeof r?.message === 'string' && r.message ? r.message : '起動しました';
+  },
+};
+
 // ---------------------------------------------------------------- スキル / MCP
 
 const cwdQuery = (cwd: string | null | undefined) => (cwd ? `cwd=${encodeURIComponent(cwd)}` : '');
@@ -172,6 +191,12 @@ export const repoApi = {
   rescan: (id: string, addWorktrees = 0) => api<RescanResult>(`/api/repos/${enc(id)}/rescan`, addWorktrees ? { addWorktrees } : {}),
   rebuildWorktree: (id: string) => api(`/api/worktrees/${enc(id)}/rebuild`, {}),
   deleteWorktree: (id: string) => api(`/api/worktrees/${enc(id)}`, undefined, { method: 'DELETE' }),
+  /** 最新の origin/<default> に rebase(使用中は 409。衝突したら元に戻して conflict を返す) */
+  rebaseWorktree: async (id: string): Promise<RebaseResult> => {
+    const r = pick<RebaseResult>(await api(`/api/worktrees/${enc(id)}/rebase`, {}), 'rebase');
+    if (!r || typeof r !== 'object' || !('result' in r)) throw new Error('rebase の結果が返りませんでした');
+    return { ...r, conflicts: Array.isArray(r.conflicts) ? r.conflicts : [] };
+  },
   release: (sessionId: string, mode: ReleaseMode) => api(`/api/sessions/${enc(sessionId)}/release`, { mode }),
   slug: (instruction: string) => api('/api/slug', { instruction }),
 };

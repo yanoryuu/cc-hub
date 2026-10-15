@@ -9,6 +9,7 @@ import { SessionPane } from './SessionPane';
 import { ShellScreen } from './Shell';
 import { AgentTree } from './AgentTree';
 import { SessionDetails } from './SessionDetails';
+import { LauncherBar } from './Launchers';
 import { ApprovalList, useApprovalCount } from './Approval';
 import { useClaudeDeploysInFlight } from './Deploy';
 import { SettingsScreen } from './Settings';
@@ -262,6 +263,7 @@ export function DesktopApp() {
                     </span>
                   )}
                   <span className="spacer" />
+                  <LauncherBar session={session} />
                   {session.managed ? (
                     <PowerShellButton session={session} className="btn ghost sm head-act" />
                   ) : (

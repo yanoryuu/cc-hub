@@ -43,6 +43,7 @@ function main(): void {
   setGhPath(config.ghPath, dir);
   const repos = new RepoManager(config, store, dir, sessions);
   const gitStat = new GitStatWatcher(repos.pool, (id) => repos.all()[id]);
+  repos.setGitStatRefresher((id) => void gitStat.refresh(id));
   const github = new GitHubWatcher({
     pollMs: config.prPollSeconds * 1000,
     repos: () => Object.values(repos.all()),
@@ -149,6 +150,10 @@ function main(): void {
       instructions,
       sessions: () => sessions.all(),
       repoIdForCwd,
+      launchers: {
+        upsert: (sessionId, spec) => sessions.upsertLauncher(sessionId, spec, 'claude'),
+        remove: (sessionId, label) => sessions.removeLauncher(sessionId, label),
+      },
     },
     claudePath: config.claudePath,
     getState,

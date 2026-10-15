@@ -1,7 +1,7 @@
 // RepoManager: リポジトリの登録(gh repo clone)・設定変更・登録解除と、worktree でのセッション起動 / 解放(design §7)。
 import fs from 'node:fs';
 import path from 'node:path';
-import type { RegisterRepoRequest, ReleaseMode, RescanResult, RepoInfo, RepoKind, SessionInfo, StartSessionRequest, WorktreeInfo } from '@cc-hub/shared';
+import type { RebaseResult, RegisterRepoRequest, ReleaseMode, RescanResult, RepoInfo, RepoKind, SessionInfo, StartSessionRequest, WorktreeInfo } from '@cc-hub/shared';
 import { bus } from '../bus';
 import type { HubConfig } from '../config';
 import type { Store } from '../store/db';
@@ -41,6 +41,8 @@ export class RepoManager {
   private readonly repos = new Map<string, RepoInfo>();
   /** 登録処理中の ID(二重登録防止) */
   private readonly registering = new Set<string>();
+  /** rebase 後に変更状況(ahead / behind)を取り直す(main.ts が GitStatWatcher を設定する) */
+  private gitStatRefresh: ((worktreeId: string) => void) | null = null;
   readonly pool: WorktreePool;
 
   constructor(
@@ -60,7 +62,10 @@ export class RepoManager {
         if (r && r.error !== error) this.update(r, { error });
       },
       sessionExists: (id) => !!sessions.info(id),
+      sessionLive: (id) => sessions.isRunning(id),
     });
+    // セッションが動き出した / 止まったら、その worktree の inUse を配信し直す
+    sessions.onLiveChange((id) => this.pool.republishForSession(id));
     sessions.setRepoHooks({
       isTrustedPath: (cwd) => {
         const w = this.pool.byPath(cwd);
@@ -516,8 +521,25 @@ export class RepoManager {
     this.pool.rebuild(id);
   }
 
+  setGitStatRefresher(fn: (worktreeId: string) => void): void {
+    this.gitStatRefresh = fn;
+  }
+
+  /** 使用中でなければ削除する。割り当て済み(セッション停止中)ならブランチは残し、セッションは解放済みにする */
   async removeWorktree(id: string): Promise<void> {
-    await this.pool.remove(id);
+    const sessionId = await this.pool.remove(id);
+    if (sessionId) this.sessions.markReleased(sessionId, 'keep');
+  }
+
+  /** 使用中でなければ最新の origin/<default> を取り込む */
+  async rebaseWorktree(id: string): Promise<RebaseResult> {
+    const r = await this.pool.rebase(id);
+    try {
+      this.gitStatRefresh?.(id);
+    } catch {
+      /* 次の定期更新で取り直す */
+    }
+    return r;
   }
 }
 

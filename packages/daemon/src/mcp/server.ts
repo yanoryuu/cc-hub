@@ -17,6 +17,7 @@ const INSTRUCTIONS =
   'Firebase へのデプロイは firebase_status で状況を確かめてから request_firebase_deploy で申請します(承認制。Hosting はまずプレビュー URL、本番への反映はユーザーが確認してから)。' +
   'プロジェクトの共通の指示は get_project_instructions / update_project_instructions で読み書きします。' +
   'Unity のプロジェクトは launch_unity でエディタを開けます(unity_status で開いているか確認できます)。' +
+  'Unity のプロジェクトや自作ツールは set_app_launcher で「アプリを開く」ボタンとして登録すると、ユーザーが CC Hub からいつでも起動できます。' +
   'cwd を受け取るツールには、必ずあなたの現在の作業ディレクトリの絶対パスを渡してください。';
 
 export interface McpHttpDeps extends McpDeps {
