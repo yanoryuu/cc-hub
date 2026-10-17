@@ -10,13 +10,14 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
-import type { RebaseResult, ReleaseMode, RepoInfo, WorktreeGitStat, WorktreeInfo, WorktreeState } from '@cc-hub/shared';
+import type { RebaseResult, ReleaseMode, RepoInfo, WorktreeGitStat, WorktreeInfo, WorktreeLocker, WorktreeState } from '@cc-hub/shared';
 import { bus } from '../bus';
 import type { HubConfig } from '../config';
 import type { Store, WorktreeRow } from '../store/db';
 import { HttpError } from '../util';
 import { Mutex, Semaphore, freeDiskGB, git, gitOk, normPath, run, tail } from './exec';
 import { installCommand, lockHash } from './kind';
+import { findLockers, lockerMessage } from './lockers';
 import { DIRTY_MSG, IN_USE_DELETE_MSG, IN_USE_REBASE_MSG, classifyRebase, computeInUse, parseConflictFiles, parseCount } from './worktree-ops';
 
 const RECONCILE_MS = 30_000;
@@ -30,6 +31,8 @@ const BROKEN_COOLDOWN_MS = 5 * 60_000;
 const INSTALL_TIMEOUT = 30 * 60_000;
 const ROBOCOPY_TIMEOUT = 2 * 3600_000;
 const DELETE_MAX_FAIL = 3;
+/** 開かれていて削除を見送った待機中の worktree を、次に確かめるまでの間隔 */
+const LOCKED_RETRY_MS = 10 * 60_000;
 export const DISK_WARN_PREFIX = 'ディスクの空きが不足';
 
 interface Waiter {
@@ -78,6 +81,8 @@ export class WorktreePool {
   private readonly rts = new Map<string, RepoRuntime>();
   /** 処理中の worktree(二重に作業を始めないため) */
   private readonly busy = new Set<string>();
+  /** 余剰の削除を見送った worktree → 次に確かめる時刻 */
+  private readonly lockedUntil = new Map<string, number>();
   private timer: NodeJS.Timeout | null = null;
 
   constructor(private readonly d: PoolDeps) {
@@ -114,6 +119,13 @@ export class WorktreePool {
     const { installHash: _h, failCount: _f, ...info } = w;
     // 変更状況(フェーズ 3)は assigned の間だけ見せる
     return { ...info, git: w.state === 'assigned' ? (w.git ?? null) : null, inUse: this.isInUse(w) };
+  }
+
+  /** フォルダをつかんでいるプロセス(調べられなければ null) */
+  async lockers(id: string): Promise<WorktreeLocker[] | null> {
+    const w = this.wts.get(id);
+    if (!w) throw new HttpError(404, 'worktree が見つかりません');
+    return findLockers(w.path);
   }
 
   /** 使用中か(rebase・削除できない) */
@@ -287,8 +299,18 @@ export class WorktreePool {
         .sort((a, b) => a.lastUsedAt - b.lastUsedAt || b.name.localeCompare(a.name))
         .slice(0, excess);
       for (const w of victims) {
-        console.log(`[pool] ${repoId}: 余剰の ${w.name} を削除します`);
-        void this.task(w, () => this.destroy(w));
+        if ((this.lockedUntil.get(w.id) ?? 0) > now) continue;
+        void this.task(w, async () => {
+          // Unity などで開かれている待機中のものは消さない(消し切れずに壊れるため)。しばらくしてから見直す
+          const lockers = await findLockers(w.path);
+          if (lockers?.length) {
+            this.lockedUntil.set(w.id, Date.now() + LOCKED_RETRY_MS);
+            console.log(`[pool] ${repoId}: 余剰の ${w.name} は使われているので削除を見送ります: ${lockers.map((l) => l.label).join('、')}`);
+            return;
+          }
+          console.log(`[pool] ${repoId}: 余剰の ${w.name} を削除します`);
+          await this.destroy(w);
+        });
       }
     }
   }
@@ -553,11 +575,14 @@ export class WorktreePool {
       console.log(`[pool] ${w.id} を削除しました`);
     } catch (e) {
       const failCount = w.failCount + 1;
+      // つかんでいるプログラムが分かれば、理由として先頭に出す
+      const lockers = await findLockers(w.path).catch(() => null);
+      const msg = lockers?.length ? `${lockerMessage(lockers)} / ${errMsg(e)}` : errMsg(e);
       if (failCount >= DELETE_MAX_FAIL) {
         this.set(w, { failCount });
-        this.broken(w, `削除に ${failCount} 回失敗しました: ${errMsg(e)}`);
+        this.broken(w, `削除に ${failCount} 回失敗しました: ${msg}`);
       } else {
-        this.set(w, { failCount, progress: `削除に失敗(${failCount} 回目)。後でやり直します`, error: errMsg(e).slice(0, 500) });
+        this.set(w, { failCount, progress: `削除に失敗(${failCount} 回目)。後でやり直します`, error: msg.slice(0, 500) });
       }
     }
   }
@@ -714,6 +739,9 @@ export class WorktreePool {
       throw new HttpError(409, `この状態(${w.state})の worktree は削除できません`);
     }
     if (this.busy.has(w.id)) throw new HttpError(409, 'worktree は処理中です');
+    // Unity などがフォルダを開いたままだと消し切れずに壊れた状態になるので、先に止める
+    const lockers = await findLockers(w.path);
+    if (lockers?.length) throw new HttpError(409, lockerMessage(lockers));
     const sessionId = w.state === 'assigned' ? w.sessionId : null;
     if (w.state === 'assigned') {
       console.log(`[pool] ${w.id} を削除します(割り当て先のセッションは停止中${w.branch ? `、ブランチ ${w.branch} は残す` : ''})`);

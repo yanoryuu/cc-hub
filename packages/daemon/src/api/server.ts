@@ -351,7 +351,7 @@ async function handle(d: ServerDeps, req: http.IncomingMessage, res: http.Server
     }
   }
 
-  const wm = /^\/api\/worktrees\/([^/]+)(\/rebuild|\/rebase)?$/.exec(p);
+  const wm = /^\/api\/worktrees\/([^/]+)(\/rebuild|\/rebase|\/lockers)?$/.exec(p);
   if (wm) {
     const id = decodeURIComponent(wm[1]);
     if (wm[2] === '/rebuild' && method === 'POST') {
@@ -361,6 +361,10 @@ async function handle(d: ServerDeps, req: http.IncomingMessage, res: http.Server
     // 使用中でなければ最新の origin/<default> を取り込む(衝突したら中止して元に戻す)
     if (wm[2] === '/rebase' && method === 'POST') {
       return json(res, 200, { ok: true, rebase: await d.repos.rebaseWorktree(id) });
+    }
+    // フォルダをつかんでいるプロセス(削除の前の確認用。調べられなければ lockers: null)
+    if (wm[2] === '/lockers' && method === 'GET') {
+      return json(res, 200, { ok: true, lockers: await d.repos.worktreeLockers(id) });
     }
     if (!wm[2] && method === 'DELETE') {
       await d.repos.removeWorktree(id);

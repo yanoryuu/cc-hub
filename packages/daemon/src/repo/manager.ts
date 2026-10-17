@@ -1,7 +1,7 @@
 // RepoManager: リポジトリの登録(gh repo clone)・設定変更・登録解除と、worktree でのセッション起動 / 解放(design §7)。
 import fs from 'node:fs';
 import path from 'node:path';
-import type { RebaseResult, RegisterRepoRequest, ReleaseMode, RescanResult, RepoInfo, RepoKind, SessionInfo, StartSessionRequest, WorktreeInfo } from '@cc-hub/shared';
+import type { RebaseResult, RegisterRepoRequest, ReleaseMode, RescanResult, RepoInfo, RepoKind, SessionInfo, StartSessionRequest, WorktreeInfo, WorktreeLocker } from '@cc-hub/shared';
 import { bus } from '../bus';
 import type { HubConfig } from '../config';
 import type { Store } from '../store/db';
@@ -529,6 +529,11 @@ export class RepoManager {
   async removeWorktree(id: string): Promise<void> {
     const sessionId = await this.pool.remove(id);
     if (sessionId) this.sessions.markReleased(sessionId, 'keep');
+  }
+
+  /** worktree のフォルダをつかんでいるプロセス(Unity エディタなど)。調べられなければ null */
+  worktreeLockers(id: string): Promise<WorktreeLocker[] | null> {
+    return this.pool.lockers(id);
   }
 
   /** 使用中でなければ最新の origin/<default> を取り込む */

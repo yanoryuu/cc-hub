@@ -244,6 +244,19 @@ export interface RebaseResult {
   message: string;
 }
 
+/** worktree のフォルダをつかんでいるプロセス(GET /api/worktrees/:id/lockers)。いると削除・初期化に失敗する */
+export interface WorktreeLocker {
+  pid: number;
+  /** 実行ファイル名(Unity.exe など) */
+  name: string;
+  /** unity = エディタ本体、unity_worker = エディタの子プロセス(アセット取り込み)、process = それ以外 */
+  kind: 'unity' | 'unity_worker' | 'process';
+  /** 表示用の名前(Unity エディタ「wt-05 - TomsShop - …」など) */
+  label: string;
+  /** ウィンドウのタイトル(あれば) */
+  title: string | null;
+}
+
 /** worktree の変更状況(git status / diff --stat / rev-list) */
 export interface WorktreeGitStat {
   /** 未コミットの変更ファイル数(未追跡を含む) */

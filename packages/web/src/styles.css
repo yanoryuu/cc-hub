@@ -8822,3 +8822,17 @@ th[aria-sort='descending'] .th-arrow {
   font-weight: 400;
   margin-left: 4px;
 }
+
+/* worktree 削除の前の確認: フォルダを開いているプログラム */
+.rp-alert.locker-notice {
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+}
+.locker-list {
+  margin: 0;
+  padding-left: 1.2em;
+}
+.locker-list li {
+  overflow-wrap: anywhere;
+}

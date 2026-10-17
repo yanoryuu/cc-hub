@@ -2,7 +2,7 @@
 // リポジトリ画面の worktree 一覧と、プロジェクト画面の「作業ツリー」タブで共用
 import { useEffect, useState } from 'react';
 import { createPortal } from 'react-dom';
-import type { RebaseResult, SessionInfo, WorktreeInfo } from '@cc-hub/shared';
+import type { RebaseResult, SessionInfo, WorktreeInfo, WorktreeLocker } from '@cc-hub/shared';
 import { errText, isConflict, repoApi, sessionApi } from '../api';
 import { useHub } from '../store';
 import { getDraft, insertIntoComposer, setDraft } from '../composer';
@@ -55,6 +55,22 @@ export function WtOps({ w, layout = 'row', showTag = false }: { w: WorktreeInfo;
   const [err, setErr] = useState<string | null>(null);
   const [result, setResult] = useState<RebaseResult | null>(null);
   const [note, setNote] = useState<{ ok: boolean; text: string } | null>(null);
+  // 削除の前に、フォルダをつかんでいるプログラム(開いたままの Unity など)を調べる。undefined = 調べ中、null = 調べられなかった
+  const [lockers, setLockers] = useState<WorktreeLocker[] | null | undefined>(undefined);
+
+  const checkLockers = async () => {
+    setLockers(undefined);
+    try {
+      setLockers(await repoApi.worktreeLockers(w.id));
+    } catch {
+      setLockers(null);
+    }
+  };
+
+  useEffect(() => {
+    if (phase === 'delete') void checkLockers();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [phase, w.id]);
 
   // 結果の一言はしばらくしたら消す
   useEffect(() => {
@@ -104,7 +120,14 @@ export function WtOps({ w, layout = 'row', showTag = false }: { w: WorktreeInfo;
       flash(true, `${w.name} を削除しています`, w.branch ? `ブランチ ${w.branch} は残します` : '');
       close();
     } catch (e) {
-      setErr(isConflict(e) ? `${errText(e)} — ${IN_USE_HINT}` : errText(e, '削除に失敗しました'));
+      // つかんでいるプログラムが原因なら一覧を取り直して見せる
+      const text = errText(e, '削除に失敗しました');
+      if (/Unity|プログラム/.test(text)) {
+        setErr(null);
+        void checkLockers();
+      } else {
+        setErr(isConflict(e) ? `${text} — ${IN_USE_HINT}` : text);
+      }
     } finally {
       setBusy(false);
     }
@@ -199,6 +222,7 @@ export function WtOps({ w, layout = 'row', showTag = false }: { w: WorktreeInfo;
           confirmLabel="削除する"
           danger
           busy={busy}
+          confirmDisabled={lockers === undefined || (lockers?.length ?? 0) > 0}
           error={err}
           wide
           onConfirm={() => void doDelete()}
@@ -208,6 +232,7 @@ export function WtOps({ w, layout = 'row', showTag = false }: { w: WorktreeInfo;
             worktree <span className="mono">{w.name}</span> のフォルダを削除します。
           </p>
           <p className="mono small break muted">{w.path}</p>
+          <LockerNotice lockers={lockers} onRecheck={() => void checkLockers()} />
           {w.branch && (
             <div className="warn-box">
               ブランチ <span className="mono">{w.branch}</span> は残ります。
@@ -319,6 +344,42 @@ function ConflictPanel({ w, def, result, onClose }: { w: WorktreeInfo; def: stri
           </div>
         </div>
       </div>
+    </div>
+  );
+}
+
+/** 削除の前の確認: フォルダをつかんでいるプログラム */
+function LockerNotice({ lockers, onRecheck }: { lockers: WorktreeLocker[] | null | undefined; onRecheck: () => void }) {
+  if (lockers === undefined) {
+    return (
+      <p className="hint" role="status">
+        <Spinner /> このフォルダを開いているプログラムがないか確認しています…
+      </p>
+    );
+  }
+  if (lockers === null) {
+    return <p className="hint">開いているプログラムを確認できませんでした。Unity などで開いている場合は、閉じてから削除してください。</p>;
+  }
+  if (!lockers.length) return null;
+  const unity = lockers.some((l) => l.kind === 'unity' || l.kind === 'unity_worker');
+  return (
+    <div className="rp-alert warn locker-notice" role="alert">
+      <strong>{unity ? 'Unity で開いたままです' : 'このフォルダを使っているプログラムがあります'}</strong>
+      <span>
+        {unity
+          ? 'Unity で作業内容を保存してからエディタを閉じ、「もう一度確認」を押してください。開いたままだとフォルダを消し切れず、壊れた状態になります。'
+          : '次のプログラムを終了してから、「もう一度確認」を押してください。'}
+      </span>
+      <ul className="locker-list">
+        {lockers.map((l) => (
+          <li key={l.pid}>
+            {l.label} <span className="muted mono small">PID {l.pid}</span>
+          </li>
+        ))}
+      </ul>
+      <button type="button" className="btn sm" onClick={onRecheck}>
+        もう一度確認
+      </button>
     </div>
   );
 }

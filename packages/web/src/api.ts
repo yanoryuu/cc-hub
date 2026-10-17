@@ -1,5 +1,5 @@
 // REST ヘルパー。401 を受けたら PIN 画面を出し、ログイン成功後に同じリクエストを再試行する。
-import type { AppLauncher, BranchInfo, HubState, RebaseResult, SessionInfo, McpServerInfo, MergeMethod, PrDetail, PrReviewEvent, RegisterRepoRequest, RescanResult, ReleaseMode, RepoInfo, SessionDraft, SessionMode, ShellInfo, SkillInfo } from '@cc-hub/shared';
+import type { AppLauncher, BranchInfo, HubState, RebaseResult, SessionInfo, McpServerInfo, MergeMethod, PrDetail, PrReviewEvent, RegisterRepoRequest, RescanResult, ReleaseMode, RepoInfo, SessionDraft, SessionMode, ShellInfo, SkillInfo, WorktreeLocker } from '@cc-hub/shared';
 
 export class AuthError extends Error {
   constructor() {
@@ -191,6 +191,11 @@ export const repoApi = {
   rescan: (id: string, addWorktrees = 0) => api<RescanResult>(`/api/repos/${enc(id)}/rescan`, addWorktrees ? { addWorktrees } : {}),
   rebuildWorktree: (id: string) => api(`/api/worktrees/${enc(id)}/rebuild`, {}),
   deleteWorktree: (id: string) => api(`/api/worktrees/${enc(id)}`, undefined, { method: 'DELETE' }),
+  /** フォルダをつかんでいるプロセス(Unity エディタなど)。調べられなければ null */
+  worktreeLockers: async (id: string): Promise<WorktreeLocker[] | null> => {
+    const l = pick<WorktreeLocker[] | null>(await api(`/api/worktrees/${enc(id)}/lockers`), 'lockers');
+    return Array.isArray(l) ? l : null;
+  },
   /** 最新の origin/<default> に rebase(使用中は 409。衝突したら元に戻して conflict を返す) */
   rebaseWorktree: async (id: string): Promise<RebaseResult> => {
     const r = pick<RebaseResult>(await api(`/api/worktrees/${enc(id)}/rebase`, {}), 'rebase');
