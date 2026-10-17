@@ -257,6 +257,31 @@ export interface WorktreeLocker {
   title: string | null;
 }
 
+/**
+ * 最新の main を見るための閲覧用 worktree(<baseDir>\main。プールとは別)。
+ * GET /api/repos/:id/main で状態、POST /api/repos/:id/main {open} で最新に合わせてから開く
+ */
+export type MainViewOpen = 'unity' | 'folder' | 'none';
+export interface MainViewStatus {
+  repoId: string;
+  path: string;
+  exists: boolean;
+  /** none = まだ作っていない、updating = 最新に合わせ中、copying = Library をコピー中(Unity・初回だけ) */
+  phase: 'none' | 'updating' | 'copying' | 'ready' | 'error';
+  progress: string | null;
+  /** いまの HEAD(短縮)とその件名・日時 */
+  head: string | null;
+  subject: string | null;
+  committedAt: number | null;
+  /** 最後に最新へ合わせた時刻と、そのとき取り込んだコミット数 */
+  updatedAt: number | null;
+  pulled: number;
+  error: string | null;
+  /** 合わせたあとに開いたアプリと、その結果 */
+  opened: MainViewOpen | null;
+  openMessage: string | null;
+}
+
 /** worktree の変更状況(git status / diff --stat / rev-list) */
 export interface WorktreeGitStat {
   /** 未コミットの変更ファイル数(未追跡を含む) */

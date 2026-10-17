@@ -30,6 +30,7 @@ import { HistoryView } from './History';
 import { InstructionsTab } from './Instructions';
 import { InUseTag, WtOps, wtInUse } from './WorktreeOps';
 import { PublishTab } from './Deploy';
+import { MainViewButton } from './MainView';
 import { FirebaseTab } from './Firebase';
 import { deployInProject, firebaseCwdFor, useFirebaseInfo } from '../firebase';
 import { lineTone, useInstructionsLines } from '../ops';
@@ -265,6 +266,7 @@ function ProjectDashboard({ route, mobile }: { route: ProjectRoute; mobile: bool
             {path}
           </span>
           <span className="spacer" />
+          {repo && <MainViewButton repo={repo} />}
           {repo && (
             <a className="btn ghost sm" href={repo.url} target="_blank" rel="noreferrer">
               GitHub ↗

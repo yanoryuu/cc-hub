@@ -339,10 +339,17 @@ async function handle(d: ServerDeps, req: http.IncomingMessage, res: http.Server
     return json(res, 200, { ok: true, ...(await d.repos.rescan(decodeURIComponent(rs[1]), { addWorktrees: body?.addWorktrees })) });
   }
 
-  const rm = /^\/api\/repos\/([^/]+)(\/refill)?$/.exec(p);
+  const rm = /^\/api\/repos\/([^/]+)(\/refill|\/main)?$/.exec(p);
   if (rm) {
     const id = decodeURIComponent(rm[1]);
-    if (rm[2] && method === 'POST') return json(res, 200, { ok: true, repo: d.repos.refill(id) });
+    // 最新の main(閲覧用): GET = 状態、POST {open: unity|folder|none} = 最新に合わせてから開く
+    if (rm[2] === '/main' && method === 'GET') return json(res, 200, { ok: true, main: await d.repos.mainStatus(id) });
+    if (rm[2] === '/main' && method === 'POST') {
+      const body = await readBody(req);
+      const open = body?.open === 'unity' || body?.open === 'folder' ? body.open : 'none';
+      return json(res, 200, { ok: true, main: await d.repos.openMain(id, open) });
+    }
+    if (rm[2] === '/refill' && method === 'POST') return json(res, 200, { ok: true, repo: d.repos.refill(id) });
     if (!rm[2] && method === 'PATCH') return json(res, 200, { ok: true, repo: d.repos.patch(id, await readBody(req)) });
     if (!rm[2] && method === 'DELETE') {
       const purge = /^(1|true)$/i.test(url.searchParams.get('purge') || '');

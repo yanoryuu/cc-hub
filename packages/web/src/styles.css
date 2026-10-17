@@ -8836,3 +8836,41 @@ th[aria-sort='descending'] .th-arrow {
 .locker-list li {
   overflow-wrap: anywhere;
 }
+
+/* 最新の main(プロジェクト画面の上部) */
+.mainview {
+  position: relative;
+}
+.mainview-pop {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 6px);
+  z-index: 40;
+  width: min(420px, calc(100vw - 32px));
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 14px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  box-shadow: 0 10px 30px rgb(0 0 0 / 0.35);
+  text-align: left;
+}
+.mainview-title {
+  font-weight: 600;
+}
+.mainview-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 6px;
+}
+.mainview-subject {
+  overflow-wrap: anywhere;
+}
+.mainview-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}

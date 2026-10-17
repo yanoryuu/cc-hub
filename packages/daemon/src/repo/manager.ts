@@ -1,7 +1,7 @@
 // RepoManager: リポジトリの登録(gh repo clone)・設定変更・登録解除と、worktree でのセッション起動 / 解放(design §7)。
 import fs from 'node:fs';
 import path from 'node:path';
-import type { RebaseResult, RegisterRepoRequest, ReleaseMode, RescanResult, RepoInfo, RepoKind, SessionInfo, StartSessionRequest, WorktreeInfo, WorktreeLocker } from '@cc-hub/shared';
+import type { RebaseResult, RegisterRepoRequest, ReleaseMode, RescanResult, RepoInfo, RepoKind, SessionInfo, StartSessionRequest, WorktreeInfo, WorktreeLocker, MainViewOpen, MainViewStatus } from '@cc-hub/shared';
 import { bus } from '../bus';
 import type { HubConfig } from '../config';
 import type { Store } from '../store/db';
@@ -13,6 +13,8 @@ import { ghRun } from '../github/gh';
 import { defaultKeepDirs, detectKind } from './kind';
 import { WorktreePool, baseOf, DISK_WARN_PREFIX } from './pool';
 import { generateSlug, sanitizeSlug } from './slug';
+import { spawn } from 'node:child_process';
+import { launchUnity } from '../unity/launcher';
 
 const CLONE_TIMEOUT = 60 * 60_000;
 const GH_TIMEOUT = 30_000;
@@ -529,6 +531,38 @@ export class RepoManager {
   async removeWorktree(id: string): Promise<void> {
     const sessionId = await this.pool.remove(id);
     if (sessionId) this.sessions.markReleased(sessionId, 'keep');
+  }
+
+  /** 閲覧用の main の状態 */
+  mainStatus(repoId: string): Promise<MainViewStatus> {
+    return this.pool.mainStatus(repoId);
+  }
+
+  /**
+   * 閲覧用の main を最新に合わせてから開く(unity = Unity エディタ、folder = エクスプローラー、none = 合わせるだけ)。
+   * 時間がかかる(初回の Library のコピーなど)ので待たずに今の状態を返す。進み具合は GET で見る
+   */
+  async openMain(repoId: string, open: MainViewOpen): Promise<MainViewStatus> {
+    const repo = this.repos.get(repoId);
+    if (!repo) throw new HttpError(404, 'リポジトリが見つかりません');
+    if (open === 'unity' && repo.kind !== 'unity') throw new HttpError(400, 'Unity のプロジェクトではありません');
+    void this.pool.updateMain(repoId).then(async (st) => {
+      if (st.phase !== 'ready' || open === 'none') return;
+      try {
+        if (open === 'unity') {
+          const u = await launchUnity(st.path);
+          this.pool.setMainOpened(repoId, open, u.launched ? `Unity ${u.editorVersion ?? ''} で開いています` : 'すでに Unity で開いています(最新の内容は Unity に戻ると読み込まれます)');
+        } else {
+          spawn('explorer.exe', [st.path], { detached: true, stdio: 'ignore', windowsHide: false }).on('error', () => undefined).unref();
+          this.pool.setMainOpened(repoId, open, 'エクスプローラーで開きました');
+        }
+      } catch (e) {
+        this.pool.setMainOpened(repoId, open, `開けませんでした: ${(e as Error).message}`);
+      }
+    }).catch(() => undefined);
+    // 処理が始まって状態が「更新中」になってから返す
+    await new Promise((r) => setImmediate(r));
+    return this.pool.mainStatus(repoId);
   }
 
   /** worktree のフォルダをつかんでいるプロセス(Unity エディタなど)。調べられなければ null */

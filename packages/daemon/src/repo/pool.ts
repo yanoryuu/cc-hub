@@ -10,7 +10,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
-import type { RebaseResult, ReleaseMode, RepoInfo, WorktreeGitStat, WorktreeInfo, WorktreeLocker, WorktreeState } from '@cc-hub/shared';
+import type { RebaseResult, ReleaseMode, RepoInfo, WorktreeGitStat, MainViewStatus, WorktreeInfo, WorktreeLocker, WorktreeState } from '@cc-hub/shared';
 import { bus } from '../bus';
 import type { HubConfig } from '../config';
 import type { Store, WorktreeRow } from '../store/db';
@@ -83,6 +83,9 @@ export class WorktreePool {
   private readonly busy = new Set<string>();
   /** 余剰の削除を見送った worktree → 次に確かめる時刻 */
   private readonly lockedUntil = new Map<string, number>();
+  /** 閲覧用の main(リポジトリ → 状態 / 進行中の処理) */
+  private readonly mains = new Map<string, MainViewStatus>();
+  private readonly mainJobs = new Map<string, Promise<MainViewStatus>>();
   private timer: NodeJS.Timeout | null = null;
 
   constructor(private readonly d: PoolDeps) {
@@ -753,6 +756,99 @@ export class WorktreePool {
     return sessionId;
   }
 
+  // ================================================================ 最新の main(閲覧用)
+  /** 閲覧用の main の場所(<baseDir>main。プールの wt-NN とは別に管理する) */
+  mainPath(repo: RepoInfo): string {
+    return path.join(repo.baseDir, 'main');
+  }
+
+  /** 閲覧用の main の状態(HEAD はディスクから読み直す) */
+  async mainStatus(repoId: string): Promise<MainViewStatus> {
+    const repo = this.d.getRepo(repoId);
+    if (!repo) throw new HttpError(404, 'リポジトリが見つかりません');
+    const p = this.mainPath(repo);
+    const cur = this.mains.get(repoId);
+    const exists = fs.existsSync(path.join(p, '.git'));
+    const st: MainViewStatus = cur
+      ? { ...cur, exists }
+      : { repoId, path: p, exists, phase: exists ? 'ready' : 'none', progress: null, head: null, subject: null, committedAt: null, updatedAt: null, pulled: 0, error: null, opened: null, openMessage: null };
+    if (exists && !this.mainJobs.has(repoId)) Object.assign(st, await headInfo(p));
+    return st;
+  }
+
+  /** 開いた結果を状態に書く */
+  setMainOpened(repoId: string, opened: MainViewStatus['opened'], openMessage: string | null): void {
+    const cur = this.mains.get(repoId);
+    if (cur) this.mains.set(repoId, { ...cur, opened, openMessage });
+  }
+
+  /**
+   * 閲覧用の main を最新の origin/<default> に合わせる(無ければ作る)。同じリポジトリで重ねて呼ばれたら同じ処理を待つ。
+   * 変更は捨てる(checkout --force + clean -fd)。無視されているファイル(Unity の Library など)は残す
+   */
+  updateMain(repoId: string): Promise<MainViewStatus> {
+    const running = this.mainJobs.get(repoId);
+    if (running) return running;
+    const job = this.doUpdateMain(repoId).finally(() => this.mainJobs.delete(repoId));
+    this.mainJobs.set(repoId, job);
+    return job;
+  }
+
+  private async doUpdateMain(repoId: string): Promise<MainViewStatus> {
+    const repo = this.d.getRepo(repoId);
+    if (!repo) throw new HttpError(404, 'リポジトリが見つかりません');
+    if (repo.status !== 'ready') throw new HttpError(409, `リポジトリの準備ができていません(${repo.status})`);
+    const p = this.mainPath(repo);
+    const base = `origin/${repo.defaultBranch}`;
+    const logFile = path.join(this.d.dataDir, 'worktree-logs', `${repo.id.replace(/[\/]/g, '__')}_main.log`);
+    const prev = this.mains.get(repoId);
+    const set = (patch: Partial<MainViewStatus>) => {
+      const next: MainViewStatus = {
+        repoId, path: p, exists: fs.existsSync(path.join(p, '.git')), phase: 'updating', progress: null,
+        head: prev?.head ?? null, subject: prev?.subject ?? null, committedAt: prev?.committedAt ?? null,
+        updatedAt: prev?.updatedAt ?? null, pulled: 0, error: null, opened: null, openMessage: null,
+        ...this.mains.get(repoId), ...patch,
+      };
+      this.mains.set(repoId, next);
+      return next;
+    };
+    set({ phase: 'updating', progress: `最新の ${repo.defaultBranch} を取得中`, error: null, opened: null, openMessage: null, pulled: 0 });
+    try {
+      let pulled = 0;
+      await this.rt(repo.id).mutex.run(async () => {
+        await this.fetch(repo, true, logFile);
+        if (!fs.existsSync(path.join(p, '.git'))) {
+          if (fs.existsSync(p) && fs.readdirSync(p).length) throw new Error(`${p} に git 以外のファイルがあるので作れません。中身を確認して消してください`);
+          set({ progress: '確認用の作業ツリーを作成中' });
+          await git(['-C', baseOf(repo), 'worktree', 'prune']);
+          await gitOk(['-C', baseOf(repo), 'worktree', 'add', '--detach', p, base], { logFile, timeout: 30 * 60_000 });
+          return;
+        }
+        const before = (await git(['-C', p, 'rev-parse', 'HEAD'])).stdout.trim();
+        set({ progress: `${base} に合わせています` });
+        await gitOk(['-C', p, 'checkout', '--detach', '--force', base], { logFile, timeout: 30 * 60_000 });
+        await gitOk(['-C', p, 'clean', '-fd'], { logFile, timeout: 10 * 60_000 });
+        if (before) pulled = parseCount((await git(['-C', p, 'rev-list', '--count', `${before}..HEAD`])).stdout);
+      });
+      // Unity: 初回だけ Library を複製して、開くたびに全部取り込み直さないようにする
+      const src = repo.seedLibraryFrom;
+      if (repo.kind === 'unity' && src && fs.existsSync(src) && !fs.existsSync(path.join(p, 'Library'))) {
+        set({ phase: 'copying', progress: 'Library をコピー中(初回だけ。数分かかります)' });
+        const r = await run('robocopy', [src, path.join(p, 'Library'), '/MIR', '/NFL', '/NDL', '/NJH', '/NJS', '/R:1', '/W:1'], { timeout: ROBOCOPY_TIMEOUT, logFile });
+        if (r.code < 0 || r.code >= 8) throw new Error(`Library のコピーに失敗 (robocopy code ${r.code}): ${tail(r)}`);
+      }
+      const done = set({ phase: 'ready', progress: null, updatedAt: Date.now(), pulled, ...(await headInfo(p)) });
+      console.log(`[pool] ${repo.id}: ${repo.defaultBranch} を最新にしました(確認用 ${done.head} ${done.subject ?? ''}、${pulled} 件取り込み)`);
+      return done;
+    } catch (e) {
+      // つかんでいるプログラムが分かれば理由に添える(Unity で開いたままのファイルを書き換えられないなど)
+      const lockers = await findLockers(p).catch(() => null);
+      const msg = lockers?.length ? `${errMsg(e)} / ${lockerMessage(lockers)}` : errMsg(e);
+      console.warn(`[pool] ${repo.id}: 確認用の ${repo.defaultBranch} を最新にできませんでした: ${msg}`);
+      return set({ phase: 'error', progress: null, error: msg.slice(0, 800) });
+    }
+  }
+
   // ================================================================ rebase(UI)
   /**
    * 最新の origin/<default> を取り込む。使用中は 409。
@@ -877,4 +973,12 @@ async function uniqueBranch(base: string, name: string): Promise<string> {
     if (local.code !== 0 && remote.code !== 0) return b;
   }
   return `${name}-${crypto.randomBytes(3).toString('hex')}`;
+}
+
+/** HEAD の短縮ハッシュ・件名・日時 */
+async function headInfo(p: string): Promise<Pick<MainViewStatus, 'head' | 'subject' | 'committedAt'>> {
+  const r = await git(['-C', p, 'log', '-1', '--format=%h%x09%ct%x09%s']);
+  if (r.code !== 0) return { head: null, subject: null, committedAt: null };
+  const [head, ct, ...rest] = r.stdout.trim().split('	');
+  return { head: head || null, subject: rest.join('	') || null, committedAt: ct ? Number(ct) * 1000 : null };
 }
