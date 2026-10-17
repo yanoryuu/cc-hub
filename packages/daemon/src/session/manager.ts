@@ -47,7 +47,7 @@ import { findTranscript } from '../history';
 import { HttpError, activeBackgroundTasks, clampInt, taskText, toolTarget } from '../util';
 import { TranscriptTail, combineTokens } from './tokens';
 import { PtyHost } from './pty-host';
-import { approvalKeys, detectApproval, type DetectedApproval } from './approval';
+import { approvalKeys, detectApproval, stabilizeApproval, type DetectedApproval } from './approval';
 import { buildTerminalArgv, launchTerminal, terminalEnv, type TerminalSpec } from './terminal';
 import { expandCommand, normalizeLaunchers, removeLauncher, spawnDetached, unityMessage, upsertLauncher } from './launchers';
 import { launchUnity } from '../unity/launcher';
@@ -63,6 +63,10 @@ interface Entry {
   host: PtyHost | null;
   /** 画面解析で検出した承認(numbered 等の内部情報付き) */
   detected: DetectedApproval | null;
+  /** 承認のダイアログが画面から消えて見え始めた時刻(取り下げの猶予中) */
+  detectMissSince: number | null;
+  /** ユーザーが承認に答えた直後(次の検出は落ち着かせずに画面のとおりにする) */
+  approvalAnswered: boolean;
   /** 承認待ちになる直前の状態(承認が消えたら戻す) */
   statusBeforeApproval: SessionStatus | null;
   endedAt: number | null;
@@ -281,6 +285,8 @@ export class SessionManager {
       info,
       host: null,
       detected: null,
+      detectMissSince: null,
+      approvalAnswered: false,
       statusBeforeApproval: null,
       endedAt: null,
       userStopped: false,
@@ -666,6 +672,8 @@ export class SessionManager {
     info.approval = null;
     info.currentTool = null;
     e.detected = null;
+    e.detectMissSince = null;
+    e.approvalAnswered = false;
     e.statusBeforeApproval = null;
     e.endedAt = Date.now();
     info.lastEventAt = e.endedAt;
@@ -861,6 +869,8 @@ export class SessionManager {
       if (chosen && /^no/i.test(chosen.label)) e.userStopped = true;
     }
     keys.forEach((k, i) => setTimeout(() => host.alive && host.write(k), i * 40));
+    // 答えた直後は、ダイアログが消えたらすぐ取り下げる(保っていた選択肢を出し続けない)
+    e.approvalAnswered = true;
     setTimeout(() => this.runDetect(e), keys.length * 40 + 400);
   }
 
@@ -918,6 +928,8 @@ export class SessionManager {
       e.endedAt = null;
       e.handoffAt = now;
       e.detected = null;
+      e.detectMissSince = null;
+      e.approvalAnswered = false;
       e.statusBeforeApproval = null;
       this.touch(e);
       return { ...info };
@@ -990,6 +1002,8 @@ export class SessionManager {
     e.userStopped = false;
     e.handoffAt = null;
     e.detected = null;
+    e.detectMissSince = null;
+    e.approvalAnswered = false;
     e.statusBeforeApproval = null;
     // 外部セッションの claude 側 ID は info.id そのもの。以後 /clear などで変われば trackClaudeId が追う
     const msg = `\r\n\x1b[36m[CC Hub] ${wasExternal ? '外部セッション' : 'PowerShell のセッション'}を引き取って再開します${force ? '(強制)' : ''}\x1b[0m\r\n`;
@@ -1085,6 +1099,8 @@ export class SessionManager {
     e.endedAt = null;
     e.handoffAt = now;
     e.detected = null;
+    e.detectMissSince = null;
+    e.approvalAnswered = false;
     e.statusBeforeApproval = null;
     this.sessions.set(info.id, e);
     this.touch(e);
@@ -1103,8 +1119,15 @@ export class SessionManager {
   private runDetect(e: Entry): void {
     if (!e.host?.alive) return;
     // 画面全体を見る(行数の多い画面では、ダイアログが末尾 25 行より上に描かれることがある)
-    const next = detectApproval(e.host.tailLines(Math.max(25, e.host.rows)), e.info.cwd);
-    if (next && this.autoTrust(e, next)) return;
+    const raw = detectApproval(e.host.tailLines(Math.max(25, e.host.rows)), e.info.cwd);
+    if (raw && this.autoTrust(e, raw)) return;
+    // 描き直しの途中や、端末が低くてダイアログの一部しか見えないときに、選択肢が減ったり消えたりして見えないようにする
+    const st = stabilizeApproval(e.detected, raw, Date.now(), e.detectMissSince, e.approvalAnswered);
+    e.detectMissSince = st.missSince;
+    if (st.recheckMs != null) this.scheduleDetect(e, st.recheckMs + 20);
+    const next = st.value;
+    // 答えたあと、ダイアログが消えたか別の質問に変わったら通常に戻す
+    if (!raw || (e.detected && raw.question !== e.detected.question)) e.approvalAnswered = false;
     const prevJson = JSON.stringify(e.detected);
     if (JSON.stringify(next) === prevJson) return;
     e.detected = next;

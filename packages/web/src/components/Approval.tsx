@@ -1,5 +1,5 @@
 // 承認カード(承認キュー / モバイル承認タブ / セッション詳細の承認バナーで共用)
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import type { DeployJob, SessionInfo } from '@cc-hub/shared';
 import { sessionApi } from '../api';
 import { optionTone, optionValue } from '../util';
@@ -82,12 +82,39 @@ export function ApprovalCard({ session, onOpen }: { session: SessionInfo; onOpen
   );
 }
 
-export function ApprovalBanner({ session }: { session: SessionInfo }) {
+/**
+ * セッション詳細の承認の帯。overlay = 端末の上に重ねる(スマホ。端末の高さを変えないため)。
+ * 重ねたときは、後ろの端末を見られるように畳める
+ */
+export function ApprovalBanner({ session, overlay = false }: { session: SessionInfo; overlay?: boolean }) {
+  const [folded, setFolded] = useState(false);
+  const q = session.approval?.question;
+  // 新しい質問が来たら開き直す
+  useEffect(() => setFolded(false), [q]);
   if (!session.approval) return null;
+  if (!overlay) {
+    return (
+      <div className="appr-banner" role="alert">
+        <div className="appr-q">{session.approval.question}</div>
+        <ApprovalButtons session={session} />
+      </div>
+    );
+  }
   return (
-    <div className="appr-banner" role="alert">
-      <div className="appr-q">{session.approval.question}</div>
-      <ApprovalButtons session={session} />
+    <div className={`appr-banner overlay ${folded ? 'folded' : ''}`} role="alert">
+      <div className="appr-overlay-head">
+        <div className="appr-q">{session.approval.question}</div>
+        <button
+          type="button"
+          className="btn ghost sm appr-fold"
+          aria-expanded={!folded}
+          onClick={() => setFolded((v) => !v)}
+          title={folded ? '選択肢を表示する' : '畳んで後ろのターミナルを見る'}
+        >
+          {folded ? '選択肢 ▾' : '畳む ▴'}
+        </button>
+      </div>
+      {!folded && <ApprovalButtons session={session} />}
     </div>
   );
 }

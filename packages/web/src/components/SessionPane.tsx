@@ -144,17 +144,21 @@ export function SessionPane({
   return (
     <div className="session-pane">
       {header(fontCtl)}
-      <ApprovalBanner session={session} />
+      {/* スマホは承認の帯を端末に重ねる(帯で端末が縮む → Claude が描き直す → 帯が変わる、のループを防ぐ) */}
+      {(desktop || !session.managed) && <ApprovalBanner session={session} />}
       <ReleaseBanner session={session} />
       {session.managed ? (
         <>
-          <TerminalView
-            key={session.id}
-            ref={termRef}
-            sessionId={session.id}
-            fontSize={fontSize}
-            interactive={live}
-          />
+          <div className="term-stack">
+            <TerminalView
+              key={session.id}
+              ref={termRef}
+              sessionId={session.id}
+              fontSize={fontSize}
+              interactive={live}
+            />
+            {!desktop && <ApprovalBanner session={session} overlay />}
+          </div>
           {live ? (
             <div className="composer-dock">
               {qkOpen && <QuickKeys session={session} termRef={termRef} />}

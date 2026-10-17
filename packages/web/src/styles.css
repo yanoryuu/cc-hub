@@ -8874,3 +8874,42 @@ th[aria-sort='descending'] .th-arrow {
   flex-wrap: wrap;
   gap: 8px;
 }
+
+/* スマホ: 承認の帯は端末に重ねる(端末の高さを変えない)。高すぎるときは帯の中でスクロール */
+.term-stack {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.appr-banner.overlay {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 5;
+  max-height: 60%;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  border-bottom: 1px solid #5c4818;
+  box-shadow: 0 6px 16px rgb(0 0 0 / 0.45);
+}
+.appr-overlay-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+}
+.appr-overlay-head .appr-q {
+  flex: 1;
+  min-width: 0;
+}
+.appr-banner.overlay.folded .appr-q {
+  margin-bottom: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.appr-fold {
+  flex: none;
+}

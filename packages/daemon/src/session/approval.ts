@@ -169,3 +169,51 @@ export function approvalKeys(a: DetectedApproval, option: string): string[] | nu
   keys.push('\r');
   return keys;
 }
+
+/** ダイアログが画面から消えてから、承認を取り下げるまでの猶予(描き直しの途中の画面で一瞬消えて見えるのを無視する) */
+export const APPROVAL_HOLD_MS = 700;
+
+export interface StableApproval {
+  /** 表示に使う検出結果 */
+  value: DetectedApproval | null;
+  /** 画面から消えて見え始めた時刻(猶予中だけ値が入る) */
+  missSince: number | null;
+  /** 猶予の終わりにもう一度調べるまでのミリ秒(不要なら null) */
+  recheckMs: number | null;
+}
+
+/** next の選択肢がすべて prev にあり(番号とラベルが同じ)、数が少ないか */
+function isPartialOf(next: DetectedApproval, prev: DetectedApproval): boolean {
+  if (next.type !== prev.type || next.numbered !== prev.numbered || next.question !== prev.question) return false;
+  if (next.options.length >= prev.options.length) return false;
+  return next.options.every((o) => prev.options.some((p) => p.n === o.n && p.label === o.label));
+}
+
+/**
+ * 画面の解析結果をそのまま出すと、描き直しの途中や、端末が低くてダイアログの一部しか見えないときに
+ * 選択肢が減ったり消えたりして見える(スマホで承認の帯がガクガクする原因)。次のように落ち着かせる:
+ * - 同じ質問のまま選択肢が一部しか見えないときは、前に見えた全部の選択肢を保つ(選択中の位置だけ新しくする)
+ * - 画面から消えても、APPROVAL_HOLD_MS 続くまでは取り下げない
+ * answered = ユーザーが答えた直後(このときは保たずに、画面のとおりにする)
+ */
+export function stabilizeApproval(
+  prev: DetectedApproval | null,
+  next: DetectedApproval | null,
+  now: number,
+  missSince: number | null,
+  answered: boolean,
+): StableApproval {
+  if (!next) {
+    if (!prev || answered) return { value: null, missSince: null, recheckMs: null };
+    const since = missSince ?? now;
+    const left = APPROVAL_HOLD_MS - (now - since);
+    if (left <= 0) return { value: null, missSince: null, recheckMs: null };
+    return { value: prev, missSince: since, recheckMs: left };
+  }
+  if (prev && !answered && isPartialOf(next, prev)) {
+    const sel = next.options.find((o) => o.selected);
+    const options = sel ? prev.options.map((o) => ({ ...o, selected: o.n === sel.n })) : prev.options;
+    return { value: { ...prev, options }, missSince: null, recheckMs: null };
+  }
+  return { value: next, missSince: null, recheckMs: null };
+}
