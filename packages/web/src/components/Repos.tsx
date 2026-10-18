@@ -164,7 +164,7 @@ export function RegisterRepoForm({ mobile = false, inModal = false, onClose }: {
   const [url, setUrl] = useState('');
   const [localPath, setLocalPath] = useState('');
   const [trusted, setTrusted] = useState(false);
-  const [poolMin, setPoolMin] = useState('3');
+  const [poolMin, setPoolMin] = useState('2');
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 

@@ -57,7 +57,7 @@ export function PoolChips({ repo, worktrees }: { repo: RepoInfo; worktrees: Work
       {/* 目標を超えている間(返却直後など)は「4/3」と出すと不自然なので本数だけ出す。余剰は一定時間後に自動で削除される */}
       <span
         className={`pchip idle ${tone}`}
-        title={c.idle > repo.poolMin ? `待機 ${c.idle} 本(目標 ${repo.poolMin} 本。余った分はしばらく使われなければ削除)` : `待機中 / 目標 ${repo.poolMin} 本`}
+        title={c.idle > repo.poolMin ? `待機 ${c.idle} 本(目標 ${repo.poolMin} 本。余った分は順に削除します)` : `待機中 / 目標 ${repo.poolMin} 本`}
       >
         待機 {c.idle > repo.poolMin ? c.idle : `${c.idle}/${repo.poolMin}`}
       </span>

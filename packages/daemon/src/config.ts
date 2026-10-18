@@ -21,7 +21,7 @@ export interface HubConfig {
   /** 新規登録リポジトリの既定プール数 */
   defaultPoolMin: number;
   defaultPoolMax: number;
-  /** poolMin を超えた待機 worktree を、この分数使われなければ削除する */
+  /** poolMin を超えた待機 worktree を、この分数使われなければ削除する(0 = すぐ削除して、待機を常に poolMin 本に保つ) */
   idleTtlMinutes: number;
   /** ルートのドライブの空きがこれ未満なら補充を止める(GB) */
   minFreeDiskGB: number;
@@ -90,9 +90,9 @@ function createConfig(file: string): HubConfig {
     permissionMode: 'auto',
     autoResume: true,
     worktreeRoots: { ...DEFAULT_WORKTREE_ROOTS },
-    defaultPoolMin: 3,
+    defaultPoolMin: 2,
     defaultPoolMax: 10,
-    idleTtlMinutes: 30,
+    idleTtlMinutes: 0,
     minFreeDiskGB: 20,
     ghPath: 'gh',
     prPollSeconds: 90,
@@ -148,9 +148,9 @@ export function loadConfig(): LoadedConfig {
       default: String(raw.worktreeRoots?.default || DEFAULT_WORKTREE_ROOTS.default),
       unity: String(raw.worktreeRoots?.unity || DEFAULT_WORKTREE_ROOTS.unity),
     },
-    defaultPoolMin: numOr(raw.defaultPoolMin, 3, 0, 50),
+    defaultPoolMin: numOr(raw.defaultPoolMin, 2, 0, 50),
     defaultPoolMax: numOr(raw.defaultPoolMax, 10, 1, 50),
-    idleTtlMinutes: numOr(raw.idleTtlMinutes, 30, 0, 1e6),
+    idleTtlMinutes: numOr(raw.idleTtlMinutes, 0, 0, 1e6),
     minFreeDiskGB: numOr(raw.minFreeDiskGB, 20, 0, 1e6),
     ghPath: String(raw.ghPath || 'gh'),
     prPollSeconds: numOr(raw.prPollSeconds, 90, 10, 3600),

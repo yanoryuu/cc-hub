@@ -698,6 +698,19 @@ export class WorktreePool {
     const branch = w.branch;
     const logFile = this.logFile(w);
     this.set(w, { state: 'releasing', progress: '初期化中', error: null });
+    // 待機が目標の本数に足りていれば、初期化して戻さずに削除する(待機を poolMin 本に保つ)
+    if (this.isSurplus(repo, w) && !(await findLockers(w.path))?.length) {
+      console.log(`[pool] ${w.id} は待機が足りているので、初期化せずに削除します (${mode}${branch ? `, ${branch}` : ''})`);
+      this.set(w, { sessionId: null, branch: null, git: null });
+      await this.destroy(w);
+      if (mode === 'discard' && branch && !this.wts.has(w.id)) {
+        await this.rt(repo.id).mutex.run(async () => {
+          const r = await git(['-C', baseOf(repo), 'branch', '-D', branch], { logFile });
+          if (r.code !== 0) console.warn(`[pool] ${w.id}: ブランチ ${branch} の削除に失敗: ${tail(r)}`);
+        });
+      }
+      return;
+    }
     try {
       await gitOk(['-C', w.path, 'reset', '--hard'], { logFile });
       const ex = repo.keepDirs.filter(Boolean).flatMap((k) => ['-e', k]);
@@ -712,12 +725,21 @@ export class WorktreePool {
       });
     } catch (e) {
       this.set(w, { sessionId: null });
-      this.broken(w, errMsg(e));
+      // Unity などが開いたままだと clean に失敗する。つかんでいるプログラムが分かれば、理由として先頭に出す
+      const lockers = await findLockers(w.path).catch(() => null);
+      this.broken(w, lockers?.length ? `${lockerMessage(lockers)} / ${errMsg(e)}` : errMsg(e));
       return;
     }
     console.log(`[pool] ${w.id} を解放しました (${mode}${branch ? `, ${branch}` : ''})`);
     this.set(w, { state: 'idle', progress: null, error: null, branch: null, sessionId: null, lastUsedAt: Date.now() });
     this.onIdle(w);
+  }
+
+  /** w を除いて、待機(作成中を含む)が poolMin 本そろっていて、待っているセッションも無いか */
+  private isSurplus(repo: RepoInfo, w: WorktreeRow): boolean {
+    if (this.rt(repo.id).waiters.length) return false;
+    const ready = this.forRepo(repo.id).filter((x) => x !== w && (x.state === 'creating' || x.state === 'warming' || x.state === 'idle'));
+    return ready.length >= repo.poolMin;
   }
 
   // ================================================================ 個別操作(UI)
