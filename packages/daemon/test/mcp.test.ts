@@ -37,6 +37,7 @@ test('ツールの一覧は契約どおり', () => {
       'launch_unity',
       'set_app_launcher',
       'remove_app_launcher',
+      'send_images',
     ],
   );
   const r = listToolsResult() as any;

@@ -4,6 +4,8 @@
 // - Windows: デスクトップアプリが WS 接続中(client=desktop)ならアプリに出させる(bus 'notify.desktop')。
 //   未接続ならデーモンが node-notifier で出す
 // - Discord: 暗号化して保存した Webhook URL を復号して送る(復号した URL は 10 分だけメモリに置く)
+// - 画像(MCP の send_images): セッションごとに預かり、ターンの終わりの通知(入力待ち / エラー)を Discord に送ったら
+//   その通知のスレッドに投稿する(Bot が使えなければ通知の直後に同じチャンネルへ。通知を送らなかったときは画像だけ送る)
 import type { NotifyEvent, NotifySettings, NotifyTopic, ServerMessage, SessionInfo } from '@cc-hub/shared';
 import { bus } from '../bus';
 import type { Store } from '../store/db';
@@ -18,6 +20,7 @@ import { HISTORY_TURNS, type BtwIO, type BtwRequest, type QaTurn } from './repli
 import { Throttle, route, throttleKey, topicOf, type FocusState, type RouteDecision } from './topic';
 import { loadStored, mergeUpdate, toPublic, type StoredNotifySettings } from './settings';
 import { nodeToaster, type Toaster } from './toast';
+import { ImageQueue, imagesContent, imagesForm, type ImageFile, type PendingImages } from './images';
 
 const SETTINGS_KEY = 'notify';
 const URL_CACHE_MS = 10 * 60_000;
@@ -42,6 +45,8 @@ export interface NotifyDeps {
   desktopClients: () => number;
   toaster?: Toaster;
   sender?: DiscordSender;
+  /** Bot を作る(検証用に差し替える) */
+  makeBot?: (onReply: (r: BotReply) => void) => DiscordBot;
 }
 
 export class NotifyService {
@@ -61,6 +66,8 @@ export class NotifyService {
   readonly recent: { ts: number; title: string; topic: NotifyTopic | null; decision: RouteDecision | { skipped: string } }[] = [];
   private readonly approvals: DeployApprovals;
   private readonly sessionApprovals: SessionApprovals;
+  /** Discord に送る画像(セッションごと) */
+  private readonly images = new ImageQueue();
   private statusText: (() => string) | null = null;
   private readonly onState = (msg: ServerMessage) => {
     this.approvals.onState(msg);
@@ -74,7 +81,8 @@ export class NotifyService {
     this.settings = loadStored(d.store.getSetting(SETTINGS_KEY));
     this.toaster = d.toaster ?? nodeToaster;
     this.sender = d.sender ?? new DiscordSender();
-    this.bot = new DiscordBot((r) => void this.onBotReply(r));
+    const onReply = (r: BotReply) => void this.onBotReply(r);
+    this.bot = d.makeBot ? d.makeBot(onReply) : new DiscordBot(onReply);
     this.approvals = new DeployApprovals({
       channelId: () => (this.settings.bot.enabled && this.bot.connected() ? this.settings.bot.approvalChannelId : ''),
       allowed: (userId) => this.settings.bot.allowedUserIds.includes(userId),
@@ -270,6 +278,12 @@ export class NotifyService {
       this.recent.length = Math.min(this.recent.length, 50);
     };
     if (!topic) return record({ skipped: '対象外の種類' });
+    // ターンの終わりなら、預かっている画像を一緒に送る
+    const imgs = ev.sessionId && (topic === 'input' || topic === 'error') ? this.images.take(ev.sessionId, now) : null;
+    const sessionName = info?.name ?? meta.sessionName ?? 'セッション';
+    const alone = () => {
+      if (imgs) void this.sendImagesAlone(imgs, sessionName, repoId);
+    };
     const decision = route({
       event: ev,
       topic,
@@ -279,11 +293,19 @@ export class NotifyService {
       desktopConnected: this.d.desktopClients() > 0,
       now,
     });
-    if (decision.skipped) return record(decision);
+    if (decision.skipped) {
+      alone();
+      return record(decision);
+    }
     // アーティファクトは 1 件ずつ別のページなので間引かない
-    if (topic !== 'artifact' && !this.throttle.allow(throttleKey(ev, topic), this.settings.throttleSeconds, now)) return record({ skipped: '間引き' });
+    if (topic !== 'artifact' && !this.throttle.allow(throttleKey(ev, topic), this.settings.throttleSeconds, now)) {
+      alone();
+      return record({ skipped: '間引き' });
+    }
     record(decision);
     if (decision.windows) this.showWindows(ev, decision.windows);
+    if (imgs && !decision.discord.length) alone();
+    const sends: Promise<{ id: string; r: SendResult }>[] = [];
     for (const id of decision.discord) {
       const t = this.settings.discord.find((x) => x.id === id);
       if (!t) continue;
@@ -298,11 +320,72 @@ export class NotifyService {
         failed: ev.kind === 'deploy' && /失敗/.test(ev.title),
         descriptionMax: topic === 'artifact' ? 2000 : undefined,
       });
-      void this.sendDiscord(t.id, payload).then((r) => {
+      const p = this.sendDiscord(t.id, payload).then((r) => {
         if (!r.ok) console.warn(`[notify] Discord(${t.name})への送信に失敗: ${r.error}`);
         else if (r.messageId && ev.sessionId) this.remember(r.messageId, ev.sessionId, topic);
+        return { id: t.id, r };
+      });
+      sends.push(p);
+    }
+    // 画像は最初の送信先の通知のスレッドに置く(どこにも届かなければ画像だけ送る)
+    if (imgs && sends.length) {
+      void Promise.all(sends).then(async (rs) => {
+        const ok = rs.find((x) => x.r.ok);
+        if (ok) await this.sendImagesUnder(ok.id, ok.r, imgs, sessionName);
+        else alone();
       });
     }
+  }
+
+  // ================================================================ 画像
+  /** 画像を預ける(MCP の send_images)。Discord の送信先が無ければ 409。戻り値 = このターンで預かっている枚数 */
+  queueImages(sessionId: string, files: ImageFile[], caption: string): number {
+    if (!this.settings.discord.some((t) => t.enabled)) {
+      throw new HttpError(409, 'Discord の送信先が設定されていません(CC Hub の 設定 → 通知 → Discord で追加してください)');
+    }
+    return this.images.add(sessionId, files, caption);
+  }
+
+  /** 通知のスレッドに画像を投稿する(Bot が使えなければ、通知の直後に同じチャンネルへ Webhook で送る) */
+  private async sendImagesUnder(targetId: string, sent: SendResult, p: PendingImages, sessionName: string): Promise<void> {
+    const content = imagesContent(`🖼 ${sessionName} の画像(${p.files.length} 枚)`, p);
+    if (this.bot.connected() && sent.channelId && sent.messageId) {
+      const thread = await this.bot.startThread(sent.channelId, sent.messageId, `${sessionName} の画像`);
+      if (thread) {
+        try {
+          await this.bot.postForm(thread, imagesForm({ content, allowed_mentions: { parse: [] } }, p.files));
+          console.log(`[notify] 画像 ${p.files.length} 枚を通知のスレッドに送りました: ${sessionName}`);
+          return;
+        } catch (e) {
+          console.warn(`[bot] スレッドに画像を送れません(権限「ファイルを添付」「スレッドでメッセージを送信」が必要): ${(e as Error).message}`);
+        }
+      }
+    }
+    await this.postImages(targetId, content, p);
+  }
+
+  /** ターンの終わりの通知を Discord に送らなかったとき: 画像だけ送る(リポジトリの絞り込みに合う、有効な送信先の最初の 1 つ) */
+  private async sendImagesAlone(p: PendingImages, sessionName: string, repoId: string | null): Promise<void> {
+    const t = this.settings.discord.find(
+      (x) => x.enabled && (x.repoIds.length === 0 || (!!repoId && x.repoIds.some((r) => r.toLowerCase() === repoId.toLowerCase()))),
+    );
+    if (!t) {
+      console.warn(`[notify] 画像の送信先がありません(${sessionName}、${p.files.length} 枚)`);
+      return;
+    }
+    await this.postImages(t.id, imagesContent(`🖼 ${sessionName} の画像(${p.files.length} 枚)`, p), p);
+  }
+
+  private async postImages(targetId: string, content: string, p: PendingImages): Promise<void> {
+    let url: string;
+    try {
+      url = await this.webhookUrl(targetId);
+    } catch (e) {
+      console.warn(`[notify] 画像を送れません(Webhook URL を復号できません): ${(e as Error).message}`);
+      return;
+    }
+    const r = await this.sender.sendForm(targetId, url, () => imagesForm({ username: 'CC Hub', content, allowed_mentions: { parse: [] } }, p.files));
+    if (!r.ok) console.warn(`[notify] 画像の送信に失敗: ${r.error}`);
   }
 
   private showWindows(ev: NotifyEvent, via: 'app' | 'daemon'): void {

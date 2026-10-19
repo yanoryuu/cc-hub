@@ -116,17 +116,18 @@ export function retryAfterMs(body: unknown, header: string | null): number {
   return 1000;
 }
 
-export type FetchLike = (url: string, init: { method: string; headers: Record<string, string>; body: string; signal?: AbortSignal }) => Promise<{
+export type FetchLike = (url: string, init: { method: string; headers: Record<string, string>; body: string | FormData; signal?: AbortSignal }) => Promise<{
   status: number;
   headers: { get(name: string): string | null };
   text(): Promise<string>;
 }>;
 
-/** 送信結果。messageId = 送ったメッセージの ID(返信の紐付けに使う) */
+/** 送信結果。messageId = 送ったメッセージの ID(返信の紐付けに使う)/ channelId = 送り先のチャンネル(スレッドを作るのに使う) */
 export interface SendResult {
   ok: boolean;
   error?: string;
   messageId?: string;
+  channelId?: string;
 }
 
 /** Webhook ごとに直列で送る。失敗はログだけ(URL は出さない) */
@@ -140,8 +141,18 @@ export class DiscordSender {
 
   /** キューに積む。戻り値は送信結果(ok / エラー文) */
   send(key: string, url: string, payload: unknown): Promise<SendResult> {
+    const body = JSON.stringify(payload);
+    return this.enqueue(key, () => this.post(url, () => body, true));
+  }
+
+  /** 添付ファイル付きで送る(multipart。form は送るたびに作り直す) */
+  sendForm(key: string, url: string, form: () => FormData): Promise<SendResult> {
+    return this.enqueue(key, () => this.post(url, form, false));
+  }
+
+  private enqueue(key: string, fn: () => Promise<SendResult>): Promise<SendResult> {
     const prev = this.queues.get(key) ?? Promise.resolve();
-    const p = prev.then(() => this.post(url, payload));
+    const p = prev.then(fn);
     const tail = p.catch(() => undefined);
     this.queues.set(key, tail);
     void tail.then(() => {
@@ -150,8 +161,7 @@ export class DiscordSender {
     return p;
   }
 
-  private async post(url: string, payload: unknown): Promise<SendResult> {
-    const body = JSON.stringify(payload);
+  private async post(url: string, body: () => string | FormData, json: boolean): Promise<SendResult> {
     for (let attempt = 0; ; attempt++) {
       const ac = new AbortController();
       const timer = setTimeout(() => ac.abort(), SEND_TIMEOUT_MS);
@@ -159,20 +169,23 @@ export class DiscordSender {
         // ?wait=true: 送ったメッセージ(ID)を返させる。Bot が返信を受けたとき、どのセッションの通知かを引くのに使う
         const res = await this.fetchImpl(`${url}${url.includes('?') ? '&' : '?'}wait=true`, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body,
+          // multipart は fetch が boundary 付きの Content-Type を付ける
+          headers: json ? { 'Content-Type': 'application/json' } : {},
+          body: body(),
           signal: ac.signal,
         });
         const text = await res.text().catch(() => '');
         if (res.status >= 200 && res.status < 300) {
           let messageId: string | undefined;
+          let channelId: string | undefined;
           try {
-            const j = JSON.parse(text) as { id?: unknown };
+            const j = JSON.parse(text) as { id?: unknown; channel_id?: unknown };
             if (typeof j.id === 'string') messageId = j.id;
+            if (typeof j.channel_id === 'string') channelId = j.channel_id;
           } catch {
             /* 本文なし(204) */
           }
-          return { ok: true, messageId };
+          return { ok: true, messageId, channelId };
         }
         if (res.status === 429 && attempt < MAX_RETRY) {
           let j: unknown = null;

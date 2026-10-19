@@ -21,6 +21,7 @@ import { SessionDrafts } from './session/drafts';
 import { stopCapture } from './game/capture';
 import { dpapi } from './dpapi';
 import { NotifyService } from './notify/service';
+import { loadImages } from './notify/images';
 import { DeployService } from './deploy/service';
 import { InstructionsService } from './project/instructions';
 import { ReplyRouter } from './notify/replies';
@@ -154,6 +155,7 @@ function main(): void {
         upsert: (sessionId, spec) => sessions.upsertLauncher(sessionId, spec, 'claude'),
         remove: (sessionId, label) => sessions.removeLauncher(sessionId, label),
       },
+      images: { queue: (sessionId, paths, cwd, caption) => notify.queueImages(sessionId, loadImages(paths, cwd), caption) },
     },
     claudePath: config.claudePath,
     getState,

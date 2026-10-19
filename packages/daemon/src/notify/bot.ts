@@ -1,5 +1,5 @@
 // Discord Bot: Gateway(WebSocket)でメッセージを受け取り、通知への「返信」だけを拾う。返事は REST で送る。
-// - 必要な権限: チャンネルの閲覧・メッセージの送信・メッセージ履歴の閲覧。Developer Portal で MESSAGE CONTENT INTENT を有効にする
+// - 必要な権限: チャンネルの閲覧・メッセージの送信・メッセージ履歴の閲覧(画像を送るならファイルの添付・スレッドでのメッセージ送信も)。Developer Portal で MESSAGE CONTENT INTENT を有効にする
 // - トークンはログに出さない。切断されたら少しずつ間隔を空けて再接続する(トークン不正 / Intent 不足は再接続しない)
 import WebSocket from 'ws';
 import type { DiscordBotStatus } from '@cc-hub/shared';
@@ -250,11 +250,13 @@ export class DiscordBot {
 
   // ================================================================ REST
   private async rest(method: string, p: string, body?: unknown): Promise<any> {
+    // FormData(添付ファイル付き)は fetch が boundary 付きの Content-Type を付ける
+    const form = body instanceof FormData;
     const res = await fetch(`${API}${p}`, {
       method,
-      headers: { Authorization: `Bot ${this.token}`, 'Content-Type': 'application/json' },
-      body: body === undefined ? undefined : JSON.stringify(body),
-      signal: AbortSignal.timeout(15_000),
+      headers: form ? { Authorization: `Bot ${this.token}` } : { Authorization: `Bot ${this.token}`, 'Content-Type': 'application/json' },
+      body: body === undefined ? undefined : form ? body : JSON.stringify(body),
+      signal: AbortSignal.timeout(form ? 60_000 : 15_000),
     });
     const text = await res.text().catch(() => '');
     if (!res.ok) throw new Error(`Discord が ${res.status} を返しました ${text.slice(0, 200)}`);
@@ -317,6 +319,12 @@ export class DiscordBot {
   /** メッセージを投稿する(ボタンなど components 付き)。戻り値はメッセージ ID */
   async post(channelId: string, body: Record<string, unknown>): Promise<string> {
     const m = await this.rest('POST', `/channels/${channelId}/messages`, { allowed_mentions: { parse: [] }, ...body });
+    return String(m?.id ?? '');
+  }
+
+  /** 添付ファイル付きで投稿する(form = payload_json + files[n])。戻り値はメッセージ ID */
+  async postForm(channelId: string, form: FormData): Promise<string> {
+    const m = await this.rest('POST', `/channels/${channelId}/messages`, form);
     return String(m?.id ?? '');
   }
 

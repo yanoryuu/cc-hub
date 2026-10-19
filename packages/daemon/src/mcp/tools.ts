@@ -11,13 +11,15 @@ import type { InstructionsService, ProjectKey } from '../project/instructions';
 import { HttpError } from '../util';
 import { launchUnity, unityStatus } from '../unity/launcher';
 import { LAUNCHER_COMMAND_MAX, LAUNCHER_LABEL_MAX, LAUNCHER_MAX, unityMessage } from '../session/launchers';
+import { IMAGES_MAX, IMAGE_MAX_BYTES } from '../notify/images';
 
 export class ToolInputError extends Error {}
 
 type PropSpec =
   | { type: 'string'; description: string; maxLength?: number; enum?: string[] }
   | { type: 'boolean'; description: string }
-  | { type: 'array'; description: string; items: string[] };
+  /** items = 選べる値(省略時は任意の文字列) */
+  | { type: 'array'; description: string; items?: string[]; maxItems?: number };
 
 export interface ToolDef {
   name: string;
@@ -196,6 +198,22 @@ export const TOOLS: ToolDef[] = [
     required: ['cwd', 'label'],
     readOnly: false,
   },
+  {
+    name: 'send_images',
+    description:
+      '画像(スクリーンショット・モック・生成した図など)を Discord に送って、ユーザーに見てもらいます。' +
+      'すぐには送りません。このターンが終わったとき(入力待ちの通知)に、その通知のスレッドにまとめて投稿します。' +
+      `png / jpg / gif / webp、1 ターン ${IMAGES_MAX} 枚まで、1 枚 ${IMAGE_MAX_BYTES / 1024 / 1024}MB まで。何度か呼ぶと足されます。` +
+      '画面やデザインをユーザーに確認してほしいとき、ユーザーに画像を送るよう頼まれたときに使ってください。' +
+      '画像はファイルに保存してからパスを渡してください(相対パスは cwd 基準)。caption には何の画像か・何を確認してほしいかを日本語で短く書いてください。',
+    props: {
+      cwd: CWD_PROP,
+      paths: { type: 'array', description: `送る画像ファイルのパス(${IMAGES_MAX} 個まで)`, maxItems: IMAGES_MAX },
+      caption: { type: 'string', description: '画像に添える説明(例: 「ログイン画面のモック。ボタンの色を見てください」)', maxLength: 1500 },
+    },
+    required: ['cwd', 'paths'],
+    readOnly: false,
+  },
 ];
 
 /** MCP の tools/list に返す形 */
@@ -208,7 +226,10 @@ export function listToolsResult(): { tools: unknown[] } {
         type: 'object',
         properties: Object.fromEntries(
           Object.entries(t.props).map(([k, p]) => {
-            if (p.type === 'array') return [k, { type: 'array', description: p.description, items: { type: 'string', enum: p.items }, minItems: 1, uniqueItems: true }];
+            if (p.type === 'array') {
+              const items = p.items ? { type: 'string', enum: p.items } : { type: 'string' };
+              return [k, { type: 'array', description: p.description, items, minItems: 1, ...(p.maxItems ? { maxItems: p.maxItems } : {}), uniqueItems: true }];
+            }
             if (p.type === 'boolean') return [k, { type: 'boolean', description: p.description }];
             return [k, { type: p.type, description: p.description, ...(p.maxLength ? { maxLength: p.maxLength } : {}), ...(p.enum ? { enum: p.enum } : {}) }];
           }),
@@ -242,8 +263,9 @@ export function validateArgs(name: string, args: unknown): ToolArgs {
     }
     if (p.type === 'array') {
       if (!Array.isArray(v) || v.some((x) => typeof x !== 'string')) throw new ToolInputError(`${k} は文字列の配列で指定してください(例: ["hosting"])`);
-      const bad = v.find((x) => !p.items.includes(x));
-      if (bad !== undefined) throw new ToolInputError(`${k} に使えない値です: ${bad}(使えるもの: ${p.items.join(', ')})`);
+      const bad = p.items ? v.find((x) => !p.items!.includes(x)) : undefined;
+      if (bad !== undefined) throw new ToolInputError(`${k} に使えない値です: ${bad}(使えるもの: ${p.items!.join(', ')})`);
+      if (p.maxItems && v.length > p.maxItems) throw new ToolInputError(`${k} は ${p.maxItems} 個までです`);
       out[k] = [...new Set(v as string[])];
       continue;
     }
@@ -274,6 +296,8 @@ export interface McpDeps {
     upsert: (sessionId: string, spec: { label: string; kind: string; command: string | null }) => AppLauncher[];
     remove: (sessionId: string, label: string) => AppLauncher[];
   } | null;
+  /** Discord に送る画像を預ける(NotifyService)。戻り値 = このターンで預かっている枚数。無ければ send_images はエラー */
+  images?: { queue: (sessionId: string, paths: string[], cwd: string | null, caption: string) => number } | null;
 }
 
 function launcherSummary(l: AppLauncher) {
@@ -471,6 +495,19 @@ export async function callTool(name: string, rawArgs: unknown, d: McpDeps, ctx: 
         session: s.name,
         launchers: list.map(launcherSummary),
         message: `CC Hub のセッション「${s.name}」に「${String(a.label).trim()}」ボタンを登録しました。ユーザーはこのボタンからいつでも起動できます。`,
+      };
+    }
+    case 'send_images': {
+      if (!d.images) throw new ToolInputError('画像を送る機能は使えません');
+      const s = caller();
+      if (!s) throw new ToolInputError(`この作業フォルダの CC Hub のセッションが見つかりません: ${a.cwd}(CC Hub で起動したセッションから呼んでください)`);
+      const n = d.images.queue(s.id, a.paths, a.cwd ?? null, a.caption ?? '');
+      return {
+        session: s.name,
+        queued: n,
+        message:
+          `画像を預かりました(このターンで ${n} 枚)。このターンが終わったとき、Discord の入力待ちの通知のスレッドに投稿します。` +
+          'ユーザーには「Discord に画像を送ります」と伝えてください。',
       };
     }
   }

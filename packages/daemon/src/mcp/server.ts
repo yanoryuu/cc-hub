@@ -18,6 +18,7 @@ const INSTRUCTIONS =
   'プロジェクトの共通の指示は get_project_instructions / update_project_instructions で読み書きします。' +
   'Unity のプロジェクトは launch_unity でエディタを開けます(unity_status で開いているか確認できます)。' +
   'Unity のプロジェクトや自作ツールは set_app_launcher で「アプリを開く」ボタンとして登録すると、ユーザーが CC Hub からいつでも起動できます。' +
+  'スクリーンショットやモックなどの画像をユーザーに見せたいときは send_images で Discord に送れます(ターンの終わりの通知のスレッドに投稿されます)。' +
   'cwd を受け取るツールには、必ずあなたの現在の作業ディレクトリの絶対パスを渡してください。';
 
 export interface McpHttpDeps extends McpDeps {
