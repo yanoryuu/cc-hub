@@ -18,7 +18,7 @@ import { HttpError } from '../util';
 import { Mutex, Semaphore, freeDiskGB, git, gitOk, normPath, run, tail } from './exec';
 import { installCommand, lockHash } from './kind';
 import { findLockers, lockerMessage } from './lockers';
-import { DIRTY_MSG, IN_USE_DELETE_MSG, IN_USE_REBASE_MSG, classifyRebase, computeInUse, parseConflictFiles, parseCount } from './worktree-ops';
+import { DIRTY_MSG, IN_USE_DELETE_MSG, IN_USE_REBASE_MSG, OCCUPIED_MSG, classifyRebase, computeInUse, parseConflictFiles, parseCount } from './worktree-ops';
 
 const RECONCILE_MS = 30_000;
 const FETCH_FRESH_MS = 30_000;
@@ -62,6 +62,8 @@ export interface PoolDeps {
   getRepo: (id: string) => RepoInfo | undefined;
   /** リポジトリの警告を設定 / 解除する(ディスク不足など) */
   setRepoError: (id: string, error: string | null) => void;
+  /** フォルダの中で動いている、exceptId 以外のセッションの名前(自動の初期化・削除・割り当てを見送るため) */
+  sessionsInside?: (dir: string, exceptId: string | null) => string[];
   /** そのハブセッションが存在するか(起動時の復旧で使う) */
   sessionExists: (id: string) => boolean;
   /** そのセッションが動いているか(PTY が生きている / 起動準備中 / PowerShell で動作中)。inUse の判定に使う */
@@ -133,14 +135,18 @@ export class WorktreePool {
 
   /** 使用中か(rebase・削除できない) */
   isInUse(w: WorktreeRow): boolean {
-    return computeInUse(w.state, w.sessionId, (id) => this.d.sessionLive?.(id) ?? false);
+    return computeInUse(w.state, w.sessionId, (id) => this.d.sessionLive?.(id) ?? false) || this.occupants(w).length > 0;
   }
 
-  /** セッションの動作状態が変わった: そのセッションの worktree を配信し直す(inUse が変わるため) */
-  republishForSession(sessionId: string): void {
-    for (const w of this.wts.values()) {
-      if (w.sessionId === sessionId) bus.state({ t: 'worktree.upsert', worktree: this.pub(w) });
-    }
+  /** そのフォルダで動いている、割り当て先以外のセッションの名前(いれば自動で初期化・削除・割り当てしない) */
+  occupants(w: WorktreeRow): string[] {
+    if (w.state !== 'idle' && w.state !== 'assigned') return [];
+    return this.d.sessionsInside?.(w.path, w.state === 'assigned' ? w.sessionId : null) ?? [];
+  }
+
+  /** セッションの動作状態が変わった: worktree を配信し直す(割り当て先でなくても、フォルダの中で動いていれば inUse が変わるため) */
+  republishForSession(_sessionId: string): void {
+    for (const w of this.wts.values()) bus.state({ t: 'worktree.upsert', worktree: this.pub(w) });
   }
 
   /** 変更状況を更新して配信する(DB には保存しない)。assigned でなければ何もしない */
@@ -258,8 +264,9 @@ export class WorktreePool {
     // 待機中の worktree を最新の main に合わせる(ときどき)
     this.refreshIdle(repo);
 
-    const isReady = (s: WorktreeState) => s === 'creating' || s === 'warming' || s === 'idle';
-    const ready = list.filter((w) => isReady(w.state)).length;
+    // 別のセッションが作業している待機は、渡せないので数えない(その分を補充する)
+    const isReady = (w: WorktreeRow) => this.isReady(w);
+    const ready = list.filter(isReady).length;
     const need = repo.poolMin + rt.waiters.length;
     let toCreate = Math.min(need - ready, repo.poolMax - list.length);
     // 直前に作成に失敗していたら少し待つ(同じ原因で失敗し続けて上限まで増えないように)
@@ -293,12 +300,12 @@ export class WorktreePool {
     }
 
     // 縮小: 余剰の待機で idleTtl 分使われていないものを削除
-    const excess = after.filter((w) => isReady(w.state)).length - need;
+    const excess = after.filter(isReady).length - need;
     if (excess > 0) {
       const ttl = this.d.cfg.idleTtlMinutes * 60_000;
       const now = Date.now();
       const victims = after
-        .filter((w) => w.state === 'idle' && !this.busy.has(w.id) && now - w.lastUsedAt > ttl)
+        .filter((w) => w.state === 'idle' && !this.busy.has(w.id) && now - w.lastUsedAt > ttl && !this.occupants(w).length)
         .sort((a, b) => a.lastUsedAt - b.lastUsedAt || b.name.localeCompare(a.name))
         .slice(0, excess);
       for (const w of victims) {
@@ -454,8 +461,10 @@ export class WorktreePool {
     rt.lastRefresh = Date.now();
     for (const w of this.forRepo(repo.id)) {
       if (w.state !== 'idle' || this.busy.has(w.id)) continue;
+      // 別のセッションがこのフォルダで作業していれば、最新に合わせない(作業を消さないため)
+      if (this.occupants(w).length) continue;
       void this.task(w, async () => {
-        if (w.state !== 'idle') return;
+        if (w.state !== 'idle' || this.occupants(w).length) return;
         const logFile = this.logFile(w);
         await this.rt(repo.id).mutex.run(async () => {
           await this.fetch(repo, false, logFile);
@@ -597,7 +606,7 @@ export class WorktreePool {
     if (!repo) throw new HttpError(404, 'リポジトリが見つかりません');
     if (repo.status !== 'ready') throw new HttpError(409, `リポジトリの準備ができていません(${repo.status})`);
     const list = this.forRepo(repoId);
-    if (list.some((w) => w.state === 'idle' && !this.busy.has(w.id))) return;
+    if (list.some((w) => this.free(w))) return;
     if (list.some((w) => w.state === 'creating' || w.state === 'warming')) return;
     if (list.length >= repo.poolMax) throw new HttpError(409, `空いている worktree がありません(上限 ${repo.poolMax} 本に達しています)`);
     if (repo.error?.startsWith(DISK_WARN_PREFIX)) throw new HttpError(409, repo.error);
@@ -618,7 +627,7 @@ export class WorktreePool {
     const repo = this.d.getRepo(repoId);
     if (!repo) throw new HttpError(404, 'リポジトリが見つかりません');
     const rt = this.rt(repoId);
-    let w = this.forRepo(repoId).find((x) => x.state === 'idle' && !this.busy.has(x.id));
+    let w = this.forRepo(repoId).find((x) => this.free(x));
     if (w) {
       this.set(w, { state: 'assigned', sessionId, branch: null, progress: '割り当て中', lastUsedAt: Date.now(), git: null });
       this.kick(repoId); // すぐに補充
@@ -662,6 +671,16 @@ export class WorktreePool {
     }
   }
 
+  /** 待機の本数に数えるか(作成中・ウォームアップ中・渡せる待機) */
+  private isReady(w: WorktreeRow): boolean {
+    return w.state === 'creating' || w.state === 'warming' || (w.state === 'idle' && !this.occupants(w).length);
+  }
+
+  /** 新しいセッションに渡せる待機か(別のセッションがそのフォルダで作業していれば渡さない) */
+  private free(w: WorktreeRow): boolean {
+    return w.state === 'idle' && !this.busy.has(w.id) && !this.occupants(w).length;
+  }
+
   /** idle になった worktree を待っているセッションに渡す */
   private onIdle(w: WorktreeRow): void {
     const rt = this.rt(w.repoId);
@@ -680,6 +699,8 @@ export class WorktreePool {
     if (!w) throw new HttpError(404, 'worktree が見つかりません');
     if (w.state !== 'assigned' || w.sessionId !== sessionId) throw new HttpError(409, 'この worktree は既に解放されています');
     if (this.busy.has(w.id)) throw new HttpError(409, 'worktree は処理中です');
+    const others = this.occupants(w);
+    if (others.length) throw new HttpError(409, OCCUPIED_MSG(others));
     this.busy.add(w.id);
     try {
       await this.doRelease(w, mode);
@@ -738,7 +759,7 @@ export class WorktreePool {
   /** w を除いて、待機(作成中を含む)が poolMin 本そろっていて、待っているセッションも無いか */
   private isSurplus(repo: RepoInfo, w: WorktreeRow): boolean {
     if (this.rt(repo.id).waiters.length) return false;
-    const ready = this.forRepo(repo.id).filter((x) => x !== w && (x.state === 'creating' || x.state === 'warming' || x.state === 'idle'));
+    const ready = this.forRepo(repo.id).filter((x) => x !== w && this.isReady(x));
     return ready.length >= repo.poolMin;
   }
 

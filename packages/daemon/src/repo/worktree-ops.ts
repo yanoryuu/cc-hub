@@ -1,8 +1,11 @@
 // worktree の rebase・削除の判定(純粋関数。pool.ts とテストから使う)。
-import type { RebaseResult, WorktreeState } from '@cc-hub/shared';
+import type { RebaseResult, SessionInfo, WorktreeState } from '@cc-hub/shared';
 import type { RunResult } from './exec';
+import { isInside } from '../project/parse';
 
 export const IN_USE_REBASE_MSG = 'セッションが動いているので rebase できません。止めてから実行してください';
+export const OCCUPIED_MSG = (names: string[]) =>
+  `別のセッション(${names.join('、')})がこのフォルダで作業中なので初期化しません。そのセッションを止めてから解放してください`;
 export const IN_USE_DELETE_MSG = 'セッションが動いているので削除できません。止めてから実行してください';
 export const DIRTY_MSG = '未コミットの変更があります。コミットするか取り消してから rebase してください';
 
@@ -17,6 +20,26 @@ export function computeInUse(state: WorktreeState, sessionId: string | null, ses
   if (TRANSIENT.includes(state)) return true;
   if (state === 'assigned' && sessionId) return sessionLive(sessionId);
   return false;
+}
+
+/** CC Hub の外で動いているセッション(hooks で知っているだけ)を、イベントが途絶えてからも動いているとみなす時間 */
+export const EXTERNAL_LIVE_MS = 12 * 3600_000;
+
+/**
+ * フォルダの中で動いている、割り当て先以外のセッションの名前。
+ * 止まったセッションの worktree を、同じフォルダで後から作業を始めた別のセッションごと初期化しないために使う
+ */
+export function sessionsInside(
+  dir: string,
+  exceptId: string | null,
+  sessions: Pick<SessionInfo, 'id' | 'name' | 'cwd' | 'managed' | 'status' | 'lastEventAt'>[],
+  isRunning: (id: string) => boolean,
+  now = Date.now(),
+): string[] {
+  return sessions
+    .filter((s) => s.id !== exceptId && !!s.cwd && isInside(dir, s.cwd))
+    .filter((s) => isRunning(s.id) || (!s.managed && s.status !== 'stopped' && s.status !== 'error' && now - s.lastEventAt < EXTERNAL_LIVE_MS))
+    .map((s) => s.name || s.id);
 }
 
 /** git diff --name-only --diff-filter=U の出力 → 衝突ファイル */

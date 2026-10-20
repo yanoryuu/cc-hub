@@ -1,7 +1,7 @@
 // worktree の使用中(inUse)の判定と、rebase の結果の分類のテスト。
 // 実行: npm run test -w @cc-hub/daemon
 import assert from 'node:assert/strict';
-import { classifyRebase, computeInUse, parseConflictFiles, parseCount } from '../src/repo/worktree-ops';
+import { EXTERNAL_LIVE_MS, classifyRebase, computeInUse, parseConflictFiles, parseCount, sessionsInside } from '../src/repo/worktree-ops';
 
 let passed = 0;
 function test(name: string, fn: () => void): void {
@@ -72,6 +72,25 @@ test('rebase の分類: それ以外の失敗 → failed(stderr の末尾つき)
   assert.equal(long.result, 'failed');
   assert.match(long.message, /TAIL$/);
   assert.ok(long.message.length < 800);
+});
+
+test('sessionsInside: フォルダの中で動いている、割り当て先以外のセッション', () => {
+  const now = 1_000_000_000;
+  const wt = 'D:\\WorkTree\\P\\wt-02';
+  const ss = [
+    { id: 'owner', name: 'owner', cwd: wt, managed: true, status: 'running', lastEventAt: now },
+    { id: 'b', name: 'もう一つ', cwd: `${wt}\\Assets`, managed: true, status: 'running', lastEventAt: now },
+    { id: 'c', name: '止まった', cwd: wt, managed: true, status: 'stopped', lastEventAt: now },
+    { id: 'd', name: '別の番号', cwd: `${wt}0`, managed: true, status: 'running', lastEventAt: now },
+    { id: 'e', name: '外のターミナル', cwd: 'd:/worktree/p/wt-02', managed: false, status: 'idle', lastEventAt: now - 60_000 },
+    { id: 'f', name: '外の古い', cwd: wt, managed: false, status: 'idle', lastEventAt: now - EXTERNAL_LIVE_MS - 1 },
+  ] as any[];
+  const running = new Set(['owner', 'b', 'd']);
+  const isRunning = (id: string) => running.has(id);
+  assert.deepEqual(sessionsInside(wt, 'owner', ss, isRunning, now), ['もう一つ', '外のターミナル']);
+  // 待機中(割り当て先なし)なら全員を数える
+  assert.deepEqual(sessionsInside(wt, null, ss, isRunning, now), ['owner', 'もう一つ', '外のターミナル']);
+  assert.deepEqual(sessionsInside('D:\\WorkTree\\P\\wt-03', null, ss, isRunning, now), []);
 });
 
 console.log(`\n${passed} passed${process.exitCode ? ', FAILED' : ''}`);

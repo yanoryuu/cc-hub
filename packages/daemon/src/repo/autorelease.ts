@@ -4,6 +4,7 @@
 // - 未コミットの変更が無い
 // - main より進んだコミットが無い、または push 済みでそのブランチの PR がマージされている
 // 未 push のコミットや変更が残っているものは解放しない(管理画面に「要解放」として残る)
+// 別のセッションが同じフォルダで作業しているもの(inUse)も解放しない
 // 使っていないので自動で止めたセッション(idleStopped)の worktree も解放しない(「再開」で続けられるように)
 import type { PrInfo, SessionInfo, WorktreeGitStat, WorktreeInfo } from '@cc-hub/shared';
 
@@ -30,6 +31,8 @@ export function startAutoRelease(d: AutoReleaseDeps): () => void {
     const prs = d.prs();
     for (const w of d.worktrees()) {
       if (w.state !== 'assigned' || !w.sessionId || pending.has(w.id)) continue;
+      // 別のセッションがこのフォルダで作業している(inUse)なら初期化しない(その作業ごと消してしまうため)
+      if (w.inUse) continue;
       const s = d.session(w.sessionId);
       // 使っていないので自動で止めたセッションは「再開」で続けられるよう作業ツリーを残す
       if (s?.idleStopped) continue;

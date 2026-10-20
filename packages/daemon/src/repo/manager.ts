@@ -12,6 +12,7 @@ import { isInside } from '../project/parse';
 import { ghRun } from '../github/gh';
 import { defaultKeepDirs, detectKind } from './kind';
 import { WorktreePool, baseOf, DISK_WARN_PREFIX } from './pool';
+import { sessionsInside } from './worktree-ops';
 import { generateSlug, sanitizeSlug } from './slug';
 import { spawn } from 'node:child_process';
 import { launchUnity } from '../unity/launcher';
@@ -65,6 +66,7 @@ export class RepoManager {
       },
       sessionExists: (id) => !!sessions.info(id),
       sessionLive: (id) => sessions.isRunning(id),
+      sessionsInside: (dir, exceptId) => sessionsInside(dir, exceptId, Object.values(sessions.all()), (id) => sessions.isRunning(id)),
     });
     // セッションが動き出した / 止まったら、その worktree の inUse を配信し直す
     sessions.onLiveChange((id) => this.pool.republishForSession(id));
