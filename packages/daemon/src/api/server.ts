@@ -27,6 +27,7 @@ import { listSkills } from '../skills';
 import { listMcp } from '../mcp';
 import { ATTACH_MAX_BYTES, saveAttachment } from '../session/attach';
 import { HttpError, json, readBody } from '../util';
+import { buildOverview } from '../mod/overview';
 
 // packages/web/dist。バンドルの出力先(dist / dist-test など)に依らないよう、daemon パッケージのルートを探してから辿る
 // 検証時は環境変数 CC_HUB_WEB_DIST で別のビルド(dist-test など)を配信できる
@@ -216,6 +217,36 @@ async function handle(d: ServerDeps, req: http.IncomingMessage, res: http.Server
   }
 
   if (p === '/api/state' && method === 'GET') return json(res, 200, { ok: true, ...d.getState() });
+
+  // ------------------------------------------------ Claude Code の mod「cc-hub」(integrations/mod/cc-hub)
+  if (p === '/api/mod/overview' && method === 'GET') {
+    const pool = d.repos.pool;
+    const overview = buildOverview(
+      {
+        sessions: Object.values(d.sessions.all()),
+        hubIdFor: (id) => d.sessions.hubIdFor(id),
+        worktreeByPath: (cwd) => pool.byPath(cwd),
+        occupants: (wtId, except) => {
+          const w = pool.get(wtId);
+          return w ? pool.othersInside(w, except) : [];
+        },
+        prs: d.github.list(),
+      },
+      { session: url.searchParams.get('session'), cwd: url.searchParams.get('cwd') },
+    );
+    return json(res, 200, { ok: true, overview });
+  }
+  if (p === '/api/mod/instructions' && method === 'GET') {
+    const cwd = url.searchParams.get('cwd') ?? '';
+    const file = cwd ? d.instructions.fileForSession({ repoId: d.repos.repoForCwd(cwd)?.id ?? null, cwd }) : null;
+    let text: string | null = null;
+    try {
+      text = file ? fs.readFileSync(file, 'utf8') : null;
+    } catch {
+      text = null;
+    }
+    return json(res, 200, { ok: true, text });
+  }
 
   if (p === '/api/projects' && method === 'GET') return json(res, 200, { ok: true, projects: listProjects() });
 

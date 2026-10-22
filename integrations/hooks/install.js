@@ -184,7 +184,8 @@ function previousStatusline(dir) {
   } catch (_) {
     /* 次へ */
   }
-  return PS1_STATUSLINE;
+  // 記録が無い: 以前の claude-statusline.ps1 があればそれに、無ければ statusLine を消す(null)
+  return fs.existsSync(path.join(HOME, '.claude', 'scripts', 'claude-statusline.ps1')) ? PS1_STATUSLINE : null;
 }
 
 function main() {
@@ -212,8 +213,14 @@ function main() {
     if (!Object.keys(after.hooks).length) delete after.hooks;
     summary.push(removed.length ? `CC Hub の hook を削除: ${[...new Set(removed)].join(', ')}` : 'CC Hub の hook はありません');
     if (isHubStatusline(before.statusLine)) {
-      after.statusLine = previousStatusline(dir);
-      summary.push(`statusLine を戻す: ${after.statusLine.command}`);
+      const prev = previousStatusline(dir);
+      if (prev) {
+        after.statusLine = prev;
+        summary.push(`statusLine を戻す: ${prev.command}`);
+      } else {
+        delete after.statusLine;
+        summary.push('statusLine を外す(以前の設定の記録が無いため)');
+      }
     }
   } else {
     const hooks = stripped;

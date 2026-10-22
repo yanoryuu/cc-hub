@@ -1,0 +1,27 @@
+{
+  "name": "cc-hub",
+  "version": "0.1.0",
+  "author": { "name": "yanoryuu" },
+  "description": "CC Hub とつなぐ: イベントの送信、ほかのセッションの状況(帯・パネル・ステータス・通知)、/hub コマンド、作業ツリーとデプロイの見張り、共通の指示",
+  "types": "./types/index.d.ts",
+  "userConfig": {
+    "guardWorktree": {
+      "type": "boolean",
+      "title": "作業ツリーを守る",
+      "description": "CC Hub の作業ツリーの中で、既定のブランチへの切り替えや作業ツリーの削除、ほかの作業ツリーのファイルの編集を止める",
+      "default": true
+    },
+    "guardDeploy": {
+      "type": "boolean",
+      "title": "デプロイを承認制にする",
+      "description": "firebase deploy や scp などの直接のアップロードを止めて、CC Hub の承認(request_deploy / request_firebase_deploy)に回す",
+      "default": true
+    },
+    "toasts": {
+      "type": "boolean",
+      "title": "ほかのセッションの知らせ",
+      "description": "ほかのセッションが承認待ち・入力待ち・エラーになったら、画面に短く知らせる",
+      "default": true
+    }
+  }
+}

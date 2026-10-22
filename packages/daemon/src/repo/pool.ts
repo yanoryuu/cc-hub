@@ -138,6 +138,11 @@ export class WorktreePool {
     return computeInUse(w.state, w.sessionId, (id) => this.d.sessionLive?.(id) ?? false) || this.occupants(w).length > 0;
   }
 
+  /** そのフォルダで動いている、exceptSessionId 以外のセッションの名前(割り当て先も含む。mod の帯に出す) */
+  othersInside(w: WorktreeRow, exceptSessionId: string): string[] {
+    return this.d.sessionsInside?.(w.path, exceptSessionId) ?? [];
+  }
+
   /** そのフォルダで動いている、割り当て先以外のセッションの名前(いれば自動で初期化・削除・割り当てしない) */
   occupants(w: WorktreeRow): string[] {
     if (w.state !== 'idle' && w.state !== 'assigned') return [];

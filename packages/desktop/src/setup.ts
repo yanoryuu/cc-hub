@@ -83,17 +83,28 @@ function runNode(p: SetupPaths, args: string[], log: (s: string) => void): boole
 }
 
 /**
- * 設定する: hooks(~/.claude/settings.json。バックアップを作る)、statusLine(未設定のときだけ)、
- * MCP「cc-hub」(claude mcp add --scope user)、スキル hub-commander(~/.claude/skills)
+ * 設定する:
+ * - mod「cc-hub」(claude plugin install。イベントの送信・帯・パネル・/hub・見張り・共通の指示)。
+ *   入ったら、今までの hooks と statusLine は外す(mod が送るので二重にしない。settings.json はバックアップを作る)
+ * - mod を入れられなかったときは今までどおり hooks(~/.claude/settings.json)と statusLine(未設定のときだけ)
+ * - MCP「cc-hub」(claude mcp add --scope user)、スキル hub-commander(~/.claude/skills)
  */
 export function runSetup(p: SetupPaths): SetupResult {
   const lines: string[] = [`==== ${new Date().toISOString()} CC Hub ${p.version} の初回設定`];
   const log = (s: string) => lines.push(s);
   const result: SetupResult = { missing: missingPrereqs(p.dataDir), errors: [] };
   const integ = path.join(p.hubRoot, 'integrations');
+  const claude = findClaude(p.dataDir);
+  const hooks = path.join(integ, 'hooks', 'install.js');
 
-  if (!runNode(p, [path.join(integ, 'hooks', 'install.js'), '--apply', '--node', p.node, '--statusline-if-empty'], log)) {
-    result.errors.push('Claude Code の hooks の登録に失敗しました');
+  const modOk = !!claude && runNode(p, [path.join(integ, 'mod', 'install.js'), '--apply', '--claude', claude], log);
+  if (modOk) {
+    if (!runNode(p, [hooks, '--uninstall', '--apply'], log)) log('今までの hooks を外せませんでした(mod は同じ CC Hub への hooks があればイベントを送らないので、動作は変わりません)');
+  } else {
+    log('mod を入れられなかったので、今までの hooks でつなぎます');
+    if (!runNode(p, [hooks, '--apply', '--node', p.node, '--statusline-if-empty'], log)) {
+      result.errors.push('Claude Code の hooks の登録に失敗しました');
+    }
   }
 
   try {
@@ -105,7 +116,6 @@ export function runSetup(p: SetupPaths): SetupResult {
     result.errors.push(`スキル hub-commander の配置に失敗しました: ${(e as Error).message}`);
   }
 
-  const claude = findClaude(p.dataDir);
   if (claude) {
     if (!runNode(p, [path.join(integ, 'mcp', 'install.js'), '--apply', '--claude', claude], log)) {
       result.errors.push('Claude Code への MCP「cc-hub」の登録に失敗しました');

@@ -1,0 +1,11 @@
+{
+  "name": "cc-hub",
+  "owner": { "name": "yanoryuu" },
+  "plugins": [
+    {
+      "name": "cc-hub",
+      "source": "./integrations/mod/cc-hub",
+      "description": "CC Hub とつなぐ mod(イベントの送信、ほかのセッションの状況、/hub コマンド、見張り、共通の指示)"
+    }
+  ]
+}

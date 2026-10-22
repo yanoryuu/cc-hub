@@ -29,6 +29,9 @@ const startHidden = process.argv.includes('--hidden');
 const WATCH_MS = 30_000;
 /** package.json の build.appId と同じ */
 const APP_ID = 'com.yanoryuu.cchub';
+// 開発版は前からの userData(%APPDATA%\@cc-hub\desktop)を使う。package.json の productName(CC Hub)に任せると、
+// 画面の保存内容(localStorage など)が新しいフォルダに移って消えたように見え、インストール版と二重起動の判定もぶつかる
+if (!app.isPackaged) app.setPath('userData', path.join(app.getPath('appData'), '@cc-hub', 'desktop'));
 const logPath = path.join(dataDir, 'daemon.log');
 const boundsPath = path.join(dataDir, 'desktop-window.json');
 

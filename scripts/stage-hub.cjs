@@ -95,6 +95,8 @@ function main() {
   copy(need(path.join(ROOT, 'packages', 'web', 'dist')), path.join(OUT, 'packages', 'web', 'dist'));
   copy(need(path.join(ROOT, 'packages', 'desktop', 'assets')), path.join(OUT, 'packages', 'desktop', 'assets'));
   copy(need(path.join(ROOT, 'integrations')), path.join(OUT, 'integrations'));
+  // mod「cc-hub」のマーケットプレイス(claude plugin marketplace add <resourceshub> で入れる)
+  copy(need(path.join(ROOT, '.claude-plugin')), path.join(OUT, '.claude-plugin'));
 
   // node_modules(リポジトリ内の位置関係のまま、ルートからの相対パスで置く)
   const dirs = closure();
