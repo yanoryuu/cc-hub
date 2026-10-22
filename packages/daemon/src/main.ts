@@ -33,7 +33,7 @@ import { IDLE_CHECK_MS } from './session/idlestop';
 import { createRunner } from './firebase/cli';
 import { FirebaseInfoService } from './firebase/info';
 
-const VERSION = '0.1.0';
+const VERSION = '0.2.0';
 
 function main(): void {
   const { dir, config, localToken, ingestToken, mcpToken } = loadConfig();

@@ -1,7 +1,7 @@
 {
   "name": "@cc-hub/desktop",
   "productName": "CC Hub",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "複数の Claude Code セッションをまとめて扱うハブ",
   "author": "yanoryuu",
   "private": true,
