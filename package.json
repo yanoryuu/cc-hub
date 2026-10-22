@@ -11,7 +11,8 @@
     "typecheck": "npm run typecheck --workspaces --if-present",
     "daemon": "npm run start -w @cc-hub/daemon",
     "dev:web": "npm run dev -w @cc-hub/web",
-    "desktop": "npm run start -w @cc-hub/desktop"
+    "desktop": "npm run start -w @cc-hub/desktop",
+    "dist": "npm run build && npm run dist -w @cc-hub/desktop"
   },
   "engines": {
     "node": ">=22"

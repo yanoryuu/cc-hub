@@ -1,5 +1,6 @@
 // CC Hub デーモン: 複数の Claude Code セッション(PTY)を管理し、REST + WebSocket で UI に配信する。
 // CC Remote(server.js)の後継。待ち受けは 127.0.0.1 のみ(スマホは tailscale serve 経由)。
+import fs from 'node:fs';
 import path from 'node:path';
 import type { HubState } from '@cc-hub/shared';
 import { loadConfig } from './config';
@@ -26,7 +27,7 @@ import { DeployService } from './deploy/service';
 import { InstructionsService } from './project/instructions';
 import { ReplyRouter } from './notify/replies';
 import { formatStatus } from './notify/status';
-import { RestartScheduler } from './restart/scheduler';
+import { RestartScheduler, relaunchSelf, waitForPid } from './restart/scheduler';
 import { startAutoRelease } from './repo/autorelease';
 import { IDLE_CHECK_MS } from './session/idlestop';
 import { createRunner } from './firebase/cli';
@@ -93,6 +94,9 @@ function main(): void {
     prs: () => github.list(),
     release: (sid) => repos.release(sid, 'keep'),
   });
+  // インストール版には deploy.ps1 が無い: 新しいデーモンを起動して自分は終了する(ビルドはしない)
+  const deployScript = path.join(__dirname, '..', '..', '..', 'scripts', 'deploy.ps1');
+  let exitForRestart: () => void = () => process.exit(0);
   const restart = new RestartScheduler({
     busy: () => [
       ...Object.values(sessions.all())
@@ -102,8 +106,9 @@ function main(): void {
         .filter((j) => j.state === 'planning' || j.state === 'uploading')
         .map((j) => `アップロード: ${j.serverName}`),
     ],
-    script: path.join(__dirname, '..', '..', '..', 'scripts', 'deploy.ps1'),
+    script: deployScript,
     logFile: path.join(dir, 'restart.log'),
+    relaunch: fs.existsSync(deployScript) ? undefined : () => relaunchSelf(path.join(dir, 'daemon.log'), () => exitForRestart()),
   });
   // Discord の /status
   notify.setStatusProvider(() =>
@@ -212,6 +217,7 @@ function main(): void {
     server.close();
     setTimeout(() => process.exit(0), 500);
   };
+  exitForRestart = () => shutdown('restart');
   process.on('SIGINT', () => shutdown('SIGINT'));
   process.on('SIGTERM', () => shutdown('SIGTERM'));
   process.on('SIGBREAK', () => shutdown('SIGBREAK'));
@@ -219,4 +225,5 @@ function main(): void {
   process.on('unhandledRejection', (err) => console.error('[daemon] unhandledRejection', err));
 }
 
-main();
+// 再起動で起動された場合は、前のデーモンが終わって(ポートが空いて)から始める
+void waitForPid(process.env.CC_HUB_WAIT_PID).then(main);

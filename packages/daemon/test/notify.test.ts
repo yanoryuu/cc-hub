@@ -534,6 +534,12 @@ test('再起動の予約: 作業が無い状態が続いたら再起動 / 取り
   r2.request({ when: 'now' });
   assert.equal(launched.length, 2);
   assert.throws(() => new RestartScheduler({ busy: () => [], script: 'Z:/none.ps1', logFile: 'x.log', launch: () => undefined }).request({}));
+  // インストール版: deploy.ps1 が無くても relaunch で再起動する
+  let relaunched = 0;
+  const r3 = new RestartScheduler({ busy: () => [], script: 'Z:/none.ps1', logFile: 'x.log', relaunch: () => relaunched++ });
+  r3.request({ when: 'now' });
+  assert.equal(relaunched, 1);
+  r3.stop();
   r.stop();
   r2.stop();
 });

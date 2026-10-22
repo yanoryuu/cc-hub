@@ -45,8 +45,10 @@ export interface HubConfig {
   firebasePath: string;
 }
 
-// プロジェクトごとに D:\WorkTree\<name>\(.base + wt-NN)を作る。C ドライブの空きが少ないため D に統一
-export const DEFAULT_WORKTREE_ROOTS = { default: 'D:\\WorkTree', unity: 'D:\\WorkTree' };
+// プロジェクトごとに D:\WorkTree\<name>\(.base + wt-NN)を作る。C ドライブの空きが少ないため D に統一。
+// D ドライブが無い PC(インストール版を入れた別の PC など)は %USERPROFILE%\WorkTree
+const WORKTREE_ROOT = fs.existsSync('D:\\') ? 'D:\\WorkTree' : path.join(process.env.USERPROFILE || os.homedir(), 'WorkTree');
+export const DEFAULT_WORKTREE_ROOTS = { default: WORKTREE_ROOT, unity: WORKTREE_ROOT };
 
 function numOr(v: unknown, def: number, min: number, max: number): number {
   const n = Number(v);

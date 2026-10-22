@@ -4,6 +4,8 @@
 //   node install.js                  … ドライラン(変更内容を表示するだけ。既定)
 //   node install.js --apply          … 書き込む(先にタイムスタンプ付きバックアップを作る)
 //   node install.js --statusline     … statusLine も integrations/statusline/statusline.js に切り替える
+//   node install.js --statusline-if-empty … statusLine が未設定のときだけ statusline.js にする(インストール版の初回設定)
+//   node install.js --node <exe>     … relay.js / statusline.js を動かす node のパス(既定 PATH の node。インストール版は同梱の node.exe)
 //   node install.js --uninstall      … CC Hub の hooks を取り除き、statusLine を元に戻す(--apply と併用で書き込み)
 //   node install.js --emit <file>    … CC Hub の hooks だけを含む settings JSON を <file> に書く
 //                                      (`claude --settings <file>` でのテスト用。~/.claude/settings.json は触らない)
@@ -54,7 +56,9 @@ const opt = (f) => {
   return i >= 0 ? argv[i + 1] : undefined;
 };
 const APPLY = flag('--apply');
-const WITH_STATUSLINE = flag('--statusline');
+const STATUSLINE_IF_EMPTY = flag('--statusline-if-empty');
+const WITH_STATUSLINE = flag('--statusline') || STATUSLINE_IF_EMPTY;
+const NODE = opt('--node') ? `"${path.resolve(opt('--node'))}"` : 'node';
 const UNINSTALL = flag('--uninstall');
 const EMIT = opt('--emit');
 const SETTINGS = path.resolve(opt('--settings') || path.join(HOME, '.claude', 'settings.json'));
@@ -93,7 +97,7 @@ function daemonInfo() {
 
 function hubHook(ev, port, token) {
   if (COMMAND_EVENTS.has(ev)) {
-    return { type: 'command', command: `node "${RELAY_JS}"`, async: true, timeout: 5 };
+    return { type: 'command', command: `${NODE} "${RELAY_JS}"`, async: true, timeout: 5 };
   }
   return {
     type: 'http',
@@ -107,7 +111,7 @@ function hubHook(ev, port, token) {
 const isHubHook = (h) =>
   !!h &&
   ((typeof h.url === 'string' && h.url.includes(MARK)) ||
-    (typeof h.command === 'string' && /cc-hub[\\/]+integrations[\\/]+hooks[\\/]+relay\.js/i.test(h.command)));
+    (typeof h.command === 'string' && /hub[\\/]+integrations[\\/]+hooks[\\/]+relay\.js/i.test(h.command)));
 const isHubStatusline = (s) => !!(s && typeof s.command === 'string' && /statusline[\\/]+statusline\.js/i.test(s.command));
 
 /** CC Hub の hook を取り除いた hooks を返す(空になったグループ・イベントは消す) */
@@ -185,7 +189,7 @@ function previousStatusline(dir) {
 
 function main() {
   const { dir, port, token } = daemonInfo();
-  const statusLineCmd = { type: 'command', command: `node "${STATUSLINE_JS}"` };
+  const statusLineCmd = { type: 'command', command: `${NODE} "${STATUSLINE_JS}"` };
 
   // --emit: テスト用の単独 settings を書く
   if (EMIT) {
@@ -221,7 +225,7 @@ function main() {
     summary.push(`hook を追加: ${EVENTS.filter((e) => !replaced.has(e)).join(', ') || '(なし)'}`);
     if (replaced.size) summary.push(`hook を更新(既存の CC Hub エントリを置換): ${[...replaced].join(', ')}`);
     summary.push(`送信先: http://127.0.0.1:${port}${MARK}`);
-    if (WITH_STATUSLINE) {
+    if (WITH_STATUSLINE && !(STATUSLINE_IF_EMPTY && before.statusLine && !isHubStatusline(before.statusLine))) {
       if (!isHubStatusline(before.statusLine)) {
         summary.push(`statusLine: ${before.statusLine ? before.statusLine.command : '(なし)'} → ${statusLineCmd.command}`);
       }

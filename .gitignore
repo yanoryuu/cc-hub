@@ -4,3 +4,5 @@ out/
 *.log
 .env
 dist-p9/
+build/
+release/

@@ -1,6 +1,7 @@
 // CC Hub の再起動の予約: 「作業が終わったら再起動」を画面(と Discord の /status)から扱えるようにする。
 // - when: 'idle' = CC Hub のセッションに作業中(実行中 / 承認待ち / 起動中)のものが無い状態が 20 秒続いたら再起動。'now' = すぐ
 // - 再起動は scripts/deploy.ps1(build = false なら -SkipBuild)を切り離した PowerShell で実行する(このデーモンはそこで止められる)
+//   インストール版(deploy.ps1 が無い)は、新しいデーモンを起動してから自分が終了する(relaunchSelf。ビルドはしない)
 // - 再起動すると CC Hub のセッションは一度止まり、--resume で再開する
 import fs from 'node:fs';
 import path from 'node:path';
@@ -23,6 +24,8 @@ export interface RestartDeps {
   logFile: string;
   /** 再起動を実行する(テストで差し替える) */
   launch?: (script: string, build: boolean, logFile: string) => void;
+  /** インストール版(deploy.ps1 が無い): script の代わりにこれで再起動する(relaunchSelf) */
+  relaunch?: () => void;
 }
 
 /**
@@ -39,6 +42,39 @@ export function launchDeploy(script: string, build: boolean, logFile: string): v
     windowsHide: true,
   });
   child.on('error', (e) => console.error(`[restart] powershell を起動できません: ${e.message}`));
+}
+
+/**
+ * インストール版(deploy.ps1 が無い)の再起動: 同じ node と main.js で新しいデーモンを切り離して起動し、自分は終了する。
+ * 新しいデーモンは CC_HUB_WAIT_PID の終了を待ってから待ち受ける(ポートが空くまで)
+ */
+export function relaunchSelf(logFile: string, exit: () => void): void {
+  const fd = fs.openSync(logFile, 'a');
+  const child = spawn(process.execPath, process.argv.slice(1), {
+    detached: true,
+    windowsHide: true,
+    stdio: ['ignore', fd, fd],
+    env: { ...process.env, CC_HUB_WAIT_PID: String(process.pid) },
+  });
+  child.on('error', (e) => console.error(`[restart] 新しいデーモンを起動できません: ${e.message}`));
+  child.unref();
+  fs.closeSync(fd);
+  exit();
+}
+
+/** CC_HUB_WAIT_PID のプロセスが終わるまで待つ(最大 30 秒) */
+export async function waitForPid(pid: string | undefined): Promise<void> {
+  const n = Number(pid);
+  if (!n) return;
+  const deadline = Date.now() + 30_000;
+  while (Date.now() < deadline) {
+    try {
+      process.kill(n, 0);
+    } catch {
+      return;
+    }
+    await new Promise((r) => setTimeout(r, 300));
+  }
 }
 
 export class RestartScheduler {
@@ -64,7 +100,7 @@ export class RestartScheduler {
   /** 再起動を予約する(when = 'now' ならすぐ) */
   request(body: any): RestartStatus {
     if (this.state === 'restarting') throw new HttpError(409, '再起動を始めています');
-    if (!fs.existsSync(this.d.script)) throw new HttpError(500, `再起動のスクリプトが見つかりません: ${this.d.script}`);
+    if (!this.d.relaunch && !fs.existsSync(this.d.script)) throw new HttpError(500, `再起動のスクリプトが見つかりません: ${this.d.script}`);
     this.build = body?.build !== false;
     this.error = null;
     this.requestedAt = Date.now();
@@ -128,7 +164,8 @@ export class RestartScheduler {
     console.log(`[restart] 再起動します${this.build ? '(ビルドしてから)' : ''}。ログ: ${this.d.logFile}`);
     try {
       fs.mkdirSync(path.dirname(this.d.logFile), { recursive: true });
-      (this.d.launch ?? launchDeploy)(this.d.script, this.build, this.d.logFile);
+      if (this.d.relaunch) this.d.relaunch();
+      else (this.d.launch ?? launchDeploy)(this.d.script, this.build, this.d.logFile);
       // ビルドに失敗した場合などはデーモンが止められずに残る → しばらくしたら失敗として戻す
       setTimeout(() => {
         if (this.state !== 'restarting') return;

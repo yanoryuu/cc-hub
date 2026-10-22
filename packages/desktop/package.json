@@ -1,22 +1,61 @@
 {
   "name": "@cc-hub/desktop",
+  "productName": "CC Hub",
   "version": "0.1.0",
+  "description": "複数の Claude Code セッションをまとめて扱うハブ",
+  "author": "yanoryuu",
   "private": true,
   "main": "dist/main.js",
   "scripts": {
     "build": "esbuild src/main.ts src/preload.ts --bundle --platform=node --target=node22 --format=cjs --outdir=dist --external:electron --sourcemap",
     "start": "npm run build && electron .",
-    "typecheck": "tsc -p tsconfig.json"
-  },
-  "dependencies": {
-    "@cc-hub/shared": "0.1.0",
-    "ws": "^8.18.0"
+    "typecheck": "tsc -p tsconfig.json",
+    "dist": "node ../../scripts/stage-hub.cjs && electron-builder --win nsis"
   },
   "devDependencies": {
+    "@cc-hub/shared": "0.1.0",
     "@types/node": "^20.17.0",
     "@types/ws": "^8.5.13",
     "electron": "^33.3.1",
+    "electron-builder": "^25.1.8",
     "esbuild": "^0.24.2",
-    "typescript": "^5.7.3"
+    "typescript": "^5.7.3",
+    "ws": "^8.18.0"
+  },
+  "build": {
+    "appId": "com.yanoryuu.cchub",
+    "electronVersion": "33.4.11",
+    "productName": "CC Hub",
+    "artifactName": "CC-Hub-Setup-${version}.${ext}",
+    "directories": {
+      "output": "../../release"
+    },
+    "files": [
+      "dist/main.js",
+      "dist/preload.js",
+      "assets/**/*",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "../../build/hub",
+        "to": "hub"
+      }
+    ],
+    "npmRebuild": false,
+    "win": {
+      "target": "nsis",
+      "icon": "assets/app.ico"
+    },
+    "nsis": {
+      "oneClick": true,
+      "perMachine": false,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "CC Hub",
+      "runAfterFinish": true,
+      "deleteAppDataOnUninstall": false,
+      "include": "installer.nsh"
+    }
   }
 }

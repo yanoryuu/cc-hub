@@ -1,5 +1,8 @@
 // CC Hub デスクトップシェル(Electron)
 // デーモンを必要に応じて起動し、Web UI を表示する。終了してもデーモンは止めない。
+// インストール版(app.isPackaged): デーモン一式は resources/hub(同梱の cc-hub-node.exe で動かす)。
+//   ログイン時にトレイで起動し、デーモンが落ちていれば起こし直す(開発版の watchdog / スタートアップ登録の代わり)。
+//   初回(とバージョンが変わったとき)は Claude Code に hooks・MCP・スキルを登録する(setup.ts)
 import {
   app, BrowserWindow, Tray, Menu, Notification, globalShortcut, shell, session, nativeImage, ipcMain, dialog,
 } from 'electron';
@@ -9,11 +12,23 @@ import * as path from 'node:path';
 import * as http from 'node:http';
 import WebSocket from 'ws';
 import type { NotifyEvent } from '@cc-hub/shared';
+import { runSetup, setupDone, type SetupPaths, type SetupResult } from './setup';
 
 const DEFAULT_PORT = 7861;
 const dataDir = process.env.CC_HUB_DATA_DIR || path.join(process.env.APPDATA || app.getPath('appData'), 'cc-hub');
 const repoRoot = path.resolve(__dirname, '..', '..', '..'); // dist → desktop → packages → repo
-const daemonEntry = path.join(repoRoot, 'packages', 'daemon', 'dist', 'main.js');
+/** デーモン一式のルート(インストール版は resources/hub、開発版はリポジトリ) */
+const hubRoot = app.isPackaged ? path.join(process.resourcesPath, 'hub') : repoRoot;
+const daemonEntry = path.join(hubRoot, 'packages', 'daemon', 'dist', 'main.js');
+/** デーモンを動かす node(インストール版は同梱、開発版は PATH の node) */
+const nodeExe = app.isPackaged ? path.join(hubRoot, 'cc-hub-node.exe') : 'node';
+/** 検証用(CC_HUB_DATA_DIR を指定)の起動では、ログイン時の起動を登録しない */
+const isolated = !!process.env.CC_HUB_DATA_DIR;
+/** ログイン時の起動(--hidden)ではウィンドウを出さずにトレイに置く */
+const startHidden = process.argv.includes('--hidden');
+const WATCH_MS = 30_000;
+/** package.json の build.appId と同じ */
+const APP_ID = 'com.yanoryuu.cchub';
 const logPath = path.join(dataDir, 'daemon.log');
 const boundsPath = path.join(dataDir, 'desktop-window.json');
 
@@ -50,8 +65,8 @@ function healthy(): Promise<boolean> {
 function spawnDaemon(): void {
   fs.mkdirSync(dataDir, { recursive: true });
   const fd = fs.openSync(logPath, 'a');
-  const child = spawn('node', [daemonEntry], {
-    detached: true, windowsHide: true, stdio: ['ignore', fd, fd], cwd: repoRoot,
+  const child = spawn(nodeExe, [daemonEntry], {
+    detached: true, windowsHide: true, stdio: ['ignore', fd, fd], cwd: hubRoot,
   });
   child.on('error', (e) => fs.appendFileSync(logPath, `[desktop] spawn failed: ${e.message}\n`));
   child.unref();
@@ -106,6 +121,82 @@ async function load(): Promise<void> {
   });
   await win.loadURL(`http://127.0.0.1:${port}/`);
   connectWs();
+  if (app.isPackaged) void firstRunSetup();
+}
+
+// ---- インストール版 ----
+const setupPaths = (): SetupPaths => ({ hubRoot, node: nodeExe, dataDir, version: app.getVersion() });
+let settingUp = false;
+
+/** 初回(とバージョンが変わったとき)に Claude Code へつなぐ。前提が足りなければ案内する */
+async function firstRunSetup(): Promise<void> {
+  if (settingUp || setupDone(setupPaths())) return;
+  settingUp = true;
+  try {
+    const r = runSetup(setupPaths());
+    if (r.missing.length) await showMissing(r.missing);
+    else if (r.errors.length) {
+      await dialog.showMessageBox({
+        type: 'warning', title: 'CC Hub', message: 'Claude Code との連携の設定で失敗したものがあります',
+        detail: `${r.errors.join('\n')}\n\n詳しくは ${path.join(dataDir, 'setup.log')} を見てください。次に起動したときにもう一度試します。`,
+      });
+    } else {
+      await dialog.showMessageBox({
+        type: 'info', title: 'CC Hub', message: 'Claude Code と連携しました',
+        detail: 'CC Hub から起動したセッションに加えて、ターミナルや VS Code で使っている Claude Code もここに表示されます(起動し直したものから)。',
+      });
+    }
+  } finally {
+    settingUp = false;
+  }
+}
+
+async function showMissing(missing: SetupResult['missing']): Promise<void> {
+  const r = await dialog.showMessageBox({
+    type: 'warning', title: 'CC Hub', message: `${missing.map((m) => m.name).join(' と ')} が見つかりません`,
+    detail: `${missing.map((m) => `■ ${m.name}\n${m.how}`).join('\n\n')}\n\nインストールしたら、トレイの「再読み込み」か CC Hub の起動し直しで設定を続けます。`,
+    buttons: [...missing.map((m) => `${m.name} の入手方法を開く`), '閉じる'],
+    cancelId: missing.length,
+  });
+  const m = missing[r.response];
+  if (m) void shell.openExternal(m.url);
+}
+
+/** デーモンが落ちていたら起こし直す(開発版は watchdog.ps1 がやるので、インストール版だけ) */
+function watchDaemon(): void {
+  let restarting = false;
+  setInterval(async () => {
+    if (quitting || restarting || (await healthy())) return;
+    loadConfig();
+    if (await healthy()) return;
+    restarting = true;
+    try {
+      fs.appendFileSync(logPath, `[desktop] ${new Date().toISOString()} デーモンが応答しないので起動し直します\n`);
+      if ((await ensureDaemon()) && win) void load();
+    } finally {
+      restarting = false;
+    }
+  }, WATCH_MS).unref();
+}
+
+function loginItemEnabled(): boolean {
+  return app.getLoginItemSettings({ args: ['--hidden'] }).openAtLogin;
+}
+
+function setLoginItem(on: boolean): void {
+  // name = レジストリ(HKCU\...\Run)の値の名前。アンインストール時に installer.nsh が消す
+  app.setLoginItemSettings({ openAtLogin: on, args: ['--hidden'], name: 'CC Hub' });
+}
+
+/** 初めて起動したときだけ、ログイン時の起動を有効にする(あとはトレイのメニューで切り替える) */
+function initLoginItem(): void {
+  const flag = path.join(dataDir, 'desktop-login-item');
+  if (fs.existsSync(flag)) return;
+  setLoginItem(true);
+  try {
+    fs.mkdirSync(dataDir, { recursive: true });
+    fs.writeFileSync(flag, '1');
+  } catch { /* 無視 */ }
 }
 
 function createWindow(): void {
@@ -120,7 +211,7 @@ function createWindow(): void {
     },
   });
   if (b.max) win.maximize();
-  win.once('ready-to-show', () => win?.show());
+  win.once('ready-to-show', () => { if (!startHidden) win?.show(); });
   // 前面かどうかをデーモンに知らせる(表示中のセッションの通知を Discord などにも出さないため。セッションは画面側が送る)
   win.on('focus', () => reportFocus(true));
   win.on('blur', () => reportFocus(false));
@@ -153,6 +244,9 @@ function createTray(): void {
     { label: '表示', click: showWindow },
     { label: '再読み込み', click: () => { showWindow(); void load(); } },
     { label: 'デーモンのログを開く', click: () => { void shell.openPath(logPath); } },
+    ...(app.isPackaged && !isolated
+      ? [{ label: 'ログイン時に起動', type: 'checkbox' as const, checked: loginItemEnabled(), click: (i: Electron.MenuItem) => setLoginItem(i.checked) }]
+      : []),
     { type: 'separator' },
     { label: '終了', click: () => { quitting = true; app.quit(); } },
   ]));
@@ -226,9 +320,14 @@ if (!app.requestSingleInstanceLock()) {
   app.quit();
 } else {
   app.on('second-instance', showWindow);
-  app.setAppUserModelId('CC Hub');
+  // インストール版はインストーラーが作るショートカットの AppUserModelId(= appId)と合わせる(合わないと Windows の通知が出ない)
+  app.setAppUserModelId(app.isPackaged ? APP_ID : 'CC Hub');
   app.whenReady().then(() => {
     registerIpc();
+    if (app.isPackaged) {
+      if (!isolated) initLoginItem();
+      watchDaemon();
+    }
     createWindow();
     createTray();
     globalShortcut.register('Control+Shift+Space', toggleWindow);
