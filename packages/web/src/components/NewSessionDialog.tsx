@@ -1,6 +1,7 @@
 // 新規セッションダイアログ(プロジェクトから(worktree)/ フォルダで直接 / 履歴から再開)
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { HistoryEntry, SessionDraft, SessionInfo, SessionMode, StartSessionRequest } from '@cc-hub/shared';
+import { DEFAULT_SESSION_MODEL, isSessionModel, SESSION_MODELS } from '@cc-hub/shared';
 import { api, draftApi, errText, pick, repoApi } from '../api';
 import { useHub } from '../store';
 import { fmtAgo, fmtDate, projectLabel } from '../util';
@@ -34,6 +35,25 @@ function ModeSeg({ mode, setMode }: { mode: SessionMode; setMode: (m: SessionMod
     </div>
   );
 }
+
+/** 起動するモデル(既定は Opus) */
+function ModelSeg({ model, setModel }: { model: string; setModel: (m: string) => void }) {
+  return (
+    <div className="field">
+      <span>モデル</span>
+      <div className="seg small" role="radiogroup" aria-label="モデル">
+        {SESSION_MODELS.map((m) => (
+          <button type="button" role="radio" aria-checked={model === m.id} key={m.id} className={model === m.id ? 'on' : ''} onClick={() => setModel(m.id)}>
+            {m.label}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+/** 下書きのモデル(無い・古い値なら既定) */
+const draftModel = (d: SessionDraft | null): string => (d && isSessionModel(d.model) ? d.model : DEFAULT_SESSION_MODEL);
 
 function Dialog({ onClose }: { onClose: () => void }) {
   // 指定が無ければ、開いている管理画面のプロジェクトを最初から選んでおく
@@ -281,7 +301,7 @@ function DraftList({
               >
                 <span className="ns-draft-title">{draftLabel(d)}</span>
                 <span className="ns-draft-sub muted small">
-                  {d.kind === 'repo' ? (d.repoId ?? 'プロジェクト未選択') : d.cwd ? projectLabel(d.cwd) : 'フォルダ未選択'} · {d.mode} ·{' '}
+                  {d.kind === 'repo' ? (d.repoId ?? 'プロジェクト未選択') : d.cwd ? projectLabel(d.cwd) : 'フォルダ未選択'} · {d.mode} · {SESSION_MODELS.find((m) => m.id === draftModel(d))?.label} ·{' '}
                   {fmtAgo(d.updatedAt)}
                 </span>
               </button>
@@ -328,12 +348,13 @@ function RepoTab({ preset, busy, err, setErr, start, onClose, draft, fieldsRef, 
     return ready[0]?.id ?? '';
   });
   const [mode, setMode] = useState<SessionMode>(draft?.mode ?? 'commander');
+  const [model, setModel] = useState(() => draftModel(draft));
   const [instruction, setInstruction] = useState(draft?.instruction ?? '');
   const [name, setName] = useState(draft?.name ?? '');
   const [slug, setSlug] = useState(draft?.branchSlug ?? '');
   const [slugEdited, setSlugEdited] = useState(!!draft?.branchSlug);
   // 下書き用に今の内容を渡す(ブランチ名は自分で編集したときだけ残す)
-  fieldsRef.current = () => ({ kind: 'repo', repoId: repoId || null, cwd: null, instruction, name, branchSlug: slugEdited ? slug.trim() : '', mode });
+  fieldsRef.current = () => ({ kind: 'repo', repoId: repoId || null, cwd: null, instruction, name, branchSlug: slugEdited ? slug.trim() : '', mode, model });
   const [slugLoading, setSlugLoading] = useState(false);
   /** 候補の取得待ち(入力直後〜応答まで)。この間に起動したら slug は送らずデーモンに任せる */
   const [slugPending, setSlugPending] = useState(false);
@@ -414,7 +435,7 @@ function RepoTab({ preset, busy, err, setErr, start, onClose, draft, fieldsRef, 
       setErr('ブランチ名は英数字と - _ . / だけにしてください');
       return;
     }
-    const req: StartSessionRequest = { cwd: '', repoId: repo.id, mode };
+    const req: StartSessionRequest = { cwd: '', repoId: repo.id, mode, model };
     if (text) req.instruction = text;
     if (name.trim()) req.name = name.trim();
     // ユーザーが編集した値か、取得済みの候補があるときだけ送る(取得待ちならデーモンに生成を任せる)
@@ -528,6 +549,7 @@ function RepoTab({ preset, busy, err, setErr, start, onClose, draft, fieldsRef, 
         </span>
       </div>
       <ModeSeg mode={mode} setMode={setMode} />
+      <ModelSeg model={model} setModel={setModel} />
       <label className="field">
         <span>名前(任意)</span>
         <input value={name} onChange={(e) => setName(e.target.value)} placeholder="省略時はブランチ名" />
@@ -555,9 +577,10 @@ function FolderTab({ preset, busy, err, setErr, start, onClose, draft, fieldsRef
   const [cwd, setCwd] = useState(preset ?? '');
   const [q, setQ] = useState('');
   const [mode, setMode] = useState<SessionMode>(draft?.mode ?? 'commander');
+  const [model, setModel] = useState(() => draftModel(draft));
   const [name, setName] = useState(draft?.name ?? '');
   const [instruction, setInstruction] = useState(draft?.instruction ?? '');
-  fieldsRef.current = () => ({ kind: 'folder', repoId: null, cwd: cwd.trim() || null, instruction, name, branchSlug: '', mode });
+  fieldsRef.current = () => ({ kind: 'folder', repoId: null, cwd: cwd.trim() || null, instruction, name, branchSlug: '', mode, model });
 
   // 候補: ホームのフォルダ(セッションのあるフォルダ + 最近のプロジェクト)。先頭を自動選択はしない
   // (意図しない実プロジェクトで起動してしまうのを防ぐ)
@@ -582,7 +605,7 @@ function FolderTab({ preset, busy, err, setErr, start, onClose, draft, fieldsRef
       setErr('作業ディレクトリを指定してください');
       return;
     }
-    const req: StartSessionRequest = { cwd: c, mode };
+    const req: StartSessionRequest = { cwd: c, mode, model };
     if (name.trim()) req.name = name.trim();
     if (instruction.trim()) req.instruction = instruction.trim();
     void start(req);
@@ -646,6 +669,7 @@ function FolderTab({ preset, busy, err, setErr, start, onClose, draft, fieldsRef
         />
       </label>
       <ModeSeg mode={mode} setMode={setMode} />
+      <ModelSeg model={model} setModel={setModel} />
       <label className="field">
         <span>名前(任意)</span>
         <input value={name} onChange={(e) => setName(e.target.value)} placeholder="例: login-fix" />

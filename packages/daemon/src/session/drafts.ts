@@ -1,6 +1,6 @@
 // 新規セッションの下書き(指示・プロジェクト・ブランチ名など)。デーモンの設定に保存するので、スマホで書いて PC から起動できる。
 import crypto from 'node:crypto';
-import type { SessionDraft } from '@cc-hub/shared';
+import { isSessionModel, type SessionDraft } from '@cc-hub/shared';
 import type { Store } from '../store/db';
 import { HttpError } from '../util';
 
@@ -22,6 +22,7 @@ export function normalizeDraft(id: string, b: any, now = Date.now()): SessionDra
     name: str(b.name, 100),
     branchSlug: str(b.branchSlug, 100),
     mode: b.mode === 'plain' ? 'plain' : 'commander',
+    ...(isSessionModel(b.model) ? { model: b.model } : {}),
     updatedAt: now,
   };
   if (!d.instruction.trim() && !d.name.trim() && !d.branchSlug.trim()) throw new HttpError(400, '指示が空の下書きは保存できません');

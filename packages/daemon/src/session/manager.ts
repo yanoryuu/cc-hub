@@ -13,6 +13,8 @@ import type {
   SessionStatus,
   StartSessionRequest,
 } from '@cc-hub/shared';
+import { DEFAULT_SESSION_MODEL } from '@cc-hub/shared';
+import { sessionModel } from './model';
 import { bus } from '../bus';
 import { emitNotify } from '../notify/emit';
 import { artifactExcerpt, artifactFromHook, type ArtifactPublish } from '../notify/artifact';
@@ -119,7 +121,10 @@ export interface PendingStart {
   task?: string;
   /** 仮の cwd(worktree が決まるまではリポジトリの baseDir) */
   cwd: string;
+  /** StartSessionRequest.model(省略時は既定のモデル) */
+  model?: string;
 }
+
 
 export class SessionManager {
   private readonly sessions = new Map<string, Entry>();
@@ -184,6 +189,12 @@ export class SessionManager {
       console.warn(`[session] 共通の指示を探せませんでした: ${(err as Error).message}`);
     }
     return f ? ['--append-system-prompt-file', f] : [];
+  }
+
+  /** claude に毎回渡す引数(権限モード・モデル・共通の指示・config の claudeArgs)。claudeArgs に --model があればそちらを優先 */
+  private launchArgs(info: SessionInfo): string[] {
+    const model = this.cfg.claudeArgs.includes('--model') ? [] : ['--model', info.launchModel || DEFAULT_SESSION_MODEL];
+    return ['--permission-mode', this.cfg.permissionMode, ...model, ...this.instructionArgs(info), ...this.cfg.claudeArgs];
   }
 
   // ================================================================ 状態
@@ -415,6 +426,7 @@ export class SessionManager {
       branch: r.branch ?? null,
       handedOff: !!r.handed_off && !r.managed,
       task: r.task ?? null,
+      launchModel: r.launch_model ?? null,
     });
     if (r.launchers_json) {
       try {
@@ -434,6 +446,7 @@ export class SessionManager {
       throw new HttpError(400, `ディレクトリが存在しません: ${req.cwd ?? ''}`);
     }
     const mode = req.mode === 'commander' ? 'commander' : 'plain';
+    const model = sessionModel(req.model);
     const name = String(req.name || '').trim() || path.basename(cwd) || cwd;
     if (req.resume) {
       if (!UUID_RE.test(req.resume)) throw new HttpError(400, 'resume には session_id(UUID)を指定してください');
@@ -448,6 +461,8 @@ export class SessionManager {
       const keepCwd = !!existing?.info.worktreeId;
       Object.assign(info, { managed: true, handedOff: false, cwd: keepCwd ? info.cwd : cwd, mode, status: 'starting', exitCode: null, approval: null, currentTool: null });
       if (req.name) info.name = name;
+      // 指定が無ければ前回のモデルのまま(記録が無ければ既定)
+      if (model) info.launchModel = model;
       if (!info.task) info.task = taskText(req.instruction);
       e.endedAt = null;
       e.userStopped = false;
@@ -460,6 +475,7 @@ export class SessionManager {
     const info = this.blankInfo(id, name, cwd, true);
     info.mode = mode;
     info.permissionMode = this.cfg.permissionMode;
+    info.launchModel = model ?? DEFAULT_SESSION_MODEL;
     // commander でも保存するのは指示の本文だけ(/commander は付けない)
     info.task = taskText(req.instruction);
     const e = this.newEntry(info);
@@ -482,6 +498,7 @@ export class SessionManager {
     info.mode = o.mode;
     info.repoId = o.repoId;
     info.permissionMode = this.cfg.permissionMode;
+    info.launchModel = sessionModel(o.model) ?? DEFAULT_SESSION_MODEL;
     info.task = taskText(o.task);
     const e = this.newEntry(info);
     e.preparing = true;
@@ -618,7 +635,7 @@ export class SessionManager {
     const info = e.info;
     this.setIdleStopped(e, false);
     const args = o.resume ? ['--resume', this.resumeId(e)] : ['--session-id', info.id];
-    args.push('--permission-mode', this.cfg.permissionMode, '-n', info.name, ...this.instructionArgs(info), ...this.cfg.claudeArgs);
+    args.push('-n', info.name, ...this.launchArgs(info));
     if (o.prompt) args.push(o.prompt);
     const fi = args.indexOf('--append-system-prompt-file');
     if (fi >= 0) console.log(`[session] 共通の指示を渡します: ${info.name} --append-system-prompt-file ${args[fi + 1]}`);
@@ -898,7 +915,7 @@ export class SessionManager {
       cwd: info.cwd,
       claudePath: this.cfg.claudePath,
       resumeId,
-      extraArgs: ['--permission-mode', this.cfg.permissionMode, ...this.instructionArgs(info), ...this.cfg.claudeArgs],
+      extraArgs: this.launchArgs(info),
     };
     // 引用できないパスなどは PTY を止める前に弾く
     buildTerminalArgv(spec);
@@ -1084,7 +1101,7 @@ export class SessionManager {
       cwd: info.cwd,
       claudePath: this.cfg.claudePath,
       resumeId,
-      extraArgs: ['--permission-mode', this.cfg.permissionMode, ...this.instructionArgs(info), ...this.cfg.claudeArgs],
+      extraArgs: this.launchArgs(info),
     };
     let launched: { file: string; args: string[] };
     try {

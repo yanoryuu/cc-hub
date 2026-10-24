@@ -6,6 +6,7 @@ import { bus } from '../bus';
 import type { HubConfig } from '../config';
 import type { Store } from '../store/db';
 import type { SessionManager } from '../session/manager';
+import { sessionModel } from '../session/model';
 import { HttpError, clampInt } from '../util';
 import { git, gitOk, normPath, overlaps, tail } from './exec';
 import { isInside } from '../project/parse';
@@ -436,6 +437,7 @@ export class RepoManager {
       repoId: repo.id,
       cwd: repo.baseDir,
       task: req.instruction,
+      model: sessionModel(req.model),
     });
     void this.prepare(info.id, repo, req, userSlug, !name);
     return info;

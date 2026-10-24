@@ -71,7 +71,20 @@ export interface SessionInfo {
   launchers?: AppLauncher[];
   /** 使っていないので CC Hub が自動で止めた(「再開」で続きから。作業ツリーは自動解放しない) */
   idleStopped?: boolean;
+  /** CC Hub が起動時に --model で渡したモデル(SESSION_MODELS の id。再開時も同じものを渡す)。外部セッションは null */
+  launchModel?: string | null;
 }
+
+/** 新規セッションで選べるモデル(id は claude --model に渡す別名) */
+export const SESSION_MODELS = [
+  { id: 'fable', label: 'Fable' },
+  { id: 'opus', label: 'Opus' },
+  { id: 'sonnet', label: 'Sonnet' },
+  { id: 'haiku', label: 'Haiku' },
+] as const;
+export type SessionModel = (typeof SESSION_MODELS)[number]['id'];
+export const DEFAULT_SESSION_MODEL: SessionModel = 'opus';
+export const isSessionModel = (v: unknown): v is SessionModel => SESSION_MODELS.some((m) => m.id === v);
 
 /** 使っていないセッションの自動停止(GET / PUT /api/idle-stop) */
 export interface IdleStopSettings {
@@ -526,6 +539,8 @@ export interface SessionDraft {
   /** feat/ の後ろ(空 = 自動生成) */
   branchSlug: string;
   mode: SessionMode;
+  /** SESSION_MODELS の id(古い下書きには無い) */
+  model?: string;
   updatedAt: number;
 }
 
@@ -558,6 +573,8 @@ export interface StartSessionRequest {
   instruction?: string;
   /** 既存セッションの再開 */
   resume?: string;
+  /** claude --model に渡すモデル(SESSION_MODELS の id)。省略時は DEFAULT_SESSION_MODEL(再開時は前回のもの) */
+  model?: string;
 }
 
 export interface ProjectEntry {
