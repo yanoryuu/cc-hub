@@ -617,6 +617,14 @@ async function handle(d: ServerDeps, req: http.IncomingMessage, res: http.Server
     return json(res, 200, { ok: true, worktree });
   }
 
+  // 新規セッションのモード
+  if (p === '/api/modes' && method === 'GET') return json(res, 200, { ok: true, modes: d.sessions.modes.list() });
+  if (p === '/api/modes' && method === 'PUT') {
+    const b = await readBody(req);
+    return json(res, 200, { ok: true, modes: d.sessions.modes.put(b?.modes) });
+  }
+  if (p === '/api/modes/reset' && method === 'POST') return json(res, 200, { ok: true, modes: d.sessions.modes.reset() });
+
   // 新規セッションの下書き
   if (p === '/api/drafts' && method === 'GET') return json(res, 200, { ok: true, drafts: d.drafts.list() });
   const dm = /^\/api\/drafts\/([^/]+)$/.exec(p);

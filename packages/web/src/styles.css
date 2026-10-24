@@ -8913,3 +8913,66 @@ th[aria-sort='descending'] .th-arrow {
 .appr-fold {
   flex: none;
 }
+
+/* 新規セッションのモード(新規セッションの画面 / 設定 → モード) */
+.seg.mode-seg {
+  flex-wrap: wrap;
+  max-width: 100%;
+}
+.mode-list {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.mode-item {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg);
+}
+.mode-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 6px;
+  min-width: 0;
+}
+.mode-name {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  text-align: left;
+  padding: 4px 4px;
+  overflow: hidden;
+}
+.mode-desc {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+.mode-tags {
+  display: flex;
+  gap: 4px;
+  flex-shrink: 0;
+}
+.mode-edit {
+  border-top: 1px solid var(--border);
+  padding: 10px 12px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.mode-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 10px;
+}
+@media (max-width: 600px) {
+  .mode-desc,
+  .mode-tags {
+    display: none;
+  }
+}

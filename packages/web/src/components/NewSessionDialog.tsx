@@ -2,6 +2,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { HistoryEntry, SessionDraft, SessionInfo, SessionMode, StartSessionRequest } from '@cc-hub/shared';
 import { DEFAULT_SESSION_MODEL, isSessionModel, SESSION_MODELS } from '@cc-hub/shared';
+import { useModes } from '../modes';
 import { api, draftApi, errText, pick, repoApi } from '../api';
 import { useHub } from '../store';
 import { fmtAgo, fmtDate, projectLabel } from '../util';
@@ -20,20 +21,47 @@ export function NewSessionDialog() {
   return <Dialog onClose={() => setOpen(false)} />;
 }
 
-function ModeSeg({ mode, setMode }: { mode: SessionMode; setMode: (m: SessionMode) => void }) {
+/** モード(設定 → モード で編集)。モデルを決めているモードは、選んだときにモデルもそれに合わせる */
+function ModeSeg({ mode, setMode, setModel }: { mode: SessionMode; setMode: (m: SessionMode) => void; setModel: (m: string) => void }) {
+  const modes = useModes();
+  const cur = modes.find((m) => m.id === mode);
   return (
     <div className="field">
       <span>モード</span>
-      <div className="seg small">
-        <button type="button" className={mode === 'commander' ? 'on' : ''} onClick={() => setMode('commander')}>
-          commander
-        </button>
-        <button type="button" className={mode === 'plain' ? 'on' : ''} onClick={() => setMode('plain')}>
-          plain
-        </button>
+      <div className="seg small mode-seg" role="radiogroup" aria-label="モード">
+        {modes.map((m) => (
+          <button
+            type="button"
+            role="radio"
+            aria-checked={mode === m.id}
+            key={m.id}
+            className={mode === m.id ? 'on' : ''}
+            title={m.description}
+            onClick={() => {
+              setMode(m.id);
+              if (m.model) setModel(m.model);
+            }}
+          >
+            {m.label}
+          </button>
+        ))}
       </div>
+      {cur ? (
+        cur.description && <span className="hint">{cur.description}</span>
+      ) : (
+        <span className="hint warn-text">このモードは設定から消されています。別のモードを選んでください</span>
+      )}
     </div>
   );
+}
+
+/** 指示欄の案内(モードごと) */
+function instructionHint(mode: SessionMode, fallback: string): string {
+  if (mode === 'commander') return '/commander に渡す指示(例: ログイン後のリダイレクトを直して)';
+  if (mode === 'review') return '見直す対象(空なら今の変更。PR 番号や観点も書けます)';
+  if (mode === 'fix') return '不具合の内容(例: 保存ボタンを押しても保存されない)';
+  if (mode === 'marketing') return '依頼(例: ストアページを ASO の観点で点検して)';
+  return fallback;
 }
 
 /** 起動するモデル(既定は Opus) */
@@ -517,7 +545,7 @@ function RepoTab({ preset, busy, err, setErr, start, onClose, draft, fieldsRef, 
           rows={4}
           value={instruction}
           onChange={(e) => setInstruction(e.target.value)}
-          placeholder={mode === 'commander' ? '/commander に渡す指示(例: ログイン後のリダイレクトを直して)' : '最初のプロンプト'}
+          placeholder={instructionHint(mode, '最初のプロンプト')}
         />
       </label>
       <div className="field">
@@ -548,7 +576,7 @@ function RepoTab({ preset, busy, err, setErr, start, onClose, draft, fieldsRef, 
               : '指示の入力が止まると候補を出します。編集もできます'}
         </span>
       </div>
-      <ModeSeg mode={mode} setMode={setMode} />
+      <ModeSeg mode={mode} setMode={setMode} setModel={setModel} />
       <ModelSeg model={model} setModel={setModel} />
       <label className="field">
         <span>名前(任意)</span>
@@ -665,10 +693,10 @@ function FolderTab({ preset, busy, err, setErr, start, onClose, draft, fieldsRef
           rows={3}
           value={instruction}
           onChange={(e) => setInstruction(e.target.value)}
-          placeholder={mode === 'commander' ? '/commander に渡す指示' : '最初のプロンプト(任意)'}
+          placeholder={instructionHint(mode, '最初のプロンプト(任意)')}
         />
       </label>
-      <ModeSeg mode={mode} setMode={setMode} />
+      <ModeSeg mode={mode} setMode={setMode} setModel={setModel} />
       <ModelSeg model={model} setModel={setModel} />
       <label className="field">
         <span>名前(任意)</span>

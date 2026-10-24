@@ -15,6 +15,7 @@ import type {
 } from '@cc-hub/shared';
 import { DEFAULT_SESSION_MODEL } from '@cc-hub/shared';
 import { sessionModel } from './model';
+import { buildModePrompt, hasLocalCommander, READ_ONLY_ARG, SessionModes } from './modes';
 import { bus } from '../bus';
 import { emitNotify } from '../notify/emit';
 import { artifactExcerpt, artifactFromHook, type ArtifactPublish } from '../notify/artifact';
@@ -147,7 +148,12 @@ export class SessionManager {
     private readonly store: Store,
     private readonly agents: AgentTree,
     private readonly usage: UsageTracker,
-  ) {}
+  ) {
+    this.modes = new SessionModes(store);
+  }
+
+  /** 新規セッションのモード(設定で編集できる) */
+  readonly modes: SessionModes;
 
   setRepoHooks(h: RepoHooks): void {
     this.repoHooks = h;
@@ -191,10 +197,16 @@ export class SessionManager {
     return f ? ['--append-system-prompt-file', f] : [];
   }
 
-  /** claude に毎回渡す引数(権限モード・モデル・共通の指示・config の claudeArgs)。claudeArgs に --model があればそちらを優先 */
-  private launchArgs(info: SessionInfo): string[] {
+  /**
+   * claude に毎回渡す引数(権限モード・モデル・モードの書き換え禁止・共通の指示・config の claudeArgs)。
+   * モードの権限モード(plan など)は最初の起動だけ(first)。claudeArgs に --model があればそちらを優先
+   */
+  private launchArgs(info: SessionInfo, first = false): string[] {
+    const mode = this.modes.get(info.mode);
+    const perm = (first && mode?.permissionMode) || this.cfg.permissionMode;
     const model = this.cfg.claudeArgs.includes('--model') ? [] : ['--model', info.launchModel || DEFAULT_SESSION_MODEL];
-    return ['--permission-mode', this.cfg.permissionMode, ...model, ...this.instructionArgs(info), ...this.cfg.claudeArgs];
+    const ro = mode?.readOnly ? [READ_ONLY_ARG] : [];
+    return ['--permission-mode', perm, ...model, ...ro, ...this.instructionArgs(info), ...this.cfg.claudeArgs];
   }
 
   // ================================================================ 状態
@@ -445,8 +457,10 @@ export class SessionManager {
     if (!req.cwd || !fs.existsSync(cwd) || !fs.statSync(cwd).isDirectory()) {
       throw new HttpError(400, `ディレクトリが存在しません: ${req.cwd ?? ''}`);
     }
-    const mode = req.mode === 'commander' ? 'commander' : 'plain';
-    const model = sessionModel(req.model);
+    const preset = this.modes.resolve(req.mode);
+    const mode = preset.id;
+    // 画面で選んだモデル > モードのモデル
+    const model = sessionModel(req.model) ?? preset.model ?? undefined;
     const name = String(req.name || '').trim() || path.basename(cwd) || cwd;
     if (req.resume) {
       if (!UUID_RE.test(req.resume)) throw new HttpError(400, 'resume には session_id(UUID)を指定してください');
@@ -498,7 +512,7 @@ export class SessionManager {
     info.mode = o.mode;
     info.repoId = o.repoId;
     info.permissionMode = this.cfg.permissionMode;
-    info.launchModel = sessionModel(o.model) ?? DEFAULT_SESSION_MODEL;
+    info.launchModel = sessionModel(o.model) ?? this.modes.get(o.mode)?.model ?? DEFAULT_SESSION_MODEL;
     info.task = taskText(o.task);
     const e = this.newEntry(info);
     e.preparing = true;
@@ -620,14 +634,9 @@ export class SessionManager {
     }
   }
 
-  /** commander: リポジトリに .claude/skills/commander があれば /commander、無ければ /hub-commander */
+  /** モードに合わせた最初の指示(commander は、リポジトリに .claude/skills/commander があれば /commander、無ければ /hub-commander) */
   private buildPrompt(mode: string, cwd: string, instruction?: string): string | undefined {
-    const text = String(instruction ?? '').trim();
-    if (mode === 'commander') {
-      const skill = fs.existsSync(path.join(cwd, '.claude', 'skills', 'commander', 'SKILL.md')) ? '/commander' : '/hub-commander';
-      return text ? `${skill} ${text}` : skill;
-    }
-    return text || undefined;
+    return buildModePrompt(this.modes.get(mode), instruction, hasLocalCommander(cwd));
   }
 
   /** claude を PTY で起動する。CLAUDE* 環境変数は全部取り除く(検証 X2) */
@@ -635,7 +644,7 @@ export class SessionManager {
     const info = e.info;
     this.setIdleStopped(e, false);
     const args = o.resume ? ['--resume', this.resumeId(e)] : ['--session-id', info.id];
-    args.push('-n', info.name, ...this.launchArgs(info));
+    args.push('-n', info.name, ...this.launchArgs(info, !o.resume));
     if (o.prompt) args.push(o.prompt);
     const fi = args.indexOf('--append-system-prompt-file');
     if (fi >= 0) console.log(`[session] 共通の指示を渡します: ${info.name} --append-system-prompt-file ${args[fi + 1]}`);

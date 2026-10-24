@@ -12,7 +12,82 @@ export type SessionStatus =
   | 'error'
   | 'stopped';
 
-export type SessionMode = 'commander' | 'plain';
+/** セッションのモード(ModePreset の id)。'commander' と 'plain' は必ずある */
+export type SessionMode = string;
+
+/**
+ * 新規セッションのモード(設定 → モード で追加・編集・並べ替えできる)。
+ * prompt は最初の指示の組み立て方: {{instruction}} を指示に置き換える。無ければ「prompt + 空白 + 指示」。
+ * 先頭の /commander は、リポジトリに commander スキルが無ければ /hub-commander になる
+ */
+export interface ModePreset {
+  id: string;
+  label: string;
+  description: string;
+  prompt: string;
+  /** 最初の起動だけ使う権限モード(null = CC Hub の設定のまま)。再開時は CC Hub の設定に戻す */
+  permissionMode: ModePermission | null;
+  /** 選んだときのモデル(null = 画面で選んだまま) */
+  model: string | null;
+  /** Edit / Write / NotebookEdit を使わせない */
+  readOnly: boolean;
+}
+
+export const MODE_PERMISSIONS = ['default', 'acceptEdits', 'auto', 'plan'] as const;
+export type ModePermission = (typeof MODE_PERMISSIONS)[number];
+/** 消せないモード(PR の画面や /hub new が使う) */
+export const BUILTIN_MODE_IDS = ['commander', 'plain'];
+
+export const DEFAULT_MODES: ModePreset[] = [
+  {
+    id: 'commander',
+    label: 'commander',
+    description: 'タスクに分けてサブエージェントで並行して進める',
+    prompt: '/commander',
+    permissionMode: null,
+    model: null,
+    readOnly: false,
+  },
+  { id: 'plain', label: 'plain', description: '指示をそのまま渡す(普通の Claude Code)', prompt: '', permissionMode: null, model: null, readOnly: false },
+  {
+    id: 'plan',
+    label: 'plan',
+    description: '計画モードで起動。書き換えずに計画を出し、承認を待つ',
+    prompt: '',
+    permissionMode: 'plan',
+    model: null,
+    readOnly: false,
+  },
+  {
+    id: 'review',
+    label: 'review',
+    description: '/code-review で変更や PR を見直す(書き換えない)',
+    prompt: '/code-review',
+    permissionMode: null,
+    model: 'sonnet',
+    readOnly: true,
+  },
+  {
+    id: 'fix',
+    label: 'fix',
+    description: '原因を調べ、再現を確かめてから直し、テストで確認する',
+    prompt:
+      '次の不具合を直してください。まず原因を調べ、再現するテスト(難しければ再現手順)を用意してから直し、直ったことをテストや実行で確かめてから報告してください。原因と確かめ方も報告に書いてください。不具合: {{instruction}}',
+    permissionMode: null,
+    model: null,
+    readOnly: false,
+  },
+  {
+    id: 'marketing',
+    label: 'marketing',
+    description: 'マーケティング・ASO のスキルを使う(コードは書き換えない)',
+    prompt:
+      'マーケティングの依頼です。インストール済みのマーケティング用スキル(marketing-skills・aso-skills・marketing)から合うものを使ってください。リポジトリのコードやファイルは書き換えず、成果物は文書(Artifact など)にまとめてください。依頼: {{instruction}}',
+    permissionMode: null,
+    model: null,
+    readOnly: true,
+  },
+];
 
 export interface ApprovalOption {
   n: string; // 画面上の番号("1" など)
@@ -924,6 +999,9 @@ export type ServerMessage =
 //   POST /api/sessions/:id/control {action: 'stop'|'restart'|'remove'}
 //   POST /api/sessions/:id/approve {option: string}      (番号 / 'y' / 'n')
 //   POST /api/sessions/:id/rename  {name}
+//   GET  /api/modes                                    → {ok, modes: ModePreset[]}  新規セッションのモード(並び順どおり)
+//   PUT  /api/modes                {modes: ModePreset[]} → {ok, modes}  一覧ごと保存(commander / plain は消せない)
+//   POST /api/modes/reset          {}                   → {ok, modes}  既定の 6 つに戻す
 //   GET  /api/drafts                                   → {ok, drafts: SessionDraft[]}  新規セッションの下書き(新しい順・最大 50 件)
 //   PUT  /api/drafts/:id          Partial<SessionDraft> → {ok, draft}   上書き保存(id が 'new' なら新規)
 //   DELETE /api/drafts/:id

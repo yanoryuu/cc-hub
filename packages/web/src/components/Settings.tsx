@@ -1,4 +1,4 @@
-// 設定画面: 通知(Windows / Discord)・アップロード先のサーバー・Claude との連携(CC Hub の MCP)
+// 設定画面: 通知(Windows / Discord)・アップロード先のサーバー・Claude との連携(CC Hub の MCP)・新規セッションのモード
 // デスクトップは中央の表示(上部バーの ⚙)、モバイルは「その他 → 設定」
 import { useEffect, useMemo, useState } from 'react';
 import type {
@@ -34,11 +34,13 @@ import { ConfirmModal, Spinner } from './RepoCommon';
 import { FolderInput } from './FolderPicker';
 import { DeployHistory, ServerCard } from './Deploy';
 import { FirebaseMcpSection } from './Firebase';
+import { ModesSection } from './ModeSettings';
 
 const SECTIONS: { id: SettingsTab; label: string }[] = [
   { id: 'notify', label: '通知' },
   { id: 'servers', label: 'アップロード先のサーバー' },
   { id: 'mcp', label: 'Claude との連携(MCP)' },
+  { id: 'modes', label: 'モード' },
   { id: 'hub', label: 'CC Hub' },
 ];
 
@@ -60,7 +62,7 @@ export function SettingsScreen({ mobile = false }: { mobile?: boolean }) {
         ))}
       </div>
       <div role="tabpanel">
-        {tab === 'notify' ? <NotifySection mobile={mobile} /> : tab === 'servers' ? <ServersSection /> : tab === 'hub' ? <HubSection /> : <McpSection />}
+        {tab === 'notify' ? <NotifySection mobile={mobile} /> : tab === 'servers' ? <ServersSection /> : tab === 'hub' ? <HubSection /> : tab === 'modes' ? <ModesSection /> : <McpSection />}
       </div>
     </div>
   );

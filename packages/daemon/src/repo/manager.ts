@@ -433,7 +433,7 @@ export class RepoManager {
     const name = String(req.name || '').trim();
     const info = this.sessions.createPending({
       name: name || userSlug || repo.name,
-      mode: req.mode === 'commander' ? 'commander' : 'plain',
+      mode: this.sessions.modes.resolve(req.mode).id,
       repoId: repo.id,
       cwd: repo.baseDir,
       task: req.instruction,

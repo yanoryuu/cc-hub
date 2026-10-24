@@ -21,7 +21,8 @@ export function normalizeDraft(id: string, b: any, now = Date.now()): SessionDra
     instruction: str(b.instruction, TEXT_MAX),
     name: str(b.name, 100),
     branchSlug: str(b.branchSlug, 100),
-    mode: b.mode === 'plain' ? 'plain' : 'commander',
+    // モードは後から消されることもあるので id の形だけ確かめる(開くときに無ければ画面が既定に戻す)
+    mode: /^[a-z0-9][a-z0-9-]{0,31}$/.test(String(b.mode ?? '')) ? String(b.mode) : 'commander',
     ...(isSessionModel(b.model) ? { model: b.model } : {}),
     updatedAt: now,
   };
