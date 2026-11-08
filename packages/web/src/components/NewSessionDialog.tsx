@@ -3,7 +3,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import type { HistoryEntry, SessionDraft, SessionInfo, SessionMode, StartSessionRequest } from '@cc-hub/shared';
 import { DEFAULT_SESSION_MODEL, isSessionModel, SESSION_MODELS } from '@cc-hub/shared';
 import { useModes } from '../modes';
-import { api, draftApi, errText, pick, repoApi } from '../api';
+import { api, draftApi, errText, pick, repoApi, sessionApi } from '../api';
 import { useHub } from '../store';
 import { fmtAgo, fmtDate, projectLabel } from '../util';
 import { matchQuery, useProjectCatalog, useRecentProjects } from '../home';
@@ -99,6 +99,8 @@ function Dialog({ onClose }: { onClose: () => void }) {
   const [tab, setTab] = useState<Tab>(() => (presetCwd ? 'folder' : presetRepo || readyRepos.length > 0 ? 'repo' : 'folder'));
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  /** 「自動で止めない」(起動後にセッションへ設定する) */
+  const [keep, setKeep] = useState(false);
   // 下書き: 一覧(デーモンに保存)・開いている下書き・フォームの作り直し用のキー
   const [drafts, setDrafts] = useState<SessionDraft[] | null>(null);
   const [draft, setDraft] = useState<SessionDraft | null>(null);
@@ -185,6 +187,7 @@ function Dialog({ onClose }: { onClose: () => void }) {
       if (s && s.id) {
         st.upsertSession(s);
         st.open(s.id);
+        if (keep) void sessionApi.keep(s.id, true).catch(() => {});
       }
       startedRef.current = true;
       // 下書きから起動したら、その下書きは消す
@@ -214,6 +217,8 @@ function Dialog({ onClose }: { onClose: () => void }) {
 
   const tabProps = {
     busy,
+    keep,
+    setKeep,
     err,
     setErr: (e: string | null) => {
       setErr(e);
@@ -277,6 +282,18 @@ interface TabProps {
   fieldsRef: React.MutableRefObject<(() => DraftFields) | null>;
   onSaveDraft: () => void;
   savedNote: string | null;
+  keep: boolean;
+  setKeep: (v: boolean) => void;
+}
+
+/** 「自動で止めない」(設定の「使っていないセッションを自動で止める」の対象から外す) */
+function KeepCheck({ keep, setKeep }: { keep: boolean; setKeep: (v: boolean) => void }) {
+  return (
+    <label className="check-inline" title="何時間使っていなくても、このセッションは自動で止めません(あとからセッションの詳細でも変えられます)">
+      <input type="checkbox" checked={keep} onChange={(e) => setKeep(e.target.checked)} />
+      自動で止めない
+    </label>
+  );
 }
 
 type DraftFields = Omit<SessionDraft, 'id' | 'updatedAt'>;
@@ -361,7 +378,7 @@ function DraftButton({ onSaveDraft, busy }: { onSaveDraft: () => void; busy: boo
 
 // ---------------------------------------------------------------- リポジトリから
 
-function RepoTab({ preset, busy, err, setErr, start, onClose, draft, fieldsRef, onSaveDraft, savedNote }: TabProps & { preset: string | null }) {
+function RepoTab({ preset, busy, err, setErr, start, onClose, draft, fieldsRef, onSaveDraft, savedNote, keep, setKeep }: TabProps & { preset: string | null }) {
   const repos = useRepoList();
   const wtByRepo = useWorktreesByRepo();
   const openRepos = useHub((s) => s.openRepos);
@@ -578,6 +595,7 @@ function RepoTab({ preset, busy, err, setErr, start, onClose, draft, fieldsRef, 
       </div>
       <ModeSeg mode={mode} setMode={setMode} setModel={setModel} />
       <ModelSeg model={model} setModel={setModel} />
+      <KeepCheck keep={keep} setKeep={setKeep} />
       <label className="field">
         <span>名前(任意)</span>
         <input value={name} onChange={(e) => setName(e.target.value)} placeholder="省略時はブランチ名" />
@@ -599,7 +617,7 @@ function RepoTab({ preset, busy, err, setErr, start, onClose, draft, fieldsRef, 
 
 // ---------------------------------------------------------------- フォルダで直接
 
-function FolderTab({ preset, busy, err, setErr, start, onClose, draft, fieldsRef, onSaveDraft, savedNote }: TabProps & { preset: string | null }) {
+function FolderTab({ preset, busy, err, setErr, start, onClose, draft, fieldsRef, onSaveDraft, savedNote, keep, setKeep }: TabProps & { preset: string | null }) {
   const cat = useProjectCatalog();
   const recent = useRecentProjects();
   const [cwd, setCwd] = useState(preset ?? '');
@@ -698,6 +716,7 @@ function FolderTab({ preset, busy, err, setErr, start, onClose, draft, fieldsRef
       </label>
       <ModeSeg mode={mode} setMode={setMode} setModel={setModel} />
       <ModelSeg model={model} setModel={setModel} />
+      <KeepCheck keep={keep} setKeep={setKeep} />
       <label className="field">
         <span>名前(任意)</span>
         <input value={name} onChange={(e) => setName(e.target.value)} placeholder="例: login-fix" />

@@ -20,7 +20,7 @@ import { bus } from '../bus';
 import { emitNotify } from '../notify/emit';
 import { artifactExcerpt, artifactFromHook, type ArtifactPublish } from '../notify/artifact';
 import { dataDir, type HubConfig } from '../config';
-import { IDLE_STOPPED_KEY, IDLE_STOP_KEY, isIdleTooLong, normalizeIdleStop } from './idlestop';
+import { IDLE_KEEP_KEY, IDLE_STOPPED_KEY, IDLE_STOP_KEY, isIdleTooLong, normalizeIdleStop } from './idlestop';
 
 // 終了したセッションの最後の画面(デーモン再起動後も「どう終わったか」を見られるように保存する)
 const SCREEN_MAX_BYTES = 512 * 1024;
@@ -139,6 +139,8 @@ export class SessionManager {
   private repoForCwd: ((cwd: string) => string | null) | null = null;
   /** 使っていないので自動で止めたセッション(作業ツリーの自動解放を見送るため、再起動をまたいで覚えておく) */
   private readonly idleStoppedIds = new Set<string>();
+  /** 「自動で止めない」にしたセッション */
+  private readonly keepIds = new Set<string>();
   /** 前回配信したときの isRunning(変化したときだけ liveListeners を呼ぶ) */
   private readonly liveCache = new Map<string, boolean>();
   private readonly liveListeners: ((id: string, live: boolean) => void)[] = [];
@@ -365,9 +367,11 @@ export class SessionManager {
     const now = Date.now();
     const idleCfg = this.idleStopSettings();
     for (const id of this.store.getSetting<string[]>(IDLE_STOPPED_KEY) ?? []) this.idleStoppedIds.add(id);
+    for (const id of this.store.getSetting<string[]>(IDLE_KEEP_KEY) ?? []) this.keepIds.add(id);
     for (const r of this.store.loadSessions()) {
       const info = this.rowToInfo(r);
       if (this.idleStoppedIds.has(info.id)) info.idleStopped = true;
+      if (this.keepIds.has(info.id)) info.keepAlive = true;
       const e = this.newEntry(info);
       e.endedAt = r.ended_at;
       if (r.claude_session_id && r.claude_session_id !== info.id) {
@@ -754,6 +758,7 @@ export class SessionManager {
       if (e.tokenTimer) clearTimeout(e.tokenTimer);
       e.host?.dispose();
       this.setIdleStopped(e, false);
+      this.setKeep(e, false);
       this.sessions.delete(id);
       this.liveCache.delete(id);
       this.store.deleteSession(id);
@@ -1511,6 +1516,22 @@ export class SessionManager {
     const s = normalizeIdleStop(v);
     this.store.setSetting(IDLE_STOP_KEY, s);
     return s;
+  }
+
+  /** 「自動で止めない」の切り替え(POST /api/sessions/:id/keep) */
+  setKeepAlive(id: string, on: unknown): SessionInfo {
+    const e = this.require(id);
+    this.setKeep(e, on === true);
+    this.touch(e, false);
+    return { ...e.info };
+  }
+
+  private setKeep(e: Entry, on: boolean): void {
+    if (!!e.info.keepAlive === on) return;
+    e.info.keepAlive = on;
+    if (on) this.keepIds.add(e.info.id);
+    else this.keepIds.delete(e.info.id);
+    this.store.setSetting(IDLE_KEEP_KEY, [...this.keepIds]);
   }
 
   private setIdleStopped(e: Entry, on: boolean): void {

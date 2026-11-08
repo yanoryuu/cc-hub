@@ -6,6 +6,7 @@ import { TerminalView, type TerminalHandle } from './TerminalView';
 import { ApprovalBanner } from './Approval';
 import { ReleaseBanner } from './ReleaseBanner';
 import { Composer } from './Composer';
+import { ChatView, type ChatHandle } from './ChatView';
 import { ConflictDialog, TakeoverPanel, useTakeover } from './Handoff';
 import { sessionApi } from '../api';
 import { flushPendingSend, usePendingSend } from '../composer';
@@ -77,6 +78,20 @@ export function QuickKeys({ session, termRef }: { session: SessionInfo; termRef:
   );
 }
 
+/** スマホの表示: チャット(返信だけ)/ 端末(ターミナルそのまま)。既定はチャット。切り替えは保存 */
+function useMobileView(): ['chat' | 'term', () => void] {
+  const [view, setView] = useState<'chat' | 'term'>(() => (readLocal('cchub_mview', 'chat') === 'term' ? 'term' : 'chat'));
+  return [
+    view,
+    () =>
+      setView((v) => {
+        const next = v === 'chat' ? 'term' : 'chat';
+        writeLocal('cchub_mview', next);
+        return next;
+      }),
+  ];
+}
+
 /** クイックキーの開閉(既定: デスクトップは閉じる / スマホは開く。開閉は保存) */
 function useQuickKeysOpen(desktop: boolean): [boolean, () => void] {
   const key = desktop ? 'cchub_qk_desk' : 'cchub_qk_mob';
@@ -99,9 +114,14 @@ export function SessionPane({
   session: SessionInfo;
   desktop: boolean;
   /** 上部に置くヘッダー(デスクトップ / モバイルで異なる) */
-  header: (fontCtl: React.ReactNode) => React.ReactNode;
+  header: (fontCtl: React.ReactNode, viewCtl: React.ReactNode) => React.ReactNode;
 }) {
   const termRef = useRef<TerminalHandle>(null);
+  const chatRef = useRef<ChatHandle>(null);
+  const [mView, toggleView] = useMobileView();
+  // チャット表示はスマホの CC Hub 管理のセッションだけ(PC は端末のまま)
+  const chat = !desktop && session.managed && mView === 'chat';
+  const toBottom = () => (chat ? chatRef.current?.scrollToBottom() : termRef.current?.scrollToBottom());
   const [fontSize, changeFont] = useFontSize();
   const [qkOpen, toggleQk] = useQuickKeysOpen(desktop);
   const live = session.managed && session.status !== 'stopped';
@@ -111,7 +131,7 @@ export function SessionPane({
   // 「引き継いで送信」: CC Hub 管理下になって入力待ちになったら、預かっていた指示を送る
   useEffect(() => {
     if (pending && session.managed && (session.status === 'awaiting_input' || session.status === 'idle')) {
-      void flushPendingSend(session.id).then(() => termRef.current?.scrollToBottom());
+      void flushPendingSend(session.id).then(toBottom);
     }
   }, [pending, session.managed, session.status, session.id]);
 
@@ -129,6 +149,18 @@ export function SessionPane({
     </span>
   ) : null;
 
+  const viewCtl =
+    !desktop && session.managed ? (
+      <button
+        className="icon-btn view-toggle"
+        onClick={toggleView}
+        title={chat ? '端末の表示にする(ツールの実行やメニューも見える)' : 'チャットの表示にする(返信だけ)'}
+        aria-label={chat ? '端末の表示にする' : 'チャットの表示にする'}
+      >
+        {chat ? '>_' : '💬'}
+      </button>
+    ) : null;
+
   const qkToggle = (
     <button
       type="button"
@@ -143,30 +175,35 @@ export function SessionPane({
 
   return (
     <div className="session-pane">
-      {header(fontCtl)}
+      {header(fontCtl, viewCtl)}
       {/* スマホは承認の帯を端末に重ねる(帯で端末が縮む → Claude が描き直す → 帯が変わる、のループを防ぐ) */}
       {(desktop || !session.managed) && <ApprovalBanner session={session} />}
       <ReleaseBanner session={session} />
       {session.managed ? (
         <>
           <div className="term-stack">
-            <TerminalView
-              key={session.id}
-              ref={termRef}
-              sessionId={session.id}
-              fontSize={fontSize}
-              interactive={live}
-            />
+            {chat ? (
+              <ChatView key={session.id} ref={chatRef} session={session} fontSize={fontSize + 2} />
+            ) : (
+              <TerminalView
+                key={session.id}
+                ref={termRef}
+                sessionId={session.id}
+                fontSize={fontSize}
+                interactive={live}
+              />
+            )}
             {!desktop && <ApprovalBanner session={session} overlay />}
           </div>
           {live ? (
             <div className="composer-dock">
-              {qkOpen && <QuickKeys session={session} termRef={termRef} />}
+              {qkOpen && !chat && <QuickKeys session={session} termRef={termRef} />}
               <Composer
                 session={session}
                 desktop={desktop}
-                onSent={() => termRef.current?.scrollToBottom()}
-                toolbarExtra={qkToggle}
+                onSent={toBottom}
+                toolbarExtra={chat ? undefined : qkToggle}
+                compact={chat}
               />
             </div>
           ) : (

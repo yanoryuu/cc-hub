@@ -124,6 +124,8 @@ export const sessionApi = {
     api(`/api/sessions/${encodeURIComponent(id)}/control`, { action }),
   approve: (id: string, option: string) => api(`/api/sessions/${encodeURIComponent(id)}/approve`, { option }),
   rename: (id: string, name: string) => api(`/api/sessions/${encodeURIComponent(id)}/rename`, { name }),
+  /** 「自動で止めない」の切り替え */
+  keep: (id: string, on: boolean) => api(`/api/sessions/${encodeURIComponent(id)}/keep`, { on }),
   /** CC Hub の PTY を止めて、PowerShell の新しいウィンドウで続きを開く */
   openTerminal: (id: string) => api(`/api/sessions/${encodeURIComponent(id)}/open-terminal`, {}),
   /** 外部 / PowerShell のセッションを CC Hub で引き取る。相手が実行中なら force なしは 409 */

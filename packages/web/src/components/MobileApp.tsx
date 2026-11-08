@@ -156,7 +156,7 @@ function SessionDetailView() {
       key={session.id}
       session={session}
       desktop={false}
-      header={(fontCtl) => (
+      header={(fontCtl, viewCtl) => (
         <>
           <div className="m-head">
             <button className="icon-btn back" onClick={() => setDetail(false)} aria-label="一覧へ戻る">
@@ -170,6 +170,7 @@ function SessionDetailView() {
               </span>
             </span>
             {fontCtl}
+            {viewCtl}
             <button
               className={`icon-btn ${info ? 'on' : ''}`}
               onClick={() => setInfo((v) => !v)}

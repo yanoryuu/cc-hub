@@ -16,13 +16,19 @@ import { InstructionsChip } from './Instructions';
 import { useAttentionDeploys } from '../ops';
 import { firebaseCwdFor } from '../firebase';
 import { FirebaseChip } from './Firebase';
+import { folderApi } from '../folders';
+import { errText } from '../api';
 
 // ---------------------------------------------------------------- ダイアログ(App 直下に置く)
 
-/** 「GitHub のリポジトリを追加」: 登録フォームをダイアログで */
+/** 「プロジェクトを追加」: GitHub のリポジトリ(登録フォーム)/ フォルダ(Git なしでもよい) */
 export function CloneRepoModal() {
   const open = useHub((s) => s.cloneOpen);
   const setOpen = useHub((s) => s.setCloneOpen);
+  const [tab, setTab] = useState<'github' | 'folder'>('github');
+  useEffect(() => {
+    if (open) setTab('github');
+  }, [open]);
   useEffect(() => {
     if (!open) return;
     const onKey = (e: KeyboardEvent) => e.key === 'Escape' && setOpen(false);
@@ -34,14 +40,73 @@ export function CloneRepoModal() {
     <div className="modal-backdrop" onMouseDown={(e) => e.target === e.currentTarget && setOpen(false)}>
       <div className="modal" role="dialog" aria-modal="true" aria-labelledby="clone-title">
         <div className="modal-head">
-          <h2 id="clone-title">GitHub のリポジトリを追加</h2>
+          <h2 id="clone-title">プロジェクトを追加</h2>
           <button className="icon-btn" onClick={() => setOpen(false)} aria-label="閉じる">
             ✕
           </button>
         </div>
-        <RegisterRepoForm inModal onClose={() => setOpen(false)} />
+        <div className="seg ns-tabs add-tabs" role="tablist" aria-label="追加するもの">
+          <button role="tab" aria-selected={tab === 'github'} className={tab === 'github' ? 'on' : ''} onClick={() => setTab('github')}>
+            GitHub のリポジトリ
+          </button>
+          <button role="tab" aria-selected={tab === 'folder'} className={tab === 'folder' ? 'on' : ''} onClick={() => setTab('folder')}>
+            フォルダ(Git なし)
+          </button>
+        </div>
+        {tab === 'github' ? <RegisterRepoForm inModal onClose={() => setOpen(false)} /> : <AddFolderForm onClose={() => setOpen(false)} />}
       </div>
     </div>
+  );
+}
+
+/** フォルダをプロジェクトに追加(Git が無くてもよい)。追加したら管理画面を開く */
+function AddFolderForm({ onClose }: { onClose: () => void }) {
+  const openProject = useHub((s) => s.openProject);
+  const [path, setPath] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const submit = async () => {
+    const v = path.trim();
+    if (!v) return;
+    setBusy(true);
+    setErr(null);
+    try {
+      const list = await folderApi.add(v);
+      // デーモンが整えたパス(末尾の  など)で開く
+      const added = list.find((f) => normPath(f.path) === normPath(v)) ?? list[list.length - 1];
+      openProject({ cwd: added?.path ?? v });
+      onClose();
+    } catch (e) {
+      setErr(errText(e, '追加できませんでした'));
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <form
+      className="modal-body form"
+      onSubmit={(e) => {
+        e.preventDefault();
+        void submit();
+      }}
+    >
+      <div className="field">
+        <span>フォルダのパス</span>
+        <FolderInput value={path} onChange={setPath} autoFocus placeholder="C:Usersyanormy-notes(貼り付け / 参照)" />
+        <span className="hint">
+          Git が無いフォルダもそのまま追加できます。プロジェクトの一覧にいつも表示され、そのフォルダで直接セッションを始められます(作業ツリー・ブランチ・PR は使いません)。
+        </span>
+      </div>
+      {err && <div className="form-error">{err}</div>}
+      <div className="modal-foot">
+        <button type="button" className="btn" onClick={onClose}>
+          キャンセル
+        </button>
+        <button type="submit" className="btn primary" disabled={busy || !path.trim()}>
+          {busy ? '追加中…' : '追加'}
+        </button>
+      </div>
+    </form>
   );
 }
 
@@ -274,6 +339,35 @@ function RepoCard({ d }: { d: RepoCardData }) {
   );
 }
 
+/** フォルダのカード: プロジェクトに追加 / 登録を外す */
+function PinButton({ d }: { d: FolderCardData }) {
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const run = (fn: () => Promise<unknown>) => {
+    setBusy(true);
+    setErr(null);
+    fn()
+      .catch((e) => setErr(errText(e, '変更できませんでした')))
+      .finally(() => setBusy(false));
+  };
+  if (err) {
+    return (
+      <span className="form-error small" title={err}>
+        {err}
+      </span>
+    );
+  }
+  return d.pinned ? (
+    <button className="btn sm ghost" disabled={busy} onClick={() => run(() => folderApi.remove(d.path))} title="プロジェクトの一覧から外す(フォルダの中身はそのまま)">
+      登録を外す
+    </button>
+  ) : (
+    <button className="btn sm ghost" disabled={busy} onClick={() => run(() => folderApi.add(d.path))} title="プロジェクトに追加して、いつも一覧に出す">
+      ＋ 登録
+    </button>
+  );
+}
+
 function FolderCard({ d }: { d: FolderCardData }) {
   const openProject = useHub((s) => s.openProject);
   const setNew = useHub((s) => s.setNewSessionOpen);
@@ -288,6 +382,7 @@ function FolderCard({ d }: { d: FolderCardData }) {
         </button>
         <span className="spacer" />
         {d.sessions.some((s) => !s.managed && !s.handedOff) && <span className="tag ro">外部</span>}
+        {d.pinned && <span className="tag">登録済み</span>}
       </div>
       <span className="pcard-path mono" title={d.path}>
         {d.path}
@@ -305,6 +400,7 @@ function FolderCard({ d }: { d: FolderCardData }) {
           {d.lastActivity ? `最終 ${fmtAgo(d.lastActivity)}` : ''}
         </span>
         <span className="spacer" />
+        <PinButton d={d} />
         <button className="btn sm" onClick={() => openProject({ cwd: d.path })}>
           開く
         </button>
@@ -330,7 +426,7 @@ export function HomeScreen({ mobile = false }: { mobile?: boolean }) {
   const actions = (
     <div className="home-actions">
       <button className="btn primary lg home-clone" onClick={() => setClone(true)}>
-        <span aria-hidden="true">⑂</span> GitHub のリポジトリを追加
+        <span aria-hidden="true">⑂</span> プロジェクトを追加
       </button>
       <button className="btn lg" onClick={() => setFolderOpen(true)}>
         <span aria-hidden="true">▤</span> フォルダを開く

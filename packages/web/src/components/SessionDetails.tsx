@@ -116,6 +116,33 @@ export function SessionControls({ session, onDone }: { session: SessionInfo; onD
   );
 }
 
+/** 「自動で止めない」: 設定の「使っていないセッションを自動で止める」の対象から外す */
+function KeepAliveCheck({ session }: { session: SessionInfo }) {
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  return (
+    <>
+      <label className="check-inline keep-alive" title="何時間使っていなくても、このセッションは自動で止めません">
+        <input
+          type="checkbox"
+          checked={!!session.keepAlive}
+          disabled={busy}
+          onChange={(e) => {
+            setBusy(true);
+            setErr(null);
+            sessionApi
+              .keep(session.id, e.target.checked)
+              .catch((x) => setErr(errText(x, '切り替えられませんでした')))
+              .finally(() => setBusy(false));
+          }}
+        />
+        自動で止めない
+      </label>
+      {err && <div className="form-error">{err}</div>}
+    </>
+  );
+}
+
 export function SessionDetails({ session }: { session: SessionInfo }) {
   const repo = useHub((s) => (session.repoId ? s.repos[session.repoId] : undefined));
   const wtAny = useHub((s) => (session.worktreeId ? s.worktrees[session.worktreeId] : undefined));
@@ -185,6 +212,7 @@ export function SessionDetails({ session }: { session: SessionInfo }) {
         <dt>ID</dt>
         <dd className="mono small break">{session.id}</dd>
       </dl>
+      {session.managed && <KeepAliveCheck session={session} />}
       {/* 解放バナーはセッション画面側(SessionPane)にだけ出す。ここにも出すと二重になる */}
       <SessionControls session={session} />
     </section>

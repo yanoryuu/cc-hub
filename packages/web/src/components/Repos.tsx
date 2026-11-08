@@ -4,7 +4,9 @@ import type { RegisterRepoRequest, RepoInfo, WorktreeInfo } from '@cc-hub/shared
 import { errText, isConflict, pick, repoApi, type RepoPatch } from '../api';
 import { useHub } from '../store';
 import { KIND_INSTALL_HINT, KIND_LABEL, needsRelease, useRepoList, useWorktreesByRepo } from '../repo';
-import { fmtDate } from '../util';
+import { baseName, fmtDate } from '../util';
+import { normPath } from '../project';
+import { folderApi, useFolderProjects } from '../folders';
 import { ConfirmModal, PoolChips, RepoStatusBadge, Spinner, WtBadge } from './RepoCommon';
 import { StatusDot } from './common';
 import { BranchSection } from './Branches';
@@ -28,9 +30,10 @@ export function parseRepoUrl(input: string): string | null {
 
 // ---------------------------------------------------------------- 一覧
 
-/** デスクトップ左サイドバーの「プロジェクト」セクション(登録リポジトリ。名前で管理画面を開く) */
+/** デスクトップ左サイドバーの「プロジェクト」セクション(登録リポジトリ + 登録したフォルダ。名前で管理画面を開く) */
 export function SidebarRepos() {
   const repos = useRepoList();
+  const folders = useFolderProjects();
   const wtByRepo = useWorktreesByRepo();
   const deskView = useHub((s) => s.deskView);
   const setTopView = useHub((s) => s.setTopView);
@@ -38,6 +41,7 @@ export function SidebarRepos() {
   const openProject = useHub((s) => s.openProject);
   const project = useHub((s) => s.project);
   const projectId = deskView === 'project' ? project?.repoId ?? null : null;
+  const projectCwd = deskView === 'project' && !project?.repoId ? project?.cwd ?? null : null;
   const [removing, setRemoving] = useState<RepoInfo | null>(null);
   return (
     <section className="side-repos" aria-label="プロジェクト">
@@ -49,14 +53,14 @@ export function SidebarRepos() {
         >
           プロジェクト
         </button>
-        <button className="btn sm ghost side-add" title="GitHub のリポジトリを追加" onClick={() => setClone(true)}>
+        <button className="btn sm ghost side-add" title="GitHub のリポジトリかフォルダをプロジェクトに追加" onClick={() => setClone(true)}>
           ＋ 追加
         </button>
       </div>
       <div className="side-repos-list">
-        {repos.length === 0 ? (
+        {repos.length === 0 && folders.length === 0 ? (
           <button className="side-repo empty-row" onClick={() => setClone(true)}>
-            まだありません — 「＋ 追加」で GitHub からクローン
+            まだありません — 「＋ 追加」で GitHub のリポジトリかフォルダを追加
           </button>
         ) : (
           repos.map((r) => (
@@ -79,6 +83,34 @@ export function SidebarRepos() {
             </div>
           ))
         )}
+        {folders.map((f) => {
+          const on = !!projectCwd && normPath(projectCwd) === normPath(f.path);
+          return (
+            <div key={f.path} className={`side-repo-row ${on ? 'active' : ''}`}>
+              <button
+                className={`side-repo ${on ? 'active' : ''}`}
+                onClick={() => openProject({ cwd: f.path })}
+                aria-current={on ? 'page' : undefined}
+                title={`${f.path} の管理画面(セッション・履歴など)`}
+              >
+                <span className="side-repo-name">
+                  <span className="side-folder-ico" aria-hidden="true">
+                    ▤
+                  </span>{' '}
+                  {baseName(f.path)}
+                </span>
+              </button>
+              <button
+                className="side-repo-remove"
+                onClick={() => void folderApi.remove(f.path).catch(() => {})}
+                title={`${f.path} をプロジェクトから外す(フォルダの中身はそのまま)`}
+                aria-label={`${baseName(f.path)} の登録を外す`}
+              >
+                ×
+              </button>
+            </div>
+          );
+        })}
       </div>
       {removing && (
         <UnregisterModal

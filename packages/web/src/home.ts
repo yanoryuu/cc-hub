@@ -6,6 +6,7 @@ import { isFinished, useHub } from './store';
 import { normPath, tokenTotal } from './project';
 import { useRepoList, useWorktreesByRepo } from './repo';
 import { baseName } from './util';
+import { useFolderProjects } from './folders';
 
 // ---------------------------------------------------------------- 最近のプロジェクト(GET /api/projects)
 
@@ -83,6 +84,8 @@ export interface FolderCardData extends CardStats {
   name: string;
   /** /api/projects(最近使ったフォルダ)に含まれる */
   recent: boolean;
+  /** 「プロジェクトを追加」で登録したフォルダ(いつも出す) */
+  pinned: boolean;
 }
 
 const RANK: Record<SessionInfo['status'], number> = {
@@ -144,21 +147,25 @@ export function useProjectCatalog(): Catalog {
   const worktrees = useHub((s) => s.worktrees);
   const prs = useHub((s) => s.prs);
   const recent = useRecentProjects();
+  const pinned = useFolderProjects();
 
   return useMemo(() => {
     // 置き場所と、紐付けたクローン済みのフォルダ
     const baseDirs: [string, string][] = repoList.flatMap((r) => [r.baseDir, ...(r.linkedDirs ?? [])].map((d): [string, string] => [normPath(d), r.id]));
     const repoSessions: Record<string, SessionInfo[]> = {};
-    const folderMap = new Map<string, { path: string; sessions: SessionInfo[]; lastUsed: number; recent: boolean }>();
+    const folderMap = new Map<string, { path: string; sessions: SessionInfo[]; lastUsed: number; recent: boolean; pinned: boolean }>();
     const addFolder = (path: string) => {
       const k = normPath(path);
       let f = folderMap.get(k);
       if (!f) {
-        f = { path, sessions: [], lastUsed: 0, recent: false };
+        f = { path, sessions: [], lastUsed: 0, recent: false, pinned: false };
         folderMap.set(k, f);
       }
       return f;
     };
+
+    // 登録したフォルダは先に作っておく(登録したときのパスの書き方で表示する)
+    for (const p of pinned) if (!repoOfPath(p.path, baseDirs)) addFolder(p.path).pinned = true;
 
     for (const s of Object.values(sessions)) {
       const rid = s.repoId && repoList.some((r) => r.id === s.repoId) ? s.repoId : repoOfPath(s.cwd, baseDirs);
@@ -211,13 +218,17 @@ export function useProjectCatalog(): Catalog {
         path: f.path,
         name: baseName(f.path),
         recent: f.recent,
+        pinned: f.pinned,
         ...stats(f.sessions, worktrees, f.lastUsed),
       }))
-      // 動いているセッションがあるフォルダを先に、あとは最後に使った順
-      .sort((a, b) => Number(b.active.length > 0) - Number(a.active.length > 0) || b.lastActivity - a.lastActivity);
+      // 動いているセッションがあるフォルダ → 登録したフォルダ → 最後に使った順
+      .sort(
+        (a, b) =>
+          Number(b.active.length > 0) - Number(a.active.length > 0) || Number(b.pinned) - Number(a.pinned) || b.lastActivity - a.lastActivity,
+      );
 
     return { repos, folders, loadingRecent: recent === null };
-  }, [repoList, wtByRepo, sessions, worktrees, prs, recent]);
+  }, [repoList, wtByRepo, sessions, worktrees, prs, recent, pinned]);
 }
 
 /** 検索語に一致するか(名前 / owner / パス。空白区切りはすべて含む) */

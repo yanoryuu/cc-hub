@@ -1,4 +1,4 @@
-// 指示の入力欄: 自動で伸びるテキストエリア / Enter 送信(Shift+Enter 改行、IME 変換中は送らない)/
+// 指示の入力欄: 自動で伸びるテキストエリア / Ctrl+Enter 送信(Enter は改行、IME 変換中は送らない)/
 // セッションごとの下書き / ↑↓ で送信履歴 / 「/」でコマンド・スキルの補完 / 画像・ファイルの貼り付けとドロップ
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { SessionInfo, SkillInfo } from '@cc-hub/shared';
@@ -53,6 +53,7 @@ export function Composer({
   onSent,
   onTakeoverSend,
   toolbarExtra,
+  compact = false,
 }: {
   session: SessionInfo;
   desktop: boolean;
@@ -63,6 +64,8 @@ export function Composer({
   onTakeoverSend?: (text: string) => void;
   /** ツールバー左側に足すボタン(クイックキーの開閉など) */
   toolbarExtra?: React.ReactNode;
+  /** スマホのチャット表示: 入力欄と送信を 1 行にし、添付・コマンドは「+」で開く */
+  compact?: boolean;
 }) {
   const sid = session.id;
   const init = getDraft(sid);
@@ -111,9 +114,10 @@ export function Composer({
     const ta = taRef.current;
     if (!ta) return;
     ta.style.height = 'auto';
-    const max = desktop ? 260 : 180;
+    const max = desktop ? 260 : compact ? 140 : 180;
     ta.style.height = Math.min(ta.scrollHeight + 2, max) + 'px';
-  }, [text, desktop]);
+  }, [text, desktop, compact]);
+  const [toolsOpen, setToolsOpen] = useState(false);
 
   // ---------------------------------------------------------------- 補完
   const skills = useSkills(session.cwd);
@@ -292,8 +296,8 @@ export function Composer({
       if (recall(e.key === 'ArrowUp' ? -1 : 1)) e.preventDefault();
       return;
     }
-    // Enter で送信 / Shift+Enter で改行(スマホのキーボードは Enter = 改行、送信はボタン)
-    if (desktop && e.key === 'Enter' && !e.shiftKey) {
+    // Ctrl+Enter で送信 / Enter で改行(スマホのキーボードは Enter = 改行、送信はボタン)
+    if (desktop && e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
       e.preventDefault();
       void send();
     }
@@ -301,6 +305,59 @@ export function Composer({
 
   const syncCaret = () => setCaret(taRef.current?.selectionStart ?? text.length);
   const listId = `cmp-${sid}`;
+
+  const textArea = (
+    <textarea
+      ref={taRef}
+      rows={desktop ? 2 : 1}
+      value={text}
+      spellCheck={false}
+      aria-label="Claude への指示"
+      aria-autocomplete="list"
+      aria-controls={popupOpen ? listId : undefined}
+      aria-activedescendant={popupOpen && items.length ? `${listId}-${sel}` : undefined}
+      placeholder={
+        takeover
+          ? '指示を入力すると、引き継いでから送ります'
+          : desktop
+            ? '指示を入力 — 「/」でコマンドとスキル、画像は貼り付け / ドロップで添付'
+            : compact
+              ? 'Claude に返信'
+              : '指示を入力(「/」でコマンド)'
+      }
+      onChange={(e) => {
+        hist.current = null;
+        setText(e.target.value);
+        setCaret(e.target.selectionStart ?? e.target.value.length);
+        if (dismissed != null) setDismissed((d) => (slashToken(e.target.value, e.target.selectionStart ?? 0) === d ? d : null));
+      }}
+      onSelect={syncCaret}
+      onClick={syncCaret}
+      onCompositionStart={() => (composing.current = true)}
+      onCompositionEnd={() => {
+        composing.current = false;
+        syncCaret();
+      }}
+      onKeyDown={onKeyDown}
+      onPaste={(e) => {
+        const files = [...e.clipboardData.files];
+        if (files.length === 0) return;
+        e.preventDefault();
+        void upload(files);
+      }}
+    />
+  );
+  const sendBtn = (
+    <button
+      className={`btn primary send-btn ${compact ? 'round' : ''}`}
+      disabled={busy || uploading || !text.trim()}
+      onClick={() => void send()}
+      title={uploading ? 'アップロードが終わるまで待ってください' : undefined}
+      aria-label={compact ? '送信' : undefined}
+    >
+      {compact ? (busy ? '…' : '↑') : takeover ? '引き継いで送信' : busy ? '送信中…' : '送信'}
+    </button>
+  );
 
   return (
     <div
@@ -367,100 +424,76 @@ export function Composer({
           ))}
         </div>
       )}
-      <div className="cmp-box">
-        <textarea
-          ref={taRef}
-          rows={desktop ? 2 : 1}
-          value={text}
-          spellCheck={false}
-          aria-label="Claude への指示"
-          aria-autocomplete="list"
-          aria-controls={popupOpen ? listId : undefined}
-          aria-activedescendant={popupOpen && items.length ? `${listId}-${sel}` : undefined}
-          placeholder={
-            takeover
-              ? '指示を入力すると、引き継いでから送ります'
-              : desktop
-                ? '指示を入力 — 「/」でコマンドとスキル、画像は貼り付け / ドロップで添付'
-                : '指示を入力(「/」でコマンド)'
-          }
-          onChange={(e) => {
-            hist.current = null;
-            setText(e.target.value);
-            setCaret(e.target.selectionStart ?? e.target.value.length);
-            if (dismissed != null) setDismissed((d) => (slashToken(e.target.value, e.target.selectionStart ?? 0) === d ? d : null));
-          }}
-          onSelect={syncCaret}
-          onClick={syncCaret}
-          onCompositionStart={() => (composing.current = true)}
-          onCompositionEnd={() => {
-            composing.current = false;
-            syncCaret();
-          }}
-          onKeyDown={onKeyDown}
-          onPaste={(e) => {
-            const files = [...e.clipboardData.files];
-            if (files.length === 0) return;
-            e.preventDefault();
-            void upload(files);
-          }}
-        />
-        <div className="cmp-tools">
-          {!takeover && (
-            <>
-              <button
-                type="button"
-                className="tool-btn"
-                onClick={() => fileRef.current?.click()}
-                title="画像やファイルを添付(貼り付け・ドロップでも添付できます)"
-              >
-                <span aria-hidden="true">📎</span> 添付
-              </button>
-              <input
-                ref={fileRef}
-                type="file"
-                multiple
-                hidden
-                onChange={(e) => {
-                  const fs = [...(e.target.files ?? [])];
-                  e.target.value = '';
-                  if (fs.length) void upload(fs);
-                }}
-              />
-            </>
-          )}
-          <button
-            type="button"
-            className="tool-btn"
-            title="コマンドとスキルの一覧"
-            onClick={() => {
-              const next = text.startsWith('/') ? text : `/${text}`;
-              setText(next);
-              setDismissed(null);
-              requestAnimationFrame(() => {
-                taRef.current?.focus();
-                taRef.current?.setSelectionRange(1, 1);
-                setCaret(1);
-              });
-            }}
-          >
-            <span className="mono" aria-hidden="true">
-              /
-            </span>{' '}
-            コマンド
-          </button>
-          {toolbarExtra}
-          <span className="spacer" />
-          {desktop && <span className="cmp-hint">Enter で送信 · Shift+Enter で改行</span>}
-          <button
-            className="btn primary send-btn"
-            disabled={busy || uploading || !text.trim()}
-            onClick={() => void send()}
-            title={uploading ? 'アップロードが終わるまで待ってください' : undefined}
-          >
-            {takeover ? '引き継いで送信' : busy ? '送信中…' : '送信'}
-          </button>
-        </div>
+      <div className={`cmp-box ${compact ? 'compact' : ''}`}>
+        {compact ? (
+          <div className="cmp-row">
+            <button
+              type="button"
+              className={`cmp-plus ${toolsOpen ? 'on' : ''}`}
+              aria-expanded={toolsOpen}
+              aria-label="添付・コマンド"
+              title="添付・コマンド"
+              onClick={() => setToolsOpen((v) => !v)}
+            >
+              +
+            </button>
+            {textArea}
+            {sendBtn}
+          </div>
+        ) : (
+          textArea
+        )}
+        {(!compact || toolsOpen) && (
+          <div className="cmp-tools">
+            {!takeover && (
+              <>
+                <button
+                  type="button"
+                  className="tool-btn"
+                  onClick={() => fileRef.current?.click()}
+                  title="画像やファイルを添付(貼り付け・ドロップでも添付できます)"
+                >
+                  <span aria-hidden="true">📎</span> 添付
+                </button>
+                <input
+                  ref={fileRef}
+                  type="file"
+                  multiple
+                  hidden
+                  onChange={(e) => {
+                    const fs = [...(e.target.files ?? [])];
+                    e.target.value = '';
+                    if (fs.length) void upload(fs);
+                  }}
+                />
+              </>
+            )}
+            <button
+              type="button"
+              className="tool-btn"
+              title="コマンドとスキルの一覧"
+              onClick={() => {
+                const next = text.startsWith('/') ? text : `/${text}`;
+                setText(next);
+                setDismissed(null);
+                requestAnimationFrame(() => {
+                  taRef.current?.focus();
+                  taRef.current?.setSelectionRange(1, 1);
+                  setCaret(1);
+                });
+              }}
+            >
+              <span className="mono" aria-hidden="true">
+                /
+              </span>{' '}
+              コマンド
+            </button>
+            {toolbarExtra}
+            <span className="spacer" />
+            {desktop && <span className="cmp-hint">Ctrl+Enter で送信 · Enter で改行</span>}
+            {!compact && sendBtn}
+          </div>
+        )}
       </div>
       {err && <div className="form-error cmp-err">{err}</div>}
       {drag && <div className="drop-hint">ここにドロップして添付</div>}

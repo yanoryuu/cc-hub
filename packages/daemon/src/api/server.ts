@@ -7,6 +7,7 @@ import type { Auth } from './auth';
 import type { SessionManager } from '../session/manager';
 import type { ShellManager } from '../shell/manager';
 import type { SessionDrafts } from '../session/drafts';
+import type { FolderProjects } from '../project/folders';
 import type { RepoManager } from '../repo/manager';
 import type { GitHubWatcher } from '../github/watcher';
 import type { PrActions } from '../github/actions';
@@ -77,6 +78,7 @@ export interface ServerDeps {
   sessions: SessionManager;
   shells: ShellManager;
   drafts: SessionDrafts;
+  folders: FolderProjects;
   repos: RepoManager;
   github: GitHubWatcher;
   prs: PrActions;
@@ -625,6 +627,11 @@ async function handle(d: ServerDeps, req: http.IncomingMessage, res: http.Server
   }
   if (p === '/api/modes/reset' && method === 'POST') return json(res, 200, { ok: true, modes: d.sessions.modes.reset() });
 
+  // フォルダのプロジェクト(Git なしでもよい)
+  if (p === '/api/folders' && method === 'GET') return json(res, 200, { ok: true, folders: d.folders.list() });
+  if (p === '/api/folders' && method === 'POST') return json(res, 200, { ok: true, folders: d.folders.add((await readBody(req)).path) });
+  if (p === '/api/folders/remove' && method === 'POST') return json(res, 200, { ok: true, folders: d.folders.remove((await readBody(req)).path) });
+
   // 新規セッションの下書き
   if (p === '/api/drafts' && method === 'GET') return json(res, 200, { ok: true, drafts: d.drafts.list() });
   const dm = /^\/api\/drafts\/([^/]+)$/.exec(p);
@@ -657,7 +664,17 @@ async function handle(d: ServerDeps, req: http.IncomingMessage, res: http.Server
     }
   }
 
-  const m = /^\/api\/sessions\/([^/]+)\/(input|resize|control|approve|rename)$/.exec(p);
+  // スマホのチャット表示: いまの会話の発言(transcript がまだ無ければ空)
+  const mm = /^\/api\/sessions\/([^/]+)\/messages$/.exec(p);
+  if (mm && method === 'GET') {
+    const id = decodeURIComponent(mm[1]);
+    if (!d.sessions.info(id)) throw new HttpError(404, 'セッションが見つかりません');
+    const limit = Math.max(1, Math.min(500, parseInt(url.searchParams.get('limit') || '', 10) || 200));
+    const rid = d.sessions.resumeIdFor(id);
+    return json(res, 200, { ok: true, messages: rid ? readMessages(rid, limit) : [] });
+  }
+
+  const m = /^\/api\/sessions\/([^/]+)\/(input|resize|control|approve|rename|keep)$/.exec(p);
   if (m && method === 'POST') {
     const id = decodeURIComponent(m[1]);
     const body = await readBody(req);
@@ -676,6 +693,8 @@ async function handle(d: ServerDeps, req: http.IncomingMessage, res: http.Server
       case 'rename':
         d.sessions.rename(id, body.name);
         return json(res, 200, { ok: true });
+      case 'keep':
+        return json(res, 200, { ok: true, session: d.sessions.setKeepAlive(id, body.on) });
     }
   }
 

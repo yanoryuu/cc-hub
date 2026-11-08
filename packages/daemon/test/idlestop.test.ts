@@ -18,7 +18,7 @@ function test(name: string, fn: () => void): void {
 const H = 3600_000;
 const now = 100 * H;
 const cfg = { enabled: true, hours: 3 };
-const s = (o: Partial<{ managed: boolean; status: any; approval: any; lastEventAt: number }> = {}) => ({
+const s = (o: Partial<{ managed: boolean; status: any; approval: any; lastEventAt: number; keepAlive: boolean }> = {}) => ({
   managed: true,
   status: 'awaiting_input' as const,
   approval: null,
@@ -40,6 +40,11 @@ test('作業中・承認待ち・起動中・停止済みは止めない', () =>
     assert.equal(isIdleTooLong(s({ status }), now, cfg), false, status);
   }
   assert.equal(isIdleTooLong(s({ approval: { question: 'q' } }), now, cfg), false);
+});
+
+test('「自動で止めない」にしたセッションは何時間たっても止めない', () => {
+  assert.equal(isIdleTooLong(s({ keepAlive: true, lastEventAt: now - 50 * H }), now, cfg), false);
+  assert.equal(isIdleTooLong(s({ keepAlive: false }), now, cfg), true);
 });
 
 test('外部セッション・無効のときは止めない', () => {

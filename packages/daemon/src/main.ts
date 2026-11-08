@@ -19,6 +19,7 @@ import { createServer } from './api/server';
 import { WsHub } from './api/ws';
 import { ShellManager } from './shell/manager';
 import { SessionDrafts } from './session/drafts';
+import { FolderProjects } from './project/folders';
 import { stopCapture } from './game/capture';
 import { dpapi } from './dpapi';
 import { NotifyService } from './notify/service';
@@ -138,6 +139,7 @@ function main(): void {
     sessions,
     shells,
     drafts: new SessionDrafts(store),
+    folders: new FolderProjects(store),
     repos,
     github,
     prs,

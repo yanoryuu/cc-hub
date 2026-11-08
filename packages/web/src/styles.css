@@ -8976,3 +8976,140 @@ th[aria-sort='descending'] .th-arrow {
     display: none;
   }
 }
+
+/* スマホのチャット表示(端末の代わりに返信だけを吹き出しで出す) */
+.chat-view {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 14px 16px 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  background: var(--bg);
+  line-height: 1.65;
+}
+.chat-msg {
+  max-width: 100%;
+  min-width: 0;
+}
+.chat-msg.user {
+  align-self: flex-end;
+  max-width: 85%;
+}
+.chat-bubble {
+  padding: 9px 13px;
+  border-radius: 16px 16px 4px 16px;
+  background: var(--accent-bg);
+  color: var(--fg);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.chat-msg.assistant .md-body {
+  padding: 0;
+  font-size: inherit;
+  overflow-wrap: anywhere;
+}
+.chat-msg.assistant .md-code,
+.chat-msg.assistant .md-table-wrap {
+  max-width: 100%;
+  overflow-x: auto;
+}
+.chat-empty {
+  margin: auto;
+  text-align: center;
+  font-size: 14px;
+}
+.chat-working {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--muted);
+  font-size: 13px;
+}
+.chat-dots {
+  display: inline-flex;
+  gap: 4px;
+}
+.chat-dots i {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--muted);
+  animation: chat-dot 1.2s infinite ease-in-out;
+}
+.chat-dots i:nth-child(2) {
+  animation-delay: 0.15s;
+}
+.chat-dots i:nth-child(3) {
+  animation-delay: 0.3s;
+}
+@keyframes chat-dot {
+  0%,
+  80%,
+  100% {
+    opacity: 0.25;
+  }
+  40% {
+    opacity: 1;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .chat-dots i {
+    animation: none;
+    opacity: 0.6;
+  }
+}
+.view-toggle {
+  font-family: var(--mono);
+  font-size: 13px;
+}
+
+/* チャット表示の入力欄: 「+」・入力・送信を 1 行に */
+.cmp-box.compact {
+  border-radius: 22px;
+}
+.cmp-row {
+  display: flex;
+  align-items: flex-end;
+  gap: 4px;
+  padding: 4px;
+}
+.mobile .cmp-box.compact textarea {
+  flex: 1;
+  min-width: 0;
+  min-height: 38px;
+  padding: 7px 4px;
+}
+.cmp-plus {
+  flex: none;
+  width: 38px;
+  height: 38px;
+  border-radius: 50%;
+  font-size: 22px;
+  line-height: 1;
+  color: var(--fg-2);
+}
+.cmp-plus.on {
+  color: var(--accent);
+  background: var(--panel-3);
+}
+.send-btn.round {
+  flex: none;
+  width: 38px;
+  min-height: 38px;
+  height: 38px;
+  padding: 0;
+  border-radius: 50%;
+  font-size: 18px;
+}
+.cmp-box.compact .cmp-tools {
+  border-top: 1px solid var(--border);
+  padding: 4px 8px 6px;
+}
+
+/* セッションの詳細: 「自動で止めない」 */
+.keep-alive {
+  margin-top: 10px;
+}

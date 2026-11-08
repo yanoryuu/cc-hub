@@ -5,6 +5,8 @@ import type { IdleStopSettings, SessionInfo, SessionStatus } from '@cc-hub/share
 
 export const IDLE_STOP_KEY = 'idle_stop';
 export const IDLE_STOPPED_KEY = 'idle_stopped_ids';
+/** 「自動で止めない」にしたセッション */
+export const IDLE_KEEP_KEY = 'idle_keep_ids';
 export const DEFAULT_IDLE_STOP: IdleStopSettings = { enabled: true, hours: 3 };
 /** 自動停止の確認間隔 */
 export const IDLE_CHECK_MS = 5 * 60_000;
@@ -22,8 +24,8 @@ export function normalizeIdleStop(v: unknown): IdleStopSettings {
 }
 
 /** 入力待ちのまま hours 以上、動き(出力・入力・承認)が無いか */
-export function isIdleTooLong(s: Pick<SessionInfo, 'managed' | 'status' | 'approval' | 'lastEventAt'>, now: number, cfg: IdleStopSettings): boolean {
-  if (!cfg.enabled || !s.managed || s.approval) return false;
+export function isIdleTooLong(s: Pick<SessionInfo, 'managed' | 'status' | 'approval' | 'lastEventAt' | 'keepAlive'>, now: number, cfg: IdleStopSettings): boolean {
+  if (!cfg.enabled || !s.managed || s.approval || s.keepAlive) return false;
   if (!WAITING.includes(s.status)) return false;
   return now - s.lastEventAt >= cfg.hours * 3600_000;
 }

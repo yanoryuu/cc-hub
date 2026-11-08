@@ -146,6 +146,8 @@ export interface SessionInfo {
   launchers?: AppLauncher[];
   /** 使っていないので CC Hub が自動で止めた(「再開」で続きから。作業ツリーは自動解放しない) */
   idleStopped?: boolean;
+  /** 「自動で止めない」: 使っていなくても自動停止しない(POST /api/sessions/:id/keep で切り替え) */
+  keepAlive?: boolean;
   /** CC Hub が起動時に --model で渡したモデル(SESSION_MODELS の id。再開時も同じものを渡す)。外部セッションは null */
   launchModel?: string | null;
 }
@@ -652,6 +654,12 @@ export interface StartSessionRequest {
   model?: string;
 }
 
+/** 「プロジェクトを追加」で登録したフォルダ(Git が無くてもよい。GET /api/folders) */
+export interface FolderProject {
+  path: string;
+  addedAt: number;
+}
+
 export interface ProjectEntry {
   path: string;
   lastUsed: number;
@@ -946,6 +954,7 @@ export type ServerMessage =
 //   GET  /api/history?limit=30&offset=0&q=<検索>&cwd=<フォルダ(配下も含む)>  → {sessions: HistoryEntry[], total}
 //                                                        (~/.claude/projects の全 transcript。新しい順。q はタイトル / 最初の発言 / cwd を部分一致)
 //   GET  /api/history/:id                                → {ok, entry: HistoryEntry, messages: HistoryMessage[]}(直近 200 件。サブエージェントは除く)
+//   GET  /api/sessions/:id/messages?limit=               → {ok, messages: HistoryMessage[]}(いまの会話の直近 limit 件(既定 200)。スマホのチャット表示用)
 //   POST /api/history/:id/open {target: 'hub' | 'terminal'}  → {ok, session}
 //          hub: CC Hub の PTY で claude --resume(その会話の cwd で。既に CC Hub 上にあれば takeover / restart と同じ扱い)
 //          terminal: 新しい PowerShell で claude --resume(handedOff のセッションとして一覧に載る)
@@ -999,9 +1008,13 @@ export type ServerMessage =
 //   POST /api/sessions/:id/control {action: 'stop'|'restart'|'remove'}
 //   POST /api/sessions/:id/approve {option: string}      (番号 / 'y' / 'n')
 //   POST /api/sessions/:id/rename  {name}
+//   POST /api/sessions/:id/keep    {on: boolean}            → {ok, session}(使っていなくても自動で止めない。外部セッションでも可)
 //   GET  /api/modes                                    → {ok, modes: ModePreset[]}  新規セッションのモード(並び順どおり)
 //   PUT  /api/modes                {modes: ModePreset[]} → {ok, modes}  一覧ごと保存(commander / plain は消せない)
 //   POST /api/modes/reset          {}                   → {ok, modes}  既定の 6 つに戻す
+//   GET  /api/folders                                  → {ok, folders: FolderProject[]}  登録したフォルダのプロジェクト(Git なしでもよい)
+//   POST /api/folders {path}                           → {ok, folders}(フォルダが無ければ 404。既にあればそのまま)
+//   POST /api/folders/remove {path}                    → {ok, folders}(登録を外すだけ。中身には触れない)
 //   GET  /api/drafts                                   → {ok, drafts: SessionDraft[]}  新規セッションの下書き(新しい順・最大 50 件)
 //   PUT  /api/drafts/:id          Partial<SessionDraft> → {ok, draft}   上書き保存(id が 'new' なら新規)
 //   DELETE /api/drafts/:id
