@@ -15,6 +15,7 @@ import {
   useDraftSubscription,
 } from '../composer';
 import { SOURCE_LABEL, useSkills } from '../ext';
+import { addSent } from '../sentMessages';
 
 /** 1 ファイルの上限(デーモンへの JSON で送るので大きすぎるものは断る) */
 const MAX_BYTES = 15 * 1024 * 1024;
@@ -233,6 +234,7 @@ export function Composer({
     setBusy(true);
     try {
       await sessionApi.input(sid, v, true);
+      addSent(sid, v);
       pushHistory(sid, v);
       hist.current = null;
       for (const a of atts) if (a.preview) URL.revokeObjectURL(a.preview);

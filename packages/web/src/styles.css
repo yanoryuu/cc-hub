@@ -9113,3 +9113,46 @@ th[aria-sort='descending'] .th-arrow {
 .keep-alive {
   margin-top: 10px;
 }
+
+/* チャット表示: 送ったばかりで、まだ会話の記録に載っていない指示 */
+.chat-msg.user.sent .chat-bubble {
+  opacity: 0.75;
+  border: 1px dashed var(--accent-border, var(--border));
+}
+.chat-sent-note {
+  margin-top: 3px;
+  font-size: 11px;
+  color: var(--muted);
+  text-align: right;
+}
+/* 作業中: 何をしているか(ツール)と対象 */
+.chat-working {
+  align-items: flex-start;
+}
+.chat-working .chat-dots {
+  margin-top: 6px;
+}
+.chat-working-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.chat-working-label {
+  color: var(--fg-2);
+}
+.chat-working-time {
+  color: var(--muted);
+}
+.chat-working-target {
+  font-size: 11.5px;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 100%;
+}
+/* 解放済みセッションの「ブランチを戻して再開」 */
+.stopped-bar .err-text {
+  color: var(--danger-fg);
+}

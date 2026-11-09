@@ -85,6 +85,24 @@ export function userPromptText(o: any): string | null {
   return s;
 }
 
+/** 作業中に送った指示(attachment.type = queued_command)の本文。人が送ったものだけ(タスクの通知やサブエージェントの報告は除く) */
+export function queuedPromptText(a: any): string | null {
+  if (!a || a.type !== 'queued_command') return null;
+  if (a.commandMode && a.commandMode !== 'prompt') return null;
+  if (a.origin && a.origin.kind !== 'human') return null;
+  let c = a.prompt;
+  if (Array.isArray(c)) {
+    c = c
+      .filter((x: any) => x && x.type === 'text' && typeof x.text === 'string')
+      .map((x: any) => x.text)
+      .join('\n');
+  }
+  if (typeof c !== 'string') return null;
+  const s = c.trim();
+  if (!s || s.startsWith('<')) return null;
+  return s;
+}
+
 /** アシスタント行のテキスト部分(無ければ null) */
 function assistantText(o: any): string | null {
   if (!o || o.type !== 'assistant' || o.isSidechain || !o.message || !Array.isArray(o.message.content)) return null;
@@ -558,6 +576,10 @@ export function extractMessages(text: string): HistoryMessage[] {
     if (o.type === 'user') {
       const p = userPromptText(o);
       if (p) items.push({ role: 'user', text: p.slice(0, 4000), ts });
+    } else if (o.type === 'attachment') {
+      // 作業中に送った指示は、通常の user 行ではなく queued_command の添付として記録される
+      const p = queuedPromptText(o.attachment);
+      if (p) items.push({ role: 'user', text: p.slice(0, 4000), ts });
     } else if (o.type === 'assistant' && o.message && Array.isArray(o.message.content)) {
       for (const b of o.message.content) {
         if (!b) continue;
@@ -611,9 +633,21 @@ export function findTranscript(id: string): string | null {
   } catch {
     return null;
   }
+  // 同じ ID が複数の場所にある(作業ツリーを移して復活した)ときは、最後に書かれたものを使う
+  let best: string | null = null;
+  let bestAt = -1;
   for (const dir of dirs) {
     const fp = path.join(CLAUDE_PROJECTS_DIR, dir, `${id}.jsonl`);
-    if (fs.existsSync(fp)) return fp;
+    let at: number;
+    try {
+      at = fs.statSync(fp).mtimeMs;
+    } catch {
+      continue;
+    }
+    if (at > bestAt) {
+      best = fp;
+      bestAt = at;
+    }
   }
-  return null;
+  return best;
 }

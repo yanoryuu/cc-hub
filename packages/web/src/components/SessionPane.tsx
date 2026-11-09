@@ -8,7 +8,7 @@ import { ReleaseBanner } from './ReleaseBanner';
 import { Composer } from './Composer';
 import { ChatView, type ChatHandle } from './ChatView';
 import { ConflictDialog, TakeoverPanel, useTakeover } from './Handoff';
-import { sessionApi } from '../api';
+import { errText, sessionApi } from '../api';
 import { flushPendingSend, usePendingSend } from '../composer';
 import { useSessionWorktree } from '../repo';
 import { readLocal, writeLocal } from '../util';
@@ -223,7 +223,38 @@ export function SessionPane({
   );
 }
 
-/** 停止中の下部バー。worktree を解放済みのセッションは作業場所が無いので再開できない旨を出す */
+/** 解放済みのセッション: ブランチを残していれば「復活」で空いている worktree に戻して会話を再開できる */
+function ReleasedBar({ session, label }: { session: SessionInfo; label: string }) {
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const revive = async () => {
+    setBusy(true);
+    setErr(null);
+    try {
+      await sessionApi.revive(session.id);
+    } catch (e) {
+      setErr(errText(e, '復活できませんでした'));
+    } finally {
+      setBusy(false);
+    }
+  };
+  if (!session.branch) {
+    return <div className="stopped-bar">{label}。作業ツリーはブランチごと解放済みのため、このセッションは再開できません</div>;
+  }
+  return (
+    <div className="stopped-bar">
+      <span>
+        {label}。作業ツリーは解放済みです(ブランチ <span className="mono">{session.branch}</span> は残っています)
+        {err && <span className="err-text"> {err}</span>}
+      </span>
+      <button className="btn primary" disabled={busy} onClick={() => void revive()} title="空いている作業ツリーにこのブランチを戻し、同じ会話を再開します">
+        {busy ? '復活中…' : 'ブランチを戻して再開'}
+      </button>
+    </div>
+  );
+}
+
+/** 停止中の下部バー。worktree を解放済みのセッションは ReleasedBar */
 function StoppedBar({ session }: { session: SessionInfo }) {
   const wt = useSessionWorktree(session);
   const released = !!session.worktreeId && !wt;
@@ -231,14 +262,7 @@ function StoppedBar({ session }: { session: SessionInfo }) {
     session.status === 'error'
       ? `エラーで終了しました${session.exitCode != null ? `(終了コード ${session.exitCode})` : ''}`
       : 'セッションは停止しています';
-  if (released) {
-    return (
-      <div className="stopped-bar">
-        {label}。作業ツリーは解放済みのため、このセッションは再開できません
-        {session.branch ? `(ブランチ ${session.branch} を残した場合は、そこから新しいセッションを始めてください)` : ''}
-      </div>
-    );
-  }
+  if (released) return <ReleasedBar session={session} label={label} />;
   return (
     <div className="stopped-bar">
       {label}

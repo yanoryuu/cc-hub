@@ -583,6 +583,62 @@ export class SessionManager {
     this.notify(e, 'error', 'エラー', message);
   }
 
+  // ================================================================ 解放済みセッションの復活
+  /** 復活の準備を始める(worktree の割当・ブランチの checkout が終わるまで準備中) */
+  beginRevive(id: string, text: string): void {
+    const e = this.requireManaged(id);
+    if (e.preparing) throw new HttpError(409, '準備中です');
+    e.preparing = true;
+    e.userStopped = false;
+    if (!e.host) e.host = new PtyHost(e.info.cols || DEFAULT_COLS, e.info.rows || DEFAULT_ROWS);
+    e.info.status = 'starting';
+    e.info.exitCode = null;
+    this.progress(id, text);
+    this.touch(e);
+  }
+
+  /** worktree に戻せたので同じ会話を再開する。作業ツリーの場所が変わったら会話の記録を新しい場所にも置く(--resume が見つけられるように) */
+  finishRevive(id: string, o: { cwd: string; prevCwd: string }): void {
+    const e = this.sessions.get(id);
+    if (!e) return;
+    e.preparing = false;
+    const rid = this.resumeId(e);
+    const src = findTranscript(rid);
+    if (src) {
+      try {
+        const dir = path.join(path.dirname(path.dirname(src)), claudeProjectDir(o.cwd));
+        const dst = path.join(dir, path.basename(src));
+        // src は最後に書かれた記録。新しい場所に古い写しが残っていても上書きする(古い会話から再開しないように)
+        if (normalizeDir(dst) !== normalizeDir(src)) {
+          fs.mkdirSync(dir, { recursive: true });
+          fs.copyFileSync(src, dst);
+        }
+      } catch (err) {
+        console.warn(`[session] 会話の記録を写せませんでした: ${(err as Error).message}`);
+      }
+    }
+    this.progress(id, `${o.cwd} で会話を再開します(${e.info.branch ?? 'detached'})`);
+    try {
+      this.spawn(e, { resume: !!src });
+    } catch (err) {
+      e.info.lastMessage = `claude の起動に失敗しました: ${(err as Error).message}`.slice(0, 200);
+      this.markEnded(e, 'error', null);
+      return;
+    }
+    this.touch(e);
+  }
+
+  /** 復活に失敗した(解放済みのまま。ブランチは残っている) */
+  failRevive(id: string, message: string): void {
+    const e = this.sessions.get(id);
+    if (!e) return;
+    e.preparing = false;
+    this.progress(id, `\x1b[31m復活できませんでした: ${message}`);
+    e.info.lastMessage = `復活できませんでした: ${message}`.slice(0, 200);
+    this.markEnded(e, 'stopped', null);
+    this.touch(e);
+  }
+
   /** worktree を解放した後の SessionInfo 更新(worktreeId は履歴として残す) */
   markReleased(id: string, mode: ReleaseMode): void {
     const e = this.sessions.get(id);
@@ -1566,4 +1622,13 @@ export class SessionManager {
       }
     }
   }
+}
+
+/** Claude Code が会話の記録を置くフォルダ名(~/.claude/projects/<これ>)。英数字以外を - にする */
+export function claudeProjectDir(cwd: string): string {
+  return cwd.replace(/[^a-zA-Z0-9]/g, '-');
+}
+
+function normalizeDir(p: string): string {
+  return path.resolve(p).replace(/[\/]+$/, '').toLowerCase();
 }

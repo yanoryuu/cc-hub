@@ -2,7 +2,7 @@
 // 実行: npm run test -w @cc-hub/daemon
 import assert from 'node:assert/strict';
 import type { HistoryEntry } from '@cc-hub/shared';
-import { combineChunks, extractMessages, filterHistory, isTestCwd, parseChunk, underPath, userPromptText } from '../src/history';
+import { combineChunks, extractMessages, queuedPromptText, filterHistory, isTestCwd, parseChunk, underPath, userPromptText } from '../src/history';
 import { filterDirNames, isSkippedDirName } from '../src/fsdirs';
 
 let passed = 0;
@@ -114,6 +114,26 @@ test('extractMessages: user / assistant / tool の行', () => {
     ],
   );
   assert.ok(items.every((i) => i.ts > 0));
+});
+
+test('作業中に送った指示(queued_command)も user の発言として読む。通知やサブエージェントの報告は除く', () => {
+  const q = (attachment: unknown) => JSON.stringify({ type: 'attachment', attachment, timestamp: '2026-11-10T01:00:00.000Z' });
+  const items = extractMessages(
+    [
+      q({ type: 'queued_command', prompt: 'ついでに README も直して', commandMode: 'prompt', origin: { kind: 'human' } }),
+      q({ type: 'queued_command', prompt: '<task-notification>x</task-notification>', commandMode: 'task-notification' }),
+      q({ type: 'queued_command', prompt: 'report', commandMode: 'prompt', origin: { kind: 'peer' } }),
+      q({ type: 'queued_command', prompt: [{ type: 'text', text: '古い形式' }] }),
+    ].join('\n'),
+  );
+  assert.deepEqual(
+    items.map((i) => [i.role, i.text]),
+    [
+      ['user', 'ついでに README も直して'],
+      ['user', '古い形式'],
+    ],
+  );
+  assert.equal(queuedPromptText({ type: 'other', prompt: 'x' }), null);
 });
 
 // ---------------------------------------------------------------- 絞り込み

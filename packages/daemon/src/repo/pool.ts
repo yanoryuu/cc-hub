@@ -628,11 +628,14 @@ export class WorktreePool {
     onProgress: (text: string) => void,
     /** 指定するとブランチ作成の代わりに呼ぶ(ミューテックス内・fetch 済み)。戻り値 = チェックアウトしたブランチ名(PR の checkout 用) */
     setup?: (wt: WorktreeRow, logFile: string) => Promise<string>,
+    /** prefer = 空いていればこの worktree を使う / keepBranchOnFail = 失敗して初期化するときにブランチを消さない(復活用) */
+    opts: { prefer?: string; keepBranchOnFail?: boolean } = {},
   ): Promise<WorktreeRow> {
     const repo = this.d.getRepo(repoId);
     if (!repo) throw new HttpError(404, 'リポジトリが見つかりません');
     const rt = this.rt(repoId);
-    let w = this.forRepo(repoId).find((x) => this.free(x));
+    const frees = this.forRepo(repoId).filter((x) => this.free(x));
+    let w = frees.find((x) => x.id === opts.prefer) ?? frees[0];
     if (w) {
       this.set(w, { state: 'assigned', sessionId, branch: null, progress: '割り当て中', lastUsedAt: Date.now(), git: null });
       this.kick(repoId); // すぐに補充
@@ -669,7 +672,7 @@ export class WorktreePool {
       // 失敗したら初期化してプールに戻す
       const msg = errMsg(e);
       console.error(`[pool] ${wt.id} の割り当てに失敗: ${msg}`);
-      void this.doRelease(wt, 'discard').catch(() => undefined);
+      void this.doRelease(wt, opts.keepBranchOnFail ? 'keep' : 'discard').catch(() => undefined);
       throw new HttpError(500, `worktree の準備に失敗しました: ${msg}`);
     } finally {
       this.busy.delete(wt.id);

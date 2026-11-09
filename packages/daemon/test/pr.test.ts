@@ -14,6 +14,8 @@ import {
   trimLog,
 } from '../src/github/pr';
 import { buildConflictInstruction } from '../src/github/actions';
+import { prCheckoutError } from '../src/repo/manager';
+import { claudeProjectDir } from '../src/session/manager';
 import { parseLeftRight, parseShortstat, parseStatusV2 } from '../src/repo/gitstat';
 import { parseRefs } from '../src/repo/branches';
 
@@ -262,6 +264,19 @@ test('buildConflictInstruction: base をマージで取り込ませ、force push
   assert.ok(t.includes('git push'));
   assert.ok(t.endsWith('補足: lock は main 側'));
   assert.ok(!buildConflictInstruction({ number: 1, title: 't', headRefName: 'h', baseRefName: 'develop' }, '').includes('補足'));
+});
+
+test('gh pr checkout の失敗: ブランチが別の worktree で使われていれば、そのセッション名で案内する', () => {
+  const out = "fatal: 'feat/x' is already used by worktree at 'D:/WorkTree/TomsLands/wt-01'\nfailed to run git: exit status 128";
+  const sessions = { a: { id: 'a', name: '作ったセッション', cwd: String.raw`D:\WorkTree\TomsLands\wt-01` } } as any;
+  assert.match(prCheckoutError(out, 'feat/x', sessions), /セッション「作ったセッション」/);
+  assert.match(prCheckoutError(out, 'feat/x', {}), /wt-01/);
+  assert.match(prCheckoutError('network error', 'feat/x', {}), /gh pr checkout に失敗しました: network error/);
+});
+
+test('会話の記録のフォルダ名(Claude Code と同じ規則)', () => {
+  assert.equal(claudeProjectDir(String.raw`D:\WorkTree\TomsLands\wt-02`), 'D--WorkTree-TomsLands-wt-02');
+  assert.equal(claudeProjectDir(String.raw`C:\Users\yanor\Desktop\ゼミ`), 'C--Users-yanor-Desktop---');
 });
 
 console.log(`\n${passed} passed${process.exitCode ? ', some FAILED' : ''}`);

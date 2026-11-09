@@ -674,7 +674,7 @@ async function handle(d: ServerDeps, req: http.IncomingMessage, res: http.Server
     return json(res, 200, { ok: true, messages: rid ? readMessages(rid, limit) : [] });
   }
 
-  const m = /^\/api\/sessions\/([^/]+)\/(input|resize|control|approve|rename|keep)$/.exec(p);
+  const m = /^\/api\/sessions\/([^/]+)\/(input|resize|control|approve|rename|keep|revive)$/.exec(p);
   if (m && method === 'POST') {
     const id = decodeURIComponent(m[1]);
     const body = await readBody(req);
@@ -695,6 +695,8 @@ async function handle(d: ServerDeps, req: http.IncomingMessage, res: http.Server
         return json(res, 200, { ok: true });
       case 'keep':
         return json(res, 200, { ok: true, session: d.sessions.setKeepAlive(id, body.on) });
+      case 'revive':
+        return json(res, 200, { ok: true, session: d.repos.revive(id) });
     }
   }
 

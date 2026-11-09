@@ -1009,6 +1009,7 @@ export type ServerMessage =
 //   POST /api/sessions/:id/approve {option: string}      (番号 / 'y' / 'n')
 //   POST /api/sessions/:id/rename  {name}
 //   POST /api/sessions/:id/keep    {on: boolean}            → {ok, session}(使っていなくても自動で止めない。外部セッションでも可)
+//   POST /api/sessions/:id/revive  {}                       → {ok, session}(解放済み・ブランチを残したセッションを空いている worktree に戻して会話を再開)
 //   GET  /api/modes                                    → {ok, modes: ModePreset[]}  新規セッションのモード(並び順どおり)
 //   PUT  /api/modes                {modes: ModePreset[]} → {ok, modes}  一覧ごと保存(commander / plain は消せない)
 //   POST /api/modes/reset          {}                   → {ok, modes}  既定の 6 つに戻す

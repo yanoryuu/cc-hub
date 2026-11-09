@@ -364,6 +364,8 @@ export class PrActions {
       mode,
       instruction: buildReviewInstruction(repo.id, pr, { post, note }),
       name: `PR #${num} レビュー`,
+      // 読むだけなので detached で見る(PR を作ったセッションがブランチを使っていても起動できる)
+      detach: true,
     });
     console.log(`[pr] ${repo.id}#${num}: Claude にレビューさせます${post ? '(結果を GitHub に投稿)' : ''}`);
     return { ok: true, session };

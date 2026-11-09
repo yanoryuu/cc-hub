@@ -469,7 +469,16 @@ export class RepoManager {
    * プールの worktree を割り当て、worktree 内で gh pr checkout N してから claude を起動する。
    * instruction は起動時のプロンプト(commander なら前置きが付く)。長い指示は worktree 内のファイルに書いて参照させる
    */
-  startPrSession(o: { repoId: string; number: number; headRefName: string; mode?: string; instruction?: string; name?: string }): SessionInfo {
+  startPrSession(o: {
+    repoId: string;
+    number: number;
+    headRefName: string;
+    mode?: string;
+    instruction?: string;
+    name?: string;
+    /** 読むだけ(レビュー): ブランチを作らず PR の先頭を detached で checkout する。PR のブランチが別の worktree で使われていても動く */
+    detach?: boolean;
+  }): SessionInfo {
     const repo = this.require(o.repoId);
     if (repo.status !== 'ready') throw new HttpError(409, `リポジトリの準備ができていません(${repo.status})`);
     this.pool.checkAvailable(repo.id);
@@ -484,20 +493,27 @@ export class RepoManager {
     return info;
   }
 
-  private async preparePr(sid: string, repo: RepoInfo, o: { number: number; headRefName: string; instruction?: string }): Promise<void> {
+  private async preparePr(sid: string, repo: RepoInfo, o: { number: number; headRefName: string; instruction?: string; detach?: boolean }): Promise<void> {
     try {
       const wt = await this.pool.acquire(repo.id, sid, '', (t) => this.sessions.progress(sid, t), async (w, logFile) => {
+        if (o.detach) {
+          // レビュー用: PR の先頭を detached で見る(ブランチは作らない。解放でブランチを消すこともない)
+          this.sessions.progress(sid, `PR #${o.number} の最新の内容を取得しています…`);
+          await gitOk(['-C', w.path, 'fetch', 'origin', `pull/${o.number}/head`], { logFile, timeout: 5 * 60_000 });
+          await gitOk(['-C', w.path, 'switch', '--detach', 'FETCH_HEAD'], { logFile });
+          return '';
+        }
         this.sessions.progress(sid, `gh pr checkout ${o.number} を実行しています…`);
         console.log(`[repo] gh pr checkout ${o.number} --repo ${repo.id} (${w.path})`);
         const r = await ghRun(['pr', 'checkout', String(o.number), '--repo', repo.id], { cwd: w.path, logFile, timeout: 5 * 60_000 });
-        if (r.code !== 0) throw new Error(`gh pr checkout に失敗しました: ${tail(r)}`);
+        if (r.code !== 0) throw new Error(prCheckoutError(tail(r), o.headRefName, this.sessions.all()));
         const b = (await gitOk(['-C', w.path, 'rev-parse', '--abbrev-ref', 'HEAD'])).trim();
         return b && b !== 'HEAD' ? b : o.headRefName;
       });
-      this.sessions.bindWorktree(sid, wt.id, wt.path, wt.branch);
+      this.sessions.bindWorktree(sid, wt.id, wt.path, wt.branch || null);
       const instruction = o.instruction ? deliverInstruction(repo, wt.path, `pr-${o.number}`, o.instruction) : undefined;
-      this.sessions.launchPending(sid, { cwd: wt.path, worktreeId: wt.id, branch: wt.branch, instruction });
-      console.log(`[repo] PR セッション開始: ${repo.id} #${o.number} ${wt.name} ${wt.branch}`);
+      this.sessions.launchPending(sid, { cwd: wt.path, worktreeId: wt.id, branch: wt.branch || null, instruction });
+      console.log(`[repo] PR セッション開始: ${repo.id} #${o.number} ${wt.name} ${wt.branch || '(detached)'}`);
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       console.error(`[repo] PR セッションの準備に失敗: ${msg}`);
@@ -520,6 +536,61 @@ export class RepoManager {
     const { installHash: _h, failCount: _f, ...pub } = w;
     // 変更状況は assigned の間だけ見せる(契約どおり。解放後に古い数字を返さない)
     return { ...pub, git: null };
+  }
+
+  /**
+   * 解放済み(ブランチを残した)セッションを復活させる: 空いている worktree に残したブランチを checkout し、
+   * 同じ会話を --resume で再開する。なるべく前と同じ worktree を使う(会話の記録の場所が変わらないように)
+   */
+  revive(sessionId: string): SessionInfo {
+    const info = this.sessions.info(sessionId);
+    if (!info) throw new HttpError(404, 'セッションが見つかりません');
+    if (!info.managed) throw new HttpError(409, 'CC Hub で動かしているセッションではありません');
+    if (!info.repoId || !info.worktreeId) throw new HttpError(400, 'worktree で動いていたセッションではありません');
+    const w = this.pool.get(info.worktreeId);
+    if (w && w.sessionId === info.id && w.state === 'assigned') throw new HttpError(409, 'このセッションの worktree は解放されていません');
+    if (this.sessions.isRunning(sessionId)) throw new HttpError(409, 'セッションが実行中です');
+    const branch = info.branch;
+    if (!branch) throw new HttpError(409, 'ブランチを残さずに解放したセッションなので復活できません');
+    const repo = this.require(info.repoId);
+    if (repo.status !== 'ready') throw new HttpError(409, `リポジトリの準備ができていません(${repo.status})`);
+    this.pool.checkAvailable(repo.id);
+    this.sessions.beginRevive(sessionId, `ブランチ ${branch} を作業ツリーに戻しています…`);
+    void this.prepareRevive(sessionId, repo, branch, info.worktreeId, info.cwd);
+    return this.sessions.info(sessionId) ?? info;
+  }
+
+  private async prepareRevive(sid: string, repo: RepoInfo, branch: string, prevWt: string, prevCwd: string): Promise<void> {
+    const base = baseOf(repo);
+    try {
+      const wt = await this.pool.acquire(
+        repo.id,
+        sid,
+        '',
+        (t) => this.sessions.progress(sid, t),
+        async (w, logFile) => {
+          const used = await branchWorktree(base, branch);
+          if (used && normPath(used) !== normPath(w.path)) throw new Error(`ブランチ ${branch} は別の作業ツリーで使われています: ${used}`);
+          const local = (await git(['-C', base, 'rev-parse', '--verify', '--quiet', `refs/heads/${branch}`])).code === 0;
+          if (local) {
+            await gitOk(['-C', w.path, 'switch', branch], { logFile });
+          } else {
+            const remote = (await git(['-C', base, 'rev-parse', '--verify', '--quiet', `refs/remotes/origin/${branch}`])).code === 0;
+            if (!remote) throw new Error(`ブランチ ${branch} が見つかりません(削除済みの可能性があります)`);
+            await gitOk(['-C', w.path, 'switch', '-c', branch, '--track', `origin/${branch}`], { logFile });
+          }
+          return branch;
+        },
+        { prefer: prevWt, keepBranchOnFail: true },
+      );
+      this.sessions.bindWorktree(sid, wt.id, wt.path, wt.branch || branch);
+      this.sessions.finishRevive(sid, { cwd: wt.path, prevCwd });
+      console.log(`[repo] セッションを復活: ${repo.id} ${wt.name} ${branch}`);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      console.error(`[repo] セッションの復活に失敗: ${msg}`);
+      this.sessions.failRevive(sid, msg);
+    }
   }
 
   // ================================================================ worktree 個別操作
@@ -584,6 +655,30 @@ export class RepoManager {
     }
     return r;
   }
+}
+
+/** ブランチを checkout している worktree のパス(無ければ null) */
+async function branchWorktree(base: string, branch: string): Promise<string | null> {
+  const r = await git(['-C', base, 'worktree', 'list', '--porcelain']);
+  if (r.code !== 0) return null;
+  let cur: string | null = null;
+  for (const line of r.stdout.split(/\r?\n/)) {
+    if (line.startsWith('worktree ')) cur = line.slice(9).trim();
+    else if (line.trim() === `branch refs/heads/${branch}`) return cur;
+  }
+  return null;
+}
+
+/** gh pr checkout の失敗を分かりやすくする(PR のブランチが別の worktree で使われている場合など) */
+export function prCheckoutError(out: string, branch: string, sessions: Record<string, SessionInfo>): string {
+  const m = /is already (?:used|checked out) by worktree at '([^']+)'/.exec(out);
+  if (m) {
+    const at = normPath(m[1]);
+    const s = Object.values(sessions).find((x) => x.cwd && normPath(x.cwd) === at);
+    const who = s ? `セッション「${s.name}」` : m[1];
+    return `PR のブランチ ${branch} は ${who} の作業ツリーで使われています。そのセッションで作業するか、停止して解放してからやり直してください`;
+  }
+  return `gh pr checkout に失敗しました: ${out}`;
 }
 
 /** これより長い指示は PTY に直接打ち込まず、worktree 内のファイルに書いて読ませる */
