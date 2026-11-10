@@ -16,6 +16,7 @@ import {
 } from '../composer';
 import { SOURCE_LABEL, useSkills } from '../ext';
 import { addSent } from '../sentMessages';
+import { readLocal, writeLocal } from '../util';
 
 /** 1 ファイルの上限(デーモンへの JSON で送るので大きすぎるものは断る) */
 const MAX_BYTES = 15 * 1024 * 1024;
@@ -119,6 +120,13 @@ export function Composer({
     ta.style.height = Math.min(ta.scrollHeight + 2, max) + 'px';
   }, [text, desktop, compact]);
   const [toolsOpen, setToolsOpen] = useState(false);
+  /** 作業中に送ったら Esc で割り込み、すぐ読ませる(既定はオフ = 作業の区切りまで待つ) */
+  const [interruptSend, setInterruptSend] = useState(() => readLocal('cchub_interrupt_send', '0') === '1');
+  const toggleInterrupt = () =>
+    setInterruptSend((v) => {
+      writeLocal('cchub_interrupt_send', v ? '0' : '1');
+      return !v;
+    });
 
   // ---------------------------------------------------------------- 補完
   const skills = useSkills(session.cwd);
@@ -233,8 +241,14 @@ export function Composer({
     }
     setBusy(true);
     try {
+      const cut = interruptSend && session.status === 'running' && !session.approval;
       await sessionApi.input(sid, v, true);
       addSent(sid, v);
+      // 割り込み: 送った指示が Claude の待機列に入ってから Esc を押す(待機中の指示はその場で読まれる)
+      if (cut) {
+        await new Promise((r) => setTimeout(r, 400));
+        await sessionApi.interrupt(sid).catch(() => undefined);
+      }
       pushHistory(sid, v);
       hist.current = null;
       for (const a of atts) if (a.preview) URL.revokeObjectURL(a.preview);
@@ -324,7 +338,9 @@ export function Composer({
           : desktop
             ? '指示を入力 — 「/」でコマンドとスキル、画像は貼り付け / ドロップで添付'
             : compact
-              ? 'Claude に返信'
+              ? interruptSend && session.status === 'running'
+                ? 'Claude に返信(⚡ 割り込んで送ります)'
+                : 'Claude に返信'
               : '指示を入力(「/」でコマンド)'
       }
       onChange={(e) => {
@@ -357,7 +373,7 @@ export function Composer({
       title={uploading ? 'アップロードが終わるまで待ってください' : undefined}
       aria-label={compact ? '送信' : undefined}
     >
-      {compact ? (busy ? '…' : '↑') : takeover ? '引き継いで送信' : busy ? '送信中…' : '送信'}
+      {compact ? (busy ? '…' : interruptSend && session.status === 'running' ? '⚡' : '↑') : takeover ? '引き継いで送信' : busy ? '送信中…' : '送信'}
     </button>
   );
 
@@ -490,6 +506,17 @@ export function Composer({
               </span>{' '}
               コマンド
             </button>
+            {!takeover && (
+              <button
+                type="button"
+                className={`tool-btn interrupt-toggle ${interruptSend ? 'on' : ''}`}
+                aria-pressed={interruptSend}
+                onClick={toggleInterrupt}
+                title="オンにすると、Claude が作業中に送った指示を、作業を止めて(Esc)すぐ読ませます。オフのときは作業の区切りまで待ちます"
+              >
+                <span aria-hidden="true">⚡</span> 割り込んで送る{interruptSend ? ': オン' : ''}
+              </button>
+            )}
             {toolbarExtra}
             <span className="spacer" />
             {desktop && <span className="cmp-hint">Ctrl+Enter で送信 · Enter で改行</span>}

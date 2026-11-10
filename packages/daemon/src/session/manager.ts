@@ -768,6 +768,20 @@ export class SessionManager {
   }
 
   // ================================================================ 操作
+  /**
+   * 作業中の Claude を Esc で止める。待機中の指示(作業中に送ったもの)はその場で読まれる。
+   * 承認待ちの間は Esc が「承認しない」になるので断る。作業中でなければ何もしない(false)
+   */
+  interrupt(id: string): boolean {
+    const e = this.requireManaged(id);
+    if (e.preparing || !e.host?.alive) throw new HttpError(409, 'セッションが起動していません');
+    if (e.info.approval || e.info.status === 'awaiting_approval') throw new HttpError(409, '承認待ちのため割り込めません。先に承認に答えてください');
+    if (e.info.status !== 'running') return false;
+    e.host.write('\x1b');
+    console.log(`[session] 割り込みます(Esc): ${e.info.name}`);
+    return true;
+  }
+
   input(id: string, data: unknown, submit: unknown): void {
     const e = this.requireManaged(id);
     const host = e.host;

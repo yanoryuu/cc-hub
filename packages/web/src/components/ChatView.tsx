@@ -2,7 +2,7 @@
 // ツールの実行(ファイルの読み書き・コマンドなど)は出さない
 import { forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react';
 import type { HistoryMessage, SessionInfo } from '@cc-hub/shared';
-import { api, errText, pick } from '../api';
+import { api, errText, pick, sessionApi } from '../api';
 import { renderMarkdown } from '../markdown';
 import { dropSent, unmatchedSent, useSent } from '../sentMessages';
 
@@ -32,6 +32,19 @@ export const ChatView = forwardRef<ChatHandle, { session: SessionInfo; fontSize:
     if (msgs) dropSent(session.id, sent);
   }, [msgs, sent, session.id]);
   const [now, setNow] = useState(() => Date.now());
+  // 待機中の指示を、作業を止めて(Esc)すぐ読ませる。承認待ちの間は出さない(Esc が「承認しない」になるため)
+  const canCut = session.status === 'running' && !session.approval;
+  const [cutting, setCutting] = useState(false);
+  const cut = async () => {
+    setCutting(true);
+    try {
+      await sessionApi.interrupt(session.id);
+    } catch (e) {
+      setErr(errText(e, '割り込めませんでした'));
+    } finally {
+      setTimeout(() => setCutting(false), 1500);
+    }
+  };
   useEffect(() => {
     if (!working) return;
     const t = setInterval(() => setNow(Date.now()), 1000);
@@ -100,7 +113,20 @@ export const ChatView = forwardRef<ChatHandle, { session: SessionInfo; fontSize:
       {sent.map((m) => (
         <div key={`sent-${m.at}`} className="chat-msg user sent">
           <div className="chat-bubble">{m.text}</div>
-          <div className="chat-sent-note">{working ? '送信済み · 今の作業の区切りで読まれます' : '送信済み'}</div>
+          <div className="chat-sent-note">
+            {canCut ? (
+              <>
+                送信済み · 今の作業の区切りで読まれます
+                <button className="chat-cut-btn" disabled={cutting} onClick={() => void cut()} title="作業を止めて(Esc)、この指示をすぐ読ませます">
+                  {cutting ? '割り込み中…' : '⚡ 今すぐ割り込む'}
+                </button>
+              </>
+            ) : working ? (
+              '送信済み · 今の作業の区切りで読まれます'
+            ) : (
+              '送信済み'
+            )}
+          </div>
         </div>
       ))}
       {working && <WorkingLine session={session} now={now} />}

@@ -136,6 +136,13 @@ test('作業中に送った指示(queued_command)も user の発言として読�
   assert.equal(queuedPromptText({ type: 'other', prompt: 'x' }), null);
 });
 
+test('Esc で止めたときの記録は発言として出さない', () => {
+  const u = (content: unknown) => ({ type: 'user', message: { role: 'user', content } });
+  assert.equal(userPromptText(u('[Request interrupted by user for tool use]')), null);
+  assert.equal(userPromptText(u([{ type: 'text', text: '[Request interrupted by user]' }])), null);
+  assert.equal(userPromptText(u('[メモ] これは発言')), '[メモ] これは発言');
+});
+
 // ---------------------------------------------------------------- 絞り込み
 function entry(id: string, cwd: string, title: string, mtime: number, lastMessage: string | null = null): HistoryEntry {
   return { id, cwd, title, mtime, lastMessage };

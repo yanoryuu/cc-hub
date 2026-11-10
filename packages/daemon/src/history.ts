@@ -82,6 +82,8 @@ export function userPromptText(o: any): string | null {
     return args ? `/${name} ${args}` : `/${name}`;
   }
   if (s.startsWith('<') || s.startsWith('Caveat:')) return null;
+  // Esc で止めたときの記録(「[Request interrupted by user]」など)は発言ではない
+  if (s.startsWith('[Request interrupted')) return null;
   return s;
 }
 

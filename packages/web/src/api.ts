@@ -126,6 +126,7 @@ export const sessionApi = {
   rename: (id: string, name: string) => api(`/api/sessions/${encodeURIComponent(id)}/rename`, { name }),
   /** 「自動で止めない」の切り替え */
   keep: (id: string, on: boolean) => api(`/api/sessions/${encodeURIComponent(id)}/keep`, { on }),
+  interrupt: (id: string) => api(`/api/sessions/${encodeURIComponent(id)}/interrupt`, {}),
   revive: (id: string) => api(`/api/sessions/${encodeURIComponent(id)}/revive`, {}),
   /** CC Hub の PTY を止めて、PowerShell の新しいウィンドウで続きを開く */
   openTerminal: (id: string) => api(`/api/sessions/${encodeURIComponent(id)}/open-terminal`, {}),

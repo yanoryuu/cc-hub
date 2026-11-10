@@ -9156,3 +9156,22 @@ th[aria-sort='descending'] .th-arrow {
 .stopped-bar .err-text {
   color: var(--danger-fg);
 }
+
+/* 待機中の指示を今すぐ読ませる(Esc で割り込み) */
+.chat-cut-btn {
+  margin-left: 8px;
+  padding: 2px 8px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: var(--panel);
+  color: var(--fg);
+  font-size: 11px;
+  cursor: pointer;
+}
+.chat-cut-btn:disabled {
+  opacity: 0.6;
+}
+.tool-btn.interrupt-toggle.on {
+  color: var(--fg);
+  background: var(--accent-bg);
+}
