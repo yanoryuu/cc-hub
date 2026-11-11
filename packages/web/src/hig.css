@@ -1,0 +1,571 @@
+/* =====================================================================
+   Apple Human Interface Guidelines レイヤー(styles.css の後に読み込む)
+   - 色はシステムカラー(styles.css の :root)、文字は SF / ヒラギノ系
+   - スマホ: ナビゲーションバー(大きいタイトル)・アイコン付きタブバー・インセットグループのリスト・44pt のタップ領域・下から出るシート
+   - PC: サイドバー(角丸の選択行)・セグメントコントロール・すりガラスのツールバー
+   ===================================================================== */
+
+/* ---------- 共通 ---------- */
+.btn {
+  border-color: transparent;
+  font-weight: 500;
+  transition:
+    background-color 0.15s,
+    transform 0.08s;
+}
+.btn:active:not(:disabled) {
+  transform: scale(0.98);
+}
+.btn.primary,
+.btn.on,
+.btn.ghost.on,
+.btn.approve,
+.btn.danger,
+.grp-toggle.on,
+.side-repo-dash.on {
+  border-color: transparent;
+}
+.btn.deny {
+  border-color: transparent;
+  font-weight: 600;
+}
+.btn.ghost {
+  color: var(--accent);
+}
+input,
+textarea,
+select {
+  border-color: var(--border-2);
+  background: var(--panel-2);
+}
+input:focus,
+textarea:focus,
+select:focus {
+  border-color: var(--tint);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--tint) 35%, transparent);
+}
+:focus-visible {
+  outline: 3px solid color-mix(in srgb, var(--tint) 70%, transparent);
+  outline-offset: 1px;
+}
+.modal {
+  border-radius: 14px;
+  border-color: var(--border);
+  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.6);
+}
+.modal-backdrop {
+  background: rgba(0, 0, 0, 0.45);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+}
+.modal-head h2 {
+  font-size: 17px;
+  font-weight: 600;
+}
+.tab-badge {
+  background: var(--badge);
+  color: #fff;
+}
+.cmp-box {
+  border-color: var(--border-2);
+  background: var(--panel-2);
+  border-radius: 18px;
+}
+.cmp-box:focus-within {
+  border-color: var(--tint);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--tint) 30%, transparent);
+}
+.composer-dock {
+  background: var(--material);
+  backdrop-filter: saturate(180%) blur(20px);
+  -webkit-backdrop-filter: saturate(180%) blur(20px);
+  border-top: 0.5px solid var(--sep);
+}
+.qk {
+  border-radius: 999px;
+  border-color: transparent;
+  background: var(--panel-3);
+}
+/* カード(グループ): 枠線なし・角丸 12 */
+.rp-card,
+.repo-card {
+  border-color: transparent;
+  border-radius: var(--radius-lg);
+}
+.center .rp-card,
+.repo-scroll .rp-card {
+  background: var(--panel);
+}
+/* 選択式のチップ: 選ぶと塗りの色が付く(枠線は使わない) */
+.topic-chip {
+  border-color: transparent;
+  background: var(--panel-3);
+}
+.topic-chip.on {
+  border-color: transparent;
+  background: color-mix(in srgb, var(--tint) 24%, var(--panel));
+}
+input[type='checkbox'],
+input[type='radio'] {
+  accent-color: var(--tint);
+}
+/* セグメントコントロール(ダイアログ内など) */
+.seg {
+  padding: 2px;
+  border: none;
+  border-radius: 9px;
+  background: var(--panel-3);
+}
+.seg button {
+  border-radius: 7px;
+  color: var(--fg-2);
+}
+.seg button.on {
+  background: #636366;
+  color: #fff;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.35);
+}
+.chip {
+  border-color: transparent;
+  background: var(--panel-3);
+}
+
+/* 空の状態(アイコン → タイトル → 説明 → 操作) */
+.empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  max-width: 380px;
+  text-align: center;
+}
+.empty-ico {
+  color: var(--dim);
+  margin-bottom: 4px;
+}
+.empty-title {
+  font-size: 20px;
+  font-weight: 600;
+  color: var(--fg);
+}
+.empty-desc {
+  font-size: 14px;
+  color: var(--muted);
+  margin-bottom: 8px;
+}
+
+/* ---------- PC(macOS の作法) ---------- */
+.topbar {
+  height: 52px;
+  background: var(--material);
+  backdrop-filter: saturate(180%) blur(20px);
+  -webkit-backdrop-filter: saturate(180%) blur(20px);
+  border-bottom: 0.5px solid var(--sep);
+}
+.brand {
+  font-weight: 600;
+}
+/* セグメントコントロール: 選んだ区画だけ一段明るく浮かせる */
+.topnav {
+  padding: 2px;
+  border-radius: 9px;
+  background: var(--panel-2);
+  border: none;
+}
+.topnav-btn {
+  min-height: 30px;
+  padding: 3px 14px;
+  border-radius: 7px;
+  font-weight: 500;
+}
+.topnav-btn:hover {
+  background: transparent;
+  color: var(--fg);
+}
+.topnav-btn.on {
+  background: var(--hover);
+  color: var(--fg);
+  box-shadow:
+    0 1px 3px rgba(0, 0, 0, 0.35),
+    inset 0 0.5px 0 rgba(255, 255, 255, 0.08);
+}
+.topnav-btn.on .topnav-n:not(.warn) {
+  background: var(--tint);
+  color: #fff;
+}
+.meter-bar {
+  height: 6px;
+  border-radius: 3px;
+  background: var(--panel-3);
+}
+.meter-bar > span {
+  border-radius: 3px;
+}
+.appr-btn.has {
+  border-color: transparent;
+  background: color-mix(in srgb, var(--st-approval) 16%, var(--panel));
+}
+/* サイドバー: 行は角丸の選択ハイライト、見出しは小さく控えめに */
+.sidebar {
+  border-right: 0.5px solid var(--sep);
+}
+.side-head {
+  border-bottom: none;
+  padding: 10px 10px 6px 16px;
+}
+.side-head-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--muted);
+}
+.sort-sel select,
+.grp-toggle {
+  height: 28px;
+  border-radius: 7px;
+  border-color: transparent;
+  background: var(--panel-3);
+}
+.sidebar .srow-wrap {
+  margin: 1px 8px;
+}
+.sidebar .srow {
+  border-left: none;
+  border-radius: 8px;
+  padding: 7px 10px;
+}
+.sidebar .srow.active {
+  background: color-mix(in srgb, var(--tint) 22%, var(--panel));
+}
+.sidebar .srow.st-awaiting_approval:not(.active) {
+  background: color-mix(in srgb, var(--st-approval) 10%, var(--panel));
+  box-shadow: inset 3px 0 0 color-mix(in srgb, var(--st-approval) 70%, transparent);
+}
+.sidebar .sgroup-title {
+  padding: 12px 16px 4px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--muted);
+}
+.sgroup-done,
+.sidebar-foot {
+  border-top: 0.5px solid var(--sep);
+}
+.side-nav-btn,
+.side-repo {
+  border-radius: 8px;
+}
+.side-nav-btn.on {
+  background: color-mix(in srgb, var(--tint) 22%, var(--panel));
+  color: var(--fg);
+}
+.rightpanel {
+  border-left: 0.5px solid var(--sep);
+}
+/* 右パネルのタブもセグメントコントロールに */
+.rp-tabs {
+  border-bottom: 0.5px solid var(--sep);
+  padding: 8px 10px;
+}
+.rp-tab {
+  min-height: 28px;
+  border-radius: 7px;
+  border-bottom: none;
+  font-weight: 500;
+}
+.rp-tab.on {
+  background: var(--hover);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.35);
+}
+
+/* ---------- スマホ(iOS の作法) ---------- */
+/* ナビゲーションバー: すりガラス + 細い区切り線 */
+.m-head {
+  min-height: 52px;
+  padding: 4px 8px 4px 16px;
+  background: var(--material);
+  backdrop-filter: saturate(180%) blur(20px);
+  -webkit-backdrop-filter: saturate(180%) blur(20px);
+  border-bottom: 0.5px solid var(--sep);
+}
+.m-title {
+  font-size: 17px;
+  font-weight: 600;
+}
+/* 一覧のトップ(戻るボタンがない画面)は大きいタイトル */
+.m-head:not(:has(.back)) .m-title {
+  font-size: 28px;
+  font-weight: 700;
+}
+.m-head .back {
+  margin-left: -12px;
+  min-width: 44px;
+  height: 44px;
+  font-size: 34px;
+  font-weight: 300;
+  color: var(--tint);
+}
+.m-head .icon-btn {
+  min-width: 44px;
+  height: 44px;
+  color: var(--tint);
+}
+.m-head .icon-btn:hover,
+.m-head .back:hover {
+  background: transparent;
+}
+.m-head .icon-btn.on {
+  background: color-mix(in srgb, var(--tint) 20%, transparent);
+  border-radius: 999px;
+}
+/* バーのボタンはカプセル形の色付き(塗りつぶしの青を減らす) */
+.m-head .btn.sm {
+  min-height: 36px;
+  padding: 0 14px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--tint) 20%, transparent);
+  color: var(--accent);
+  font-size: 15px;
+  font-weight: 600;
+}
+.mobile .btn {
+  min-height: 44px;
+  padding: 8px 16px;
+  font-size: 16px;
+  border-radius: 12px;
+}
+.mobile .btn.sm {
+  min-height: 36px;
+  padding: 4px 12px;
+  font-size: 15px;
+  border-radius: 10px;
+}
+.mobile input,
+.mobile select,
+.mobile textarea {
+  font-size: 16px; /* iOS のズーム防止 */
+}
+.mobile input:not([type='checkbox']):not([type='radio']):not([type='range']),
+.mobile select {
+  min-height: 44px;
+  border-radius: 10px;
+}
+.mobile .sort-sel select,
+.mobile .grp-toggle {
+  height: 36px;
+  min-height: 36px;
+  border-radius: 10px;
+  font-size: 15px;
+}
+
+/* タブバー: アイコン + 短いラベル、選択中はアクセントカラー */
+.tabbar {
+  background: var(--material);
+  backdrop-filter: saturate(180%) blur(20px);
+  -webkit-backdrop-filter: saturate(180%) blur(20px);
+  border-top: 0.5px solid var(--sep);
+  padding: 0 4px var(--safe-b);
+}
+.mobile .tabbar button {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 1px;
+  min-height: 54px;
+  padding: 6px 0 4px;
+  color: var(--dim);
+  font-size: 11px;
+  font-weight: 500;
+}
+.mobile .tabbar button.active {
+  color: var(--tint);
+  box-shadow: none;
+}
+.tab-ico {
+  position: relative;
+  display: flex;
+  line-height: 0;
+}
+.tab-label {
+  line-height: 1.2;
+}
+.tabbar .tab-badge {
+  position: absolute;
+  top: 3px;
+  left: calc(50% + 3px);
+  margin: 0;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  border-radius: 9px;
+  font-size: 12px;
+  line-height: 18px;
+  box-shadow: 0 0 0 2px var(--panel);
+}
+.mobile .toasts {
+  bottom: calc(68px + var(--safe-b));
+}
+
+/* インセットグループのリスト: 角丸のカードに行を並べ、区切り線は左を空ける */
+.mobile .m-usage {
+  margin: 12px 16px 4px;
+  padding: 12px 16px;
+  border: none;
+  border-radius: var(--radius-lg);
+  background: var(--panel);
+}
+.mobile .m-sort {
+  padding: 8px 16px 0;
+  border: none;
+}
+.mobile .sgroup {
+  margin: 0 16px 6px;
+}
+.mobile .sgroup-title {
+  padding: 18px 16px 7px;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--muted);
+}
+.mobile .sgroup .srow-wrap {
+  background: var(--panel);
+}
+.mobile .sgroup-title + .srow-wrap,
+.mobile .sgroup > .srow-wrap:first-child {
+  border-top-left-radius: var(--radius-lg);
+  border-top-right-radius: var(--radius-lg);
+}
+.mobile .sgroup > .srow-wrap:last-child {
+  border-bottom-left-radius: var(--radius-lg);
+  border-bottom-right-radius: var(--radius-lg);
+}
+.mobile .srow-wrap .srow {
+  border-radius: inherit;
+}
+.mobile .srow-wrap + .srow-wrap::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 16px;
+  right: 0;
+  border-top: 0.5px solid var(--sep);
+  z-index: 1;
+}
+.mobile .srow {
+  border-left: none;
+  min-height: 60px;
+  padding: 11px 16px;
+}
+.mobile .srow:hover {
+  background: transparent;
+}
+.mobile .srow:active {
+  background: var(--panel-3);
+}
+.mobile .srow.st-awaiting_approval:not(.active) {
+  background: color-mix(in srgb, var(--st-approval) 10%, var(--panel));
+  box-shadow: inset 3px 0 0 var(--st-approval);
+}
+.mobile .srow-name {
+  font-size: 17px;
+  font-weight: 600;
+}
+.mobile .sgroup-done {
+  border-top: none;
+  margin-top: 10px;
+}
+
+/* 「その他」のメニューもインセットグループ */
+.mobile .more-list {
+  margin: 16px;
+  border-radius: var(--radius-lg);
+  background: var(--panel);
+  overflow: hidden;
+}
+.mobile .more-item {
+  position: relative;
+  min-height: 60px;
+  padding: 10px 16px;
+  border-bottom: none;
+}
+.mobile .more-list li + li .more-item::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 66px;
+  right: 0;
+  border-top: 0.5px solid var(--sep);
+}
+.mobile .more-item:active {
+  background: var(--panel-3);
+}
+.mobile .more-ico {
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  color: #fff;
+  background: var(--primary);
+}
+.mobile .more-label {
+  font-size: 17px;
+  font-weight: 400;
+}
+.mobile .more-go {
+  color: var(--border-input);
+}
+
+/* シート: スマホのダイアログは下から出す */
+@media (max-width: 899px) {
+  .modal-backdrop {
+    align-items: flex-end;
+    padding: 24px 0 0;
+  }
+  .modal {
+    width: 100%;
+    max-height: calc(100% - 24px);
+    border-radius: 14px 14px 0 0;
+    border: none;
+    padding-bottom: var(--safe-b);
+  }
+  .modal::before {
+    content: '';
+    align-self: center;
+    flex: none;
+    width: 36px;
+    height: 5px;
+    margin-top: 6px;
+    border-radius: 3px;
+    background: var(--border-2);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .btn {
+    transition: none;
+  }
+  .btn:active:not(:disabled) {
+    transform: none;
+  }
+}
+
+/* スマホ: ナビゲーションバーに大きいタイトルがあるので、ページ内の同じ見出しは出さない */
+.mobile .home-title {
+  display: none;
+}
+
+/* チャット: 自分の発言は青い吹き出し(白文字)、Claude の返答は吹き出しなしの本文 */
+.chat-bubble {
+  padding: 9px 14px;
+  border-radius: 18px 18px 6px 18px;
+  background: var(--primary);
+  color: #fff;
+  line-height: 1.45;
+}
+.chat-bubble a,
+.chat-bubble code {
+  color: #fff;
+}
+.mobile .chat-bubble,
+.mobile .chat-msg.assistant {
+  font-size: 16px;
+  line-height: 1.6;
+}

@@ -1,43 +1,49 @@
-/* CC Hub — ダークな開発ツール風スタイル(読みやすさ優先: 文字は大きめ・コントラストは WCAG AA 以上)
+/* CC Hub — Apple Human Interface Guidelines に沿ったダーク外観(システムカラー・SF / ヒラギノ系フォント・44pt のタップ領域)
+   部品の見た目の上書きは hig.css。読みやすさ優先: コントラストは WCAG AA 以上
    色を変えたら node packages/web/scripts/contrast.mjs でコントラスト比を確認する */
 :root {
-  --bg: #171a21;
-  --bg-term: #13161c;
-  --panel: #1d2129;
-  --panel-2: #252a34;
-  --panel-3: #2e3441;
-  --border: #353c4a;
-  --border-2: #485164;
-  --border-input: #6b7488;
-  --fg: #eceef2;
-  --fg-2: #ccd1da;
-  --muted: #aab1bf;
-  --dim: #8a92a2;
-  --accent: #8cbcff;
-  --accent-bg: #223453;
-  --primary: #2f62c0;
-  --primary-hover: #3a71d6;
+  --bg: #0e0e10;
+  --bg-term: #0b0b0d;
+  --panel: #1c1c1e;
+  --panel-2: #242426;
+  --panel-3: #2c2c2e;
+  --border: #38383a;
+  --border-2: #48484a;
+  --border-input: #7c7c80;
+  --fg: #f5f5f7;
+  --fg-2: #d1d1d6;
+  --muted: #aeaeb2;
+  --dim: #8e8e93;
+  --accent: #4aa3ff;
+  --accent-bg: #132a45;
+  --primary: #0071e3;
+  --primary-hover: #0a7cf0;
 
-  --st-running: #6cb0ff;
-  --st-approval: #f5c04a;
-  --st-input: #5fd59c;
-  --st-idle: #b3bac7;
-  --st-error: #ff8f99;
-  --st-stopped: #a3aab8;
-  --st-starting: #94bcf5;
+  --st-running: #4aa3ff;
+  --st-approval: #ffb340;
+  --st-input: #30d158;
+  --st-idle: #aeaeb2;
+  --st-error: #ff6961;
+  --st-stopped: #98989d;
+  --st-starting: #70d7ff;
 
-  --approve: #24683f;
-  --approve-fg: #dcf7e6;
-  --deny: #7a2e37;
-  --deny-fg: #ffe0e4;
-  --danger-bg: #351d23;
-  --danger-fg: #ffc2c9;
-  --danger-border: #6e3540;
-  --hover: #363d4c;
+  --approve: #1d7a37;
+  --approve-fg: #ffffff;
+  --deny: #3d1517;
+  --deny-fg: #ff8a84;
+  --danger-bg: #3a1518;
+  --danger-fg: #ff9a94;
+  --danger-border: #6e2a2f;
+  --hover: #3a3a3c;
 
-  --mono: 'Cascadia Mono', Consolas, 'BIZ UDGothic', monospace;
-  --sans: 'Segoe UI', 'Yu Gothic UI', 'Hiragino Sans', system-ui, sans-serif;
-  --radius: 6px;
+  --mono: 'SF Mono', ui-monospace, 'Cascadia Mono', Consolas, 'BIZ UDGothic', monospace;
+  --sans: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Hiragino Sans', 'Segoe UI Variable Text', 'Segoe UI', 'Yu Gothic UI', system-ui, sans-serif;
+  --radius: 8px;
+  --radius-lg: 12px;
+  --tint: #0a84ff;
+  --badge: #ff453a;
+  --sep: rgba(84, 84, 88, 0.6);
+  --material: rgba(28, 28, 30, 0.8);
   --safe-b: env(safe-area-inset-bottom, 0px);
   --safe-t: env(safe-area-inset-top, 0px);
   color-scheme: dark;
@@ -219,12 +225,12 @@ kbd {
 .btn.on,
 .btn.ghost.on {
   background: var(--accent-bg);
-  border-color: #3a5f99;
+  border-color: color-mix(in srgb, var(--tint) 45%, transparent);
   color: var(--accent);
 }
 .btn.on-green {
-  background: #183526;
-  border-color: #2b6b47;
+  background: color-mix(in srgb, var(--st-input) 16%, var(--panel));
+  border-color: color-mix(in srgb, var(--st-input) 40%, transparent);
   color: var(--st-input);
   font-weight: 600;
 }
@@ -603,7 +609,7 @@ kbd {
 .grp-toggle.on {
   color: var(--accent);
   background: var(--accent-bg);
-  border-color: #3a5f99;
+  border-color: color-mix(in srgb, var(--tint) 45%, transparent);
 }
 .grp-toggle:hover {
   color: var(--fg);
@@ -1014,7 +1020,7 @@ kbd {
   padding: 6px 14px;
   border-radius: 999px;
   background: var(--accent-bg);
-  border: 1px solid #3a5f99;
+  border: 1px solid color-mix(in srgb, var(--tint) 45%, transparent);
   color: var(--accent);
   font-size: 13px;
   z-index: 5;
@@ -1842,7 +1848,7 @@ kbd {
 }
 .keys-row button.held {
   background: var(--accent);
-  color: #0d0f13;
+  color: var(--bg-term);
 }
 .game-view {
   position: relative;
@@ -1892,7 +1898,7 @@ kbd {
 }
 .pad-btn.held {
   background: rgba(110, 168, 254, 0.85);
-  color: #0d0f13;
+  color: var(--bg-term);
 }
 .pad-up {
   left: 76px;
@@ -2108,11 +2114,11 @@ kbd {
 :root {
   --wt-creating: #7aa7e6;
   --wt-warming: #a78bfa;
-  --wt-idle: #4cc38a;
+  --wt-idle: var(--st-input);
   --wt-assigned: #4c9aff;
   --wt-releasing: #3fb8c9;
   --wt-deleting: #8b93a3;
-  --wt-broken: #f0717d;
+  --wt-broken: var(--st-error);
   --warn-bg: #2a2210;
   --warn-border: #6b5420;
   --warn-fg: #f5d48a;
@@ -2637,8 +2643,8 @@ kbd {
   background: var(--warn-bg);
 }
 .check-field.trust.on {
-  border-color: #2b6b47;
-  background: #14271d;
+  border-color: color-mix(in srgb, var(--st-input) 40%, transparent);
+  background: color-mix(in srgb, var(--st-input) 12%, var(--panel));
 }
 .check-field.danger-on {
   border-color: var(--danger-border);
@@ -3032,12 +3038,12 @@ input:disabled {
 
 /* ---------- フェーズ 3: ブランチ / PR ---------- */
 :root {
-  --pr-open: #4cc38a;
+  --pr-open: var(--st-input);
   --pr-draft: #8b93a3;
   --pr-merged: #a78bfa;
-  --pr-closed: #f0717d;
-  --diff-add: #4cc38a;
-  --diff-del: #f0717d;
+  --pr-closed: var(--st-error);
+  --diff-add: var(--st-input);
+  --diff-del: var(--st-error);
 }
 a.btn,
 a.link-btn {
@@ -4386,7 +4392,7 @@ a.link-btn:hover {
 .side-repo-dash.on {
   color: var(--accent);
   background: var(--accent-bg);
-  border-color: #3a5f99;
+  border-color: color-mix(in srgb, var(--tint) 45%, transparent);
 }
 
 /* ページ */
@@ -5792,7 +5798,7 @@ th[aria-sort='descending'] .th-arrow {
 .topnav-btn.on {
   background: var(--accent-bg);
   color: var(--accent);
-  box-shadow: inset 0 0 0 1px #3a5f99;
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--tint) 45%, transparent);
 }
 .topnav-n {
   min-width: 18px;
@@ -6315,7 +6321,7 @@ th[aria-sort='descending'] .th-arrow {
 }
 .fb-badge.git {
   color: var(--accent);
-  border-color: #3a5f99;
+  border-color: color-mix(in srgb, var(--tint) 45%, transparent);
 }
 .fb-badge.claude {
   color: var(--st-approval);
@@ -6457,8 +6463,8 @@ th[aria-sort='descending'] .th-arrow {
   font-size: 11.5px;
   font-weight: 600;
   color: var(--st-input);
-  border: 1px solid #2b6b47;
-  background: #183526;
+  border: 1px solid color-mix(in srgb, var(--st-input) 40%, transparent);
+  background: color-mix(in srgb, var(--st-input) 16%, var(--panel));
 }
 .hx-last {
   font-size: 12.5px;
@@ -6558,7 +6564,7 @@ th[aria-sort='descending'] .th-arrow {
 }
 .hx-msg.user {
   background: var(--accent-bg);
-  border-color: #3a5f99;
+  border-color: color-mix(in srgb, var(--tint) 45%, transparent);
 }
 .hx-msg-head {
   display: flex;
@@ -6707,7 +6713,7 @@ th[aria-sort='descending'] .th-arrow {
 }
 .set-msg.ok {
   color: var(--st-input);
-  border-color: #2b6b47;
+  border-color: color-mix(in srgb, var(--st-input) 40%, transparent);
 }
 .set-msg.ng {
   color: var(--danger-fg);
@@ -6767,7 +6773,7 @@ th[aria-sort='descending'] .th-arrow {
 }
 .topic-chip.on {
   background: var(--accent-bg);
-  border-color: #3a5f99;
+  border-color: color-mix(in srgb, var(--tint) 45%, transparent);
   color: var(--fg);
 }
 .topic-chip input {
@@ -6946,8 +6952,8 @@ th[aria-sort='descending'] .th-arrow {
 .proto-tag.p-sftp,
 .proto-tag.p-ftps {
   color: var(--st-input);
-  border-color: #2b6b47;
-  background: #14271d;
+  border-color: color-mix(in srgb, var(--st-input) 40%, transparent);
+  background: color-mix(in srgb, var(--st-input) 12%, var(--panel));
 }
 .proto-tag.p-ftp {
   color: var(--warn-fg);
@@ -7003,8 +7009,8 @@ th[aria-sort='descending'] .th-arrow {
   gap: 4px;
 }
 .srv-result.ok {
-  background: #14271d;
-  border: 1px solid #2b6b47;
+  background: color-mix(in srgb, var(--st-input) 12%, var(--panel));
+  border: 1px solid color-mix(in srgb, var(--st-input) 40%, transparent);
 }
 .srv-result.ok b {
   color: var(--st-input);
@@ -7055,8 +7061,8 @@ th[aria-sort='descending'] .th-arrow {
 }
 .mcp-reg.ok {
   color: var(--st-input);
-  border-color: #2b6b47;
-  background: #14271d;
+  border-color: color-mix(in srgb, var(--st-input) 40%, transparent);
+  background: color-mix(in srgb, var(--st-input) 12%, var(--panel));
 }
 .mcp-reg.warn,
 .mcp-reg.none {
@@ -7113,13 +7119,13 @@ th[aria-sort='descending'] .th-arrow {
 .dbadge.ds-uploading,
 .dbadge.ds-ready {
   color: var(--accent);
-  border-color: #3a5f99;
+  border-color: color-mix(in srgb, var(--tint) 45%, transparent);
   background: var(--accent-bg);
 }
 .dbadge.ds-done {
   color: var(--st-input);
-  border-color: #2b6b47;
-  background: #14271d;
+  border-color: color-mix(in srgb, var(--st-input) 40%, transparent);
+  background: color-mix(in srgb, var(--st-input) 12%, var(--panel));
 }
 .dbadge.ds-failed {
   color: var(--danger-fg);
@@ -7201,7 +7207,7 @@ th[aria-sort='descending'] .th-arrow {
 }
 .plan-k.new {
   color: var(--st-input);
-  background: #14271d;
+  background: color-mix(in srgb, var(--st-input) 12%, var(--panel));
 }
 .plan-k.changed {
   color: var(--accent);
@@ -7282,8 +7288,8 @@ th[aria-sort='descending'] .th-arrow {
 }
 .rp-alert.ok {
   align-items: center;
-  background: #14271d;
-  border: 1px solid #2b6b47;
+  background: color-mix(in srgb, var(--st-input) 12%, var(--panel));
+  border: 1px solid color-mix(in srgb, var(--st-input) 40%, transparent);
   border-left: 4px solid var(--st-input);
   color: var(--fg);
 }
@@ -7323,7 +7329,7 @@ th[aria-sort='descending'] .th-arrow {
   gap: 8px;
 }
 .deploy-card.is-running {
-  border-color: #3a5f99;
+  border-color: color-mix(in srgb, var(--tint) 45%, transparent);
   border-left-color: var(--st-running);
 }
 .dreq-head {
@@ -7613,7 +7619,7 @@ th[aria-sort='descending'] .th-arrow {
   display: flex;
   flex-direction: column;
   gap: 10px;
-  border-color: #3a5f99;
+  border-color: color-mix(in srgb, var(--tint) 45%, transparent);
 }
 .ins-meter.compact {
   align-self: flex-start;

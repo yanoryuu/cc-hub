@@ -274,12 +274,21 @@ export function DesktopApp() {
               )}
             />
           ) : (
-            <div className="empty big">
-              {loaded ? (selectedId ? 'セッションが見つかりません' : 'セッションがありません。「+ 新規セッション」から起動できます') : '読み込み中…'}
-              {loaded && (
-                <button className="btn" onClick={() => setTopView('projects')}>
-                  プロジェクト一覧へ
-                </button>
+            <div className="empty big empty-state">
+              {loaded ? (
+                <>
+                  <svg className="empty-ico" width="44" height="44" viewBox="0 0 24 24" aria-hidden="true">
+                    <rect x="3" y="4.5" width="18" height="15" rx="3" fill="none" stroke="currentColor" strokeWidth="1.4" />
+                    <path d="m7 9.5 3 2.5-3 2.5M12.5 15h4" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
+                  </svg>
+                  <p className="empty-title">{selectedId ? 'セッションが見つかりません' : 'セッションを選んでください'}</p>
+                  <p className="empty-desc">左の一覧から開くか、「+ 新規セッション」で始められます。</p>
+                  <button className="btn" onClick={() => setTopView('projects')}>
+                    プロジェクト一覧へ
+                  </button>
+                </>
+              ) : (
+                '読み込み中…'
               )}
             </div>
           )}

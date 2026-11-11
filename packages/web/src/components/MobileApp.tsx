@@ -23,6 +23,46 @@ import { ProjectScreen } from './Project';
 import { HomeScreen } from './Home';
 import { HistoryView } from './History';
 
+type TabKey = 'projects' | 'sessions' | 'approvals' | 'prs' | 'more';
+
+/** 下タブのアイコン(SF Symbols 風の線画。HIG: タブはアイコン + 短いラベル) */
+function TabIcon({ t }: { t: TabKey }) {
+  const p = { fill: 'none', stroke: 'currentColor', strokeWidth: 1.7, strokeLinecap: 'round', strokeLinejoin: 'round' } as const;
+  return (
+    <svg width="26" height="26" viewBox="0 0 24 24">
+      {t === 'projects' && <path {...p} d="M3 7.5a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2V17a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />}
+      {t === 'sessions' && (
+        <>
+          <rect {...p} x="3" y="4.5" width="18" height="15" rx="3" />
+          <path {...p} d="m7 9.5 3 2.5-3 2.5M12.5 15h4" />
+        </>
+      )}
+      {t === 'approvals' && (
+        <>
+          <path {...p} d="M12 3.5 5 6v5.5c0 4.2 3 7.6 7 9 4-1.4 7-4.8 7-9V6z" />
+          <path {...p} d="m8.8 12 2.3 2.3 4.2-4.6" />
+        </>
+      )}
+      {t === 'prs' && (
+        <>
+          <circle {...p} cx="6.5" cy="5.5" r="2" />
+          <circle {...p} cx="6.5" cy="18.5" r="2" />
+          <circle {...p} cx="17.5" cy="18.5" r="2" />
+          <path {...p} d="M6.5 7.5v9M17.5 16.5V10a3 3 0 0 0-3-3H11m0 0 2.2-2.2M11 7l2.2 2.2" />
+        </>
+      )}
+      {t === 'more' && (
+        <>
+          <circle {...p} cx="12" cy="12" r="9" />
+          <circle cx="7.8" cy="12" r="1.3" fill="currentColor" />
+          <circle cx="12" cy="12" r="1.3" fill="currentColor" />
+          <circle cx="16.2" cy="12" r="1.3" fill="currentColor" />
+        </>
+      )}
+    </svg>
+  );
+}
+
 /** PR タブ: 一覧 → 詳細 */
 function PrMobileScreen() {
   const route = useHub((s) => s.prRoute);
@@ -385,7 +425,10 @@ export function MobileApp() {
       aria-current={tab === t ? 'page' : undefined}
       onClick={() => (t === 'more' && tab === 'more' ? openMore('menu') : setTab(t))}
     >
-      {label}
+      <span className="tab-ico" aria-hidden="true">
+        <TabIcon t={t} />
+      </span>
+      <span className="tab-label">{label}</span>
       {badge}
     </button>
   );
