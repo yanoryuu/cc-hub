@@ -569,3 +569,83 @@ input[type='radio'] {
   font-size: 16px;
   line-height: 1.6;
 }
+
+/* iOS のホーム画面アプリで高さが足りない不具合の補正(main.tsx の fitStandaloneHeight が --app-h を入れる) */
+html,
+body,
+#root {
+  height: var(--app-h, 100%);
+}
+
+/* セッション一覧のアコーディオン(プロジェクト → セッション → サブエージェント) */
+.sgroup-head {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 10px 8px 2px;
+}
+.sgroup-head .sgroup-title,
+.sidebar .sgroup-head .sgroup-title,
+.mobile .sgroup-head .sgroup-title {
+  flex: 1;
+  min-width: 0;
+  padding: 2px 8px 2px 2px;
+}
+.slist-caret {
+  width: 22px;
+  height: 22px;
+  line-height: 22px;
+  font-size: 12px;
+  border-radius: 6px;
+}
+.sgroup.closed {
+  padding-bottom: 2px;
+}
+.srow-wrap.has-agents > .slist-caret {
+  position: absolute;
+  left: 3px;
+  top: 8px;
+  z-index: 1;
+}
+.srow-wrap.has-agents > .srow,
+.sidebar .srow-wrap.has-agents > .srow {
+  padding-left: 27px;
+}
+.srow-agents {
+  margin: 0 8px 4px 34px;
+  padding: 2px 0 4px;
+  font-size: 12px;
+}
+.mobile .sgroup-head {
+  padding: 16px 10px 6px;
+}
+.mobile .slist-caret {
+  width: 32px;
+  height: 32px;
+  line-height: 32px;
+  font-size: 14px;
+}
+.mobile .srow-wrap.has-agents > .slist-caret {
+  left: 4px;
+  top: 10px;
+}
+.mobile .srow-wrap.has-agents > .srow {
+  padding-left: 40px;
+}
+.mobile .srow-agents {
+  margin: 0;
+  padding: 2px 14px 10px 44px;
+  background: var(--panel);
+}
+.mobile .sgroup > .srow-agents:last-child {
+  border-bottom-left-radius: var(--radius-lg);
+  border-bottom-right-radius: var(--radius-lg);
+}
+.mobile .sgroup > .srow-wrap:has(+ .srow-agents) {
+  border-bottom-left-radius: 0;
+  border-bottom-right-radius: 0;
+}
+.mobile .sgroup-head + .srow-wrap {
+  border-top-left-radius: var(--radius-lg);
+  border-top-right-radius: var(--radius-lg);
+}

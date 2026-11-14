@@ -5,12 +5,12 @@ import { useHub } from '../store';
 import { AGENT_STATUS_LABEL, fmtElapsed, useNow } from '../util';
 import { StatusDot, toolText } from './common';
 
-interface TreeNode {
+export interface TreeNode {
   agent: AgentNode;
   children: TreeNode[];
 }
 
-function buildTree(agents: AgentNode[]): TreeNode[] {
+export function buildTree(agents: AgentNode[]): TreeNode[] {
   const byId = new Map<string, TreeNode>();
   for (const a of agents) byId.set(a.agentId, { agent: a, children: [] });
   const roots: TreeNode[] = [];
@@ -49,7 +49,7 @@ function Caret({ open, onClick, label }: { open: boolean; onClick?: () => void; 
 }
 
 /** 子孫の数と、そのうち実行中の数 */
-function countTree(list: TreeNode[]): { total: number; running: number } {
+export function countTree(list: TreeNode[]): { total: number; running: number } {
   let total = 0;
   let running = 0;
   for (const n of list) {
@@ -62,7 +62,7 @@ function countTree(list: TreeNode[]): { total: number; running: number } {
   return { total, running };
 }
 
-function AgentRow({ node, now }: { node: TreeNode; now: number }) {
+export function AgentRow({ node, now }: { node: TreeNode; now: number }) {
   const a = node.agent;
   // 子のあるエージェントも個別に閉じられる(既定は開く)
   const [open, setOpen] = useState(true);

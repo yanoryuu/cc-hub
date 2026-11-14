@@ -1,23 +1,85 @@
 // セッション一覧(並び順を選べる / リポジトリ・cwd ごとにまとめる)。デスクトップのサイドバーとモバイルの一覧で共用
-import { useState } from 'react';
-import type { SessionInfo } from '@cc-hub/shared';
+import { useMemo, useState } from 'react';
+import type { AgentNode, SessionInfo } from '@cc-hub/shared';
 import { api, errText, isConflict, repoApi, sessionApi } from '../api';
 import { SORT_LABEL, type SortMode, groupSessions, isFinished, useHub } from '../store';
-import { STATUS_ICON, STATUS_LABEL, projectLabel } from '../util';
+import { STATUS_ICON, STATUS_LABEL, projectLabel, useNow } from '../util';
 import { needsRelease, useSessionWorktree } from '../repo';
 import { fmtTokens, projectKey } from '../project';
 import { CtxMeter, WhereTag, toolText } from './common';
+import { AgentRow, buildTree, countTree } from './AgentTree';
+
+// ---------------------------------------------------------------- 開閉の記憶
+// プロジェクト(グループ)は既定で開く → 閉じたものを覚える。セッションのサブエージェントは既定で閉じる → 開いたものを覚える
+const GROUPS_KEY = 'cchub.slist.closedGroups';
+const AGENTS_KEY = 'cchub.slist.openAgents';
+function loadSet(key: string): Set<string> {
+  try {
+    const v = JSON.parse(localStorage.getItem(key) ?? '[]');
+    return new Set(Array.isArray(v) ? v.filter((x) => typeof x === 'string') : []);
+  } catch {
+    return new Set();
+  }
+}
+function saveSet(key: string, s: Set<string>): void {
+  try {
+    localStorage.setItem(key, JSON.stringify([...s].slice(-200)));
+  } catch {
+    /* 保存できなくても表示は切り替える */
+  }
+}
+function useToggleSet(key: string): [Set<string>, (id: string) => void] {
+  const [set, setSet] = useState(() => loadSet(key));
+  const toggle = (id: string) =>
+    setSet((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      saveSet(key, next);
+      return next;
+    });
+  return [set, toggle];
+}
+
+/** 開く / 閉じるの矢印(エージェントのツリーと同じ形) */
+function Caret({ open, onClick, label }: { open: boolean; onClick: () => void; label: string }) {
+  return (
+    <button type="button" className="agent-caret slist-caret" onClick={onClick} aria-expanded={open} aria-label={label} title={label}>
+      {open ? '▾' : '▸'}
+    </button>
+  );
+}
+
+/** セッションの下のサブエージェント(開いているときだけ描く) */
+function SessionAgents({ agents }: { agents: AgentNode[] }) {
+  const now = useNow(1000);
+  const tree = useMemo(() => buildTree(agents), [agents]);
+  return (
+    <ul className="agent-tree srow-agents">
+      {tree.map((n) => (
+        <AgentRow key={n.agent.agentId} node={n} now={now} />
+      ))}
+    </ul>
+  );
+}
 
 function SessionRow({
   s,
   index,
   active,
   onClick,
+  agents = [],
+  agentsOpen = false,
+  onToggleAgents,
 }: {
   s: SessionInfo;
   index: number;
   active: boolean;
   onClick: () => void;
+  /** このセッションのサブエージェント */
+  agents?: AgentNode[];
+  agentsOpen?: boolean;
+  onToggleAgents?: () => void;
 }) {
   const wt = useSessionWorktree(s);
   const release = needsRelease(s, wt);
@@ -76,8 +138,18 @@ function SessionRow({
       setRemoving(false);
     }
   };
+  const hasAgents = agents.length > 0 && !!onToggleAgents;
+  const agentCount = hasAgents ? countTree(buildTree(agents)) : null;
   return (
-    <div className="srow-wrap">
+    <>
+    <div className={`srow-wrap ${hasAgents ? 'has-agents' : ''}`}>
+      {hasAgents && (
+        <Caret
+          open={agentsOpen}
+          onClick={onToggleAgents!}
+          label={`${agentsOpen ? 'サブエージェントを閉じる' : 'サブエージェントを開く'}(${agentCount!.total} 件${agentCount!.running ? `、${agentCount!.running} 実行中` : ''})`}
+        />
+      )}
     <button className={`srow st-${s.status} ${active ? 'active' : ''}`} onClick={onClick} aria-current={active}>
       <span className="srow-main">
         <span className="srow-top">
@@ -158,6 +230,8 @@ function SessionRow({
         ×
       </button>
     </div>
+      {hasAgents && agentsOpen && <SessionAgents agents={agents} />}
+    </>
   );
 }
 
@@ -208,6 +282,18 @@ export function SessionList({
   const activeProject = useHub((s) => (s.deskView === 'project' || s.mobileProject ? projectKey(s.project) : ''));
   const [showDone, setShowDone] = useState(false);
   const [clearing, setClearing] = useState(false);
+  const [closedGroups, toggleGroup] = useToggleSet(GROUPS_KEY);
+  const [openAgents, toggleAgents] = useToggleSet(AGENTS_KEY);
+  const agents = useHub((s) => s.agents);
+  const agentsBySession = useMemo(() => {
+    const m = new Map<string, AgentNode[]>();
+    for (const a of Object.values(agents)) {
+      const l = m.get(a.sessionId);
+      if (l) l.push(a);
+      else m.set(a.sessionId, [a]);
+    }
+    return m;
+  }, [agents]);
   const all = Object.values(sessions);
   const done = all.filter((s) => isFinished(s, worktrees)).sort((a, b) => b.lastEventAt - a.lastEventAt);
   const groups = groupSessions(
@@ -232,10 +318,24 @@ export function SessionList({
   return (
     <nav className="slist" aria-label="セッション">
       {groups.every((g) => g.sessions.length === 0) && <div className="empty small">動いているセッションはありません</div>}
-      {groups.map((g) =>
-        g.sessions.length === 0 ? null : (
-          <div className="sgroup" key={g.key}>
-            {g.key !== 'all' && (
+      {groups.map((g) => {
+        if (g.sessions.length === 0) return null;
+        const grouped = g.key !== 'all';
+        const open = !grouped || !closedGroups.has(g.key);
+        const label = g.repoId ? g.label : projectLabel(g.cwd ?? '');
+        // 閉じているあいだも Ctrl+数字 の番号は数える(開いたときに番号がずれないように)
+        const startIdx = idx;
+        idx += g.sessions.length;
+        let rowIdx = startIdx;
+        return (
+          <div className={`sgroup ${open ? '' : 'closed'}`} key={g.key}>
+            {grouped && (
+              <div className="sgroup-head">
+              <Caret
+                open={open}
+                onClick={() => toggleGroup(g.key)}
+                label={`${label} のセッションを${open ? '閉じる' : '開く'}(${g.sessions.length} 件)`}
+              />
               <button
                 className={`sgroup-title sgroup-link ${activeProject && activeProject === projectKey(g) ? 'on' : ''}`}
                 title={`${g.sub}\nクリックで管理画面を開く`}
@@ -258,22 +358,27 @@ export function SessionList({
                   管理画面 ›
                 </span>
               </button>
+              </div>
             )}
-            {g.sessions.map((s) => {
-              const i = idx++;
-              return (
-                <SessionRow
-                  key={s.id}
-                  s={s}
-                  index={i}
-                  active={!activeOnlyInSessionView && s.id === selectedId}
-                  onClick={() => onPick(s.id)}
-                />
-              );
-            })}
+            {open &&
+              g.sessions.map((s) => {
+                const i = rowIdx++;
+                return (
+                  <SessionRow
+                    key={s.id}
+                    s={s}
+                    index={i}
+                    active={!activeOnlyInSessionView && s.id === selectedId}
+                    onClick={() => onPick(s.id)}
+                    agents={agentsBySession.get(s.id)}
+                    agentsOpen={openAgents.has(s.id)}
+                    onToggleAgents={() => toggleAgents(s.id)}
+                  />
+                );
+              })}
           </div>
-        ),
-      )}
+        );
+      })}
       {done.length > 0 && (
         <div className="sgroup sgroup-done">
           <div className="sgroup-title sgroup-done-head">

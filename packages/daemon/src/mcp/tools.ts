@@ -2,7 +2,8 @@
 // 呼び出し元の claude は自分が誰かを名乗らないため、セッション / プロジェクトは引数の cwd(作業フォルダ)から推定する。
 // (ヘッダー X-CC-Hub-Session が展開済みで届いた場合はそれを優先する)
 import path from 'node:path';
-import type { AppLauncher, DeployJob, ServerInfo, SessionInfo } from '@cc-hub/shared';
+import { SESSION_MODELS } from '@cc-hub/shared';
+import type { AppLauncher, DeployJob, FolderProject, ModePreset, RepoInfo, ServerInfo, SessionInfo, StartSessionRequest } from '@cc-hub/shared';
 import type { DeployService } from '../deploy/service';
 import type { FirebaseInfoService } from '../firebase/info';
 import { infoSummary } from '../firebase/info';
@@ -12,6 +13,7 @@ import { HttpError } from '../util';
 import { launchUnity, unityStatus } from '../unity/launcher';
 import { LAUNCHER_COMMAND_MAX, LAUNCHER_LABEL_MAX, LAUNCHER_MAX, unityMessage } from '../session/launchers';
 import { IMAGES_MAX, IMAGE_MAX_BYTES } from '../notify/images';
+import { folderKey } from '../project/folders';
 
 export class ToolInputError extends Error {}
 
@@ -199,6 +201,47 @@ export const TOOLS: ToolDef[] = [
     readOnly: false,
   },
   {
+    name: 'list_projects',
+    description:
+      'CC Hub に登録されているプロジェクトの一覧を返します: リポジトリ(id・名前・状態。セッションは専用の worktree で動く)と、フォルダのプロジェクト(そのフォルダで直接動く)。' +
+      'あわせて start_session で選べるモード(mode)とモデル(model)も返します。読み取りのみです。start_session / register_project の前に確認してください。',
+    props: {},
+    required: [],
+    readOnly: true,
+  },
+  {
+    name: 'register_project',
+    description:
+      'フォルダを CC Hub の「フォルダのプロジェクト」として登録し、ホームとサイドバーにいつも出るようにします(Git が無くてもよい。フォルダの中身には触れません)。' +
+      'path を省略すると cwd を登録します。既に登録済みのフォルダや、登録済みのリポジトリの中なら何もしません。' +
+      'ユーザーに頼まれたとき、または新しく作ったプロジェクトを CC Hub から使えるようにしたいときに使ってください。GitHub のリポジトリの登録(クローン)はこのツールではできません(CC Hub の画面で行います)。',
+    props: {
+      cwd: CWD_PROP,
+      path: { type: 'string', description: '登録するフォルダの絶対パス(省略時は cwd)', maxLength: 1000 },
+    },
+    required: ['cwd'],
+    readOnly: false,
+  },
+  {
+    name: 'start_session',
+    description:
+      'CC Hub で新しい Claude Code のセッションを起動し、instruction を最初の指示として渡します。起動したセッションは CC Hub の一覧に出て、ユーザーが画面から操作できます。' +
+      'project にはリポジトリの id(list_projects)かフォルダの絶対パスを渡します。省略するとこのセッションと同じプロジェクトで起動します。' +
+      'リポジトリなら専用の worktree とブランチ(feat/…)を用意してから起動します(数十秒かかることがあります)。フォルダならそのフォルダで直接起動します。' +
+      'ユーザーに頼まれたときだけ使ってください。自分の作業を手分けするためにむやみに起動しないでください(短い時間に起動できる数には上限があります)。' +
+      '起動したらセッションの名前をユーザーに伝えてください。',
+    props: {
+      cwd: CWD_PROP,
+      instruction: { type: 'string', description: '新しいセッションに渡す最初の指示(日本語で具体的に)', maxLength: 20_000 },
+      project: { type: 'string', description: 'リポジトリの id(例: owner/name)か、フォルダの絶対パス。省略時はこのセッションと同じプロジェクト', maxLength: 1000 },
+      name: { type: 'string', description: 'セッションの表示名(省略時は自動)', maxLength: 80 },
+      mode: { type: 'string', description: 'モードの id(list_projects の modes。省略時は plain)', maxLength: 40 },
+      model: { type: 'string', description: 'モデルの id(list_projects の models。省略時はモードか CC Hub の既定)', maxLength: 40 },
+    },
+    required: ['cwd', 'instruction'],
+    readOnly: false,
+  },
+  {
     name: 'send_images',
     description:
       '画像(スクリーンショット・モック・生成した図など)を Discord に送って、ユーザーに見てもらいます。' +
@@ -298,6 +341,23 @@ export interface McpDeps {
   } | null;
   /** Discord に送る画像を預ける(NotifyService)。戻り値 = このターンで預かっている枚数。無ければ send_images はエラー */
   images?: { queue: (sessionId: string, paths: string[], cwd: string | null, caption: string) => number } | null;
+  /** プロジェクトの一覧・フォルダの登録・セッションの起動。無ければ list_projects などはエラー */
+  projects?: {
+    repos: () => RepoInfo[];
+    folders: () => FolderProject[];
+    addFolder: (p: string) => FolderProject[];
+    modes: () => ModePreset[];
+    /** repoId があればリポジトリの worktree、無ければ cwd のフォルダで起動 */
+    start: (req: StartSessionRequest) => SessionInfo;
+  } | null;
+}
+
+/** start_session の回数制限(呼び出し元ごと、START_WINDOW_MS のあいだに START_MAX 回まで) */
+export const START_MAX = 5;
+export const START_WINDOW_MS = 10 * 60_000;
+const startLog = new Map<string, number[]>();
+export function resetStartLog(): void {
+  startLog.clear();
 }
 
 function launcherSummary(l: AppLauncher) {
@@ -497,6 +557,81 @@ export async function callTool(name: string, rawArgs: unknown, d: McpDeps, ctx: 
         message: `CC Hub のセッション「${s.name}」に「${String(a.label).trim()}」ボタンを登録しました。ユーザーはこのボタンからいつでも起動できます。`,
       };
     }
+    case 'list_projects': {
+      const p = needProjects(d);
+      const folders = p.folders();
+      return {
+        repos: p.repos().map((r) => ({ id: r.id, name: r.name, status: r.status, baseDir: r.baseDir, kind: r.kind })),
+        folders: folders.map((f) => ({ path: f.path, addedAt: new Date(f.addedAt).toISOString() })),
+        modes: p.modes().map((m) => ({ id: m.id, label: m.label, description: m.description })),
+        models: SESSION_MODELS.map((m) => ({ id: m.id, label: m.label })),
+      };
+    }
+    case 'register_project': {
+      const p = needProjects(d);
+      const raw = a.path ? String(a.path).trim() : a.cwd;
+      if (!path.isAbsolute(raw)) throw new ToolInputError('path は絶対パスで指定してください');
+      const target = path.resolve(raw);
+      const repoId = d.repoIdForCwd(target);
+      if (repoId) return { registered: false, repoId, message: `このフォルダは登録済みのリポジトリ ${repoId} の中です。登録しなおす必要はありません。` };
+      const before = p.folders().some((f) => folderKey(f.path) === folderKey(target));
+      const list = p.addFolder(target);
+      return {
+        registered: !before,
+        path: target,
+        folders: list.map((f) => f.path),
+        message: before ? `${target} は登録済みです。` : `${target} を CC Hub のプロジェクトに登録しました。ホームとサイドバーに出ます。`,
+      };
+    }
+    case 'start_session': {
+      const p = needProjects(d);
+      const s = caller();
+      // 回数制限(呼び出し元ごと)
+      const who = s?.id ?? `cwd:${folderKey(a.cwd)}`;
+      const now = Date.now();
+      const recent = (startLog.get(who) ?? []).filter((t) => now - t < START_WINDOW_MS);
+      if (recent.length >= START_MAX) {
+        throw new ToolInputError(`短い時間にセッションを起動しすぎています(${START_WINDOW_MS / 60_000} 分に ${START_MAX} 回まで)。少し待つか、ユーザーに CC Hub の画面から起動してもらってください`);
+      }
+      const repos = p.repos();
+      let repoId: string | null = null;
+      let folder: string | null = null;
+      const proj = a.project ? String(a.project).trim() : '';
+      if (proj) {
+        const lc = proj.toLowerCase();
+        const byId = repos.find((r) => r.id.toLowerCase() === lc);
+        const byName = byId ? [] : repos.filter((r) => r.name.toLowerCase() === lc);
+        if (byId) repoId = byId.id;
+        else if (byName.length === 1) repoId = byName[0].id;
+        else if (byName.length > 1) throw new ToolInputError(`同じ名前のリポジトリが複数あります: ${byName.map((r) => r.id).join(', ')}(id で指定してください)`);
+        else if (path.isAbsolute(proj)) {
+          repoId = d.repoIdForCwd(proj);
+          if (!repoId) folder = path.resolve(proj);
+        } else throw new ToolInputError(`プロジェクトが見つかりません: ${proj}(list_projects のリポジトリの id か、フォルダの絶対パスを指定してください)`);
+      } else {
+        repoId = s?.repoId ?? d.repoIdForCwd(a.cwd);
+        if (!repoId) folder = path.resolve(s && !s.worktreeId ? s.cwd : a.cwd);
+      }
+      const started = p.start({
+        cwd: folder ?? '',
+        ...(repoId ? { repoId } : {}),
+        name: a.name,
+        mode: a.mode ?? 'plain',
+        model: a.model,
+        instruction: a.instruction,
+      });
+      recent.push(now);
+      startLog.set(who, recent);
+      return {
+        sessionId: started.id,
+        name: started.name,
+        status: started.status,
+        project: repoId ?? folder,
+        message:
+          `CC Hub で新しいセッション「${started.name}」を起動しました(${repoId ? `リポジトリ ${repoId} の新しい worktree で準備中` : folder})。` +
+          'ユーザーは CC Hub の一覧から開けます。状態は get_session で確認できます。',
+      };
+    }
     case 'send_images': {
       if (!d.images) throw new ToolInputError('画像を送る機能は使えません');
       const s = caller();
@@ -512,6 +647,11 @@ export async function callTool(name: string, rawArgs: unknown, d: McpDeps, ctx: 
     }
   }
   throw new ToolInputError(`不明なツールです: ${name}`);
+}
+
+function needProjects(d: McpDeps): NonNullable<McpDeps['projects']> {
+  if (!d.projects) throw new ToolInputError('プロジェクトの機能は使えません');
+  return d.projects;
 }
 
 /** 例外をツールのエラー文にする */

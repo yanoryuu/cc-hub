@@ -26,8 +26,16 @@ export function useFolderProjects(): FolderProject[] {
   useEffect(() => {
     listeners.add(setList);
     folderApi.load().catch(() => undefined);
+    // Claude が MCP(register_project)で登録した分も出るよう、画面に戻ったときと 30 秒ごとに読み直す
+    const reload = () => {
+      if (document.visibilityState === 'visible') folderApi.load().catch(() => undefined);
+    };
+    document.addEventListener('visibilitychange', reload);
+    const t = setInterval(reload, 30_000);
     return () => {
       listeners.delete(setList);
+      document.removeEventListener('visibilitychange', reload);
+      clearInterval(t);
     };
   }, []);
   return list;

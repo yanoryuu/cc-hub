@@ -2,7 +2,7 @@
 // 実行: npm run test -w @cc-hub/daemon
 import assert from 'node:assert/strict';
 import type { SessionInfo } from '@cc-hub/shared';
-import { TOOLS, ToolInputError, callTool, listToolsResult, sessionForCwd, validateArgs } from '../src/mcp/tools';
+import { START_MAX, TOOLS, ToolInputError, callTool, listToolsResult, resetStartLog, sessionForCwd, validateArgs } from '../src/mcp/tools';
 
 let passed = 0;
 const pending: Promise<void>[] = [];
@@ -37,6 +37,9 @@ test('ツールの一覧は契約どおり', () => {
       'launch_unity',
       'set_app_launcher',
       'remove_app_launcher',
+      'list_projects',
+      'register_project',
+      'start_session',
       'send_images',
     ],
   );
@@ -116,6 +119,101 @@ test('callTool: 引数の誤りは ToolInputError、cwd が無いと共通の指
   await assert.rejects(callTool('get_deploy_status', { deployId: 'nope' }, deps, { sessionId: null }), /見つかりません/);
   await assert.rejects(callTool('request_deploy', { server: 'a', note: 'b', localDir: 'dist' }, deps, { sessionId: null }), /cwd も指定/);
   assert.deepEqual(await callTool('list_servers', {}, deps, { sessionId: null }), { servers: [] });
+});
+
+/** プロジェクトの機能の偽物(起動したリクエストと登録したフォルダを記録する) */
+function projectDeps(sessions: Record<string, SessionInfo> = {}) {
+  const started: any[] = [];
+  let folders: { path: string; addedAt: number }[] = [{ path: 'D:\\AITEST\\known', addedAt: 1 }];
+  const deps = {
+    deploy: {} as any,
+    sessions: () => sessions,
+    instructions: {} as any,
+    // D:\wt\game の中はリポジトリ me/game
+    repoIdForCwd: (cwd: string) => (/^d:\\wt\\game(\\|$)/i.test(cwd) ? 'me/game' : null),
+    projects: {
+      repos: () => [{ id: 'me/game', name: 'game', status: 'ready', baseDir: 'D:\\wt\\game', kind: 'unity' } as any],
+      folders: () => folders,
+      addFolder: (p: string) => {
+        if (!folders.some((f) => f.path.toLowerCase() === p.toLowerCase())) folders = [...folders, { path: p, addedAt: 2 }];
+        return folders;
+      },
+      modes: () => [{ id: 'plain', label: 'plain', description: 'ふつう' } as any],
+      start: (req: any) => {
+        started.push(req);
+        return S({ id: `new-${started.length}`, name: req.name || 'auto', status: 'starting', cwd: req.cwd });
+      },
+    },
+  };
+  return { deps, started };
+}
+
+test('list_projects: リポジトリ・フォルダ・モード・モデル', async () => {
+  const { deps } = projectDeps();
+  const r = (await callTool('list_projects', {}, deps, { sessionId: null })) as any;
+  assert.equal(r.repos[0].id, 'me/game');
+  assert.equal(r.folders[0].path, 'D:\\AITEST\\known');
+  assert.equal(r.modes[0].id, 'plain');
+  assert.ok(r.models.some((m: any) => m.id === 'opus'));
+  // 機能が無ければエラー
+  await assert.rejects(callTool('list_projects', {}, { ...deps, projects: null }, { sessionId: null }), /使えません/);
+});
+
+test('register_project: 省略時は cwd、登録済み・リポジトリの中は何もしない', async () => {
+  const { deps } = projectDeps();
+  const a = (await callTool('register_project', { cwd: 'D:\\AITEST\\newproj' }, deps, { sessionId: null })) as any;
+  assert.equal(a.registered, true);
+  assert.ok(a.folders.includes('D:\\AITEST\\newproj'));
+  const b = (await callTool('register_project', { cwd: 'D:\\x', path: 'D:\\AITEST\\known' }, deps, { sessionId: null })) as any;
+  assert.equal(b.registered, false);
+  const c = (await callTool('register_project', { cwd: 'D:\\wt\\game\\wt-01' }, deps, { sessionId: null })) as any;
+  assert.equal(c.registered, false);
+  assert.equal(c.repoId, 'me/game');
+  await assert.rejects(callTool('register_project', { cwd: 'D:\\x', path: 'rel' }, deps, { sessionId: null }), /絶対パス/);
+});
+
+test('start_session: プロジェクトの決め方(id・名前・フォルダ・呼び出し元と同じ)', async () => {
+  resetStartLog();
+  const caller = S({ id: '11111111-1111-1111-1111-111111111111', cwd: 'D:\\wt\\game\\wt-02', repoId: 'me/game', worktreeId: 'w2' } as any);
+  const { deps, started } = projectDeps({ [caller.id]: caller });
+  const ctx = { sessionId: caller.id };
+  // 省略 = 呼び出し元のリポジトリ(worktree を新しく用意する)
+  const r = (await callTool('start_session', { cwd: caller.cwd, instruction: 'テストを書く' }, deps, ctx)) as any;
+  assert.equal(started[0].repoId, 'me/game');
+  assert.equal(started[0].mode, 'plain');
+  assert.equal(started[0].instruction, 'テストを書く');
+  assert.equal(r.sessionId, 'new-1');
+  // 名前でも選べる
+  await callTool('start_session', { cwd: 'D:\\x', instruction: 'a', project: 'GAME', name: '修正' }, deps, ctx);
+  assert.equal(started[1].repoId, 'me/game');
+  assert.equal(started[1].name, '修正');
+  // フォルダの絶対パスならそのフォルダで直接
+  await callTool('start_session', { cwd: 'D:\\x', instruction: 'a', project: 'D:\\AITEST\\known', mode: 'commander', model: 'sonnet' }, deps, ctx);
+  assert.equal(started[2].repoId, undefined);
+  assert.equal(started[2].cwd, 'D:\\AITEST\\known');
+  assert.equal(started[2].mode, 'commander');
+  assert.equal(started[2].model, 'sonnet');
+  // 見つからない名前はエラー
+  await assert.rejects(callTool('start_session', { cwd: 'D:\\x', instruction: 'a', project: 'nope' }, deps, ctx), /見つかりません/);
+  // フォルダのセッションから省略すると、そのフォルダ
+  const { deps: d2, started: s2 } = projectDeps();
+  await callTool('start_session', { cwd: 'D:\\AITEST\\plainproj', instruction: 'a' }, d2, { sessionId: null });
+  assert.equal(s2[0].cwd, 'D:\\AITEST\\plainproj');
+  assert.equal(s2[0].repoId, undefined);
+  assert.throws(() => validateArgs('start_session', { cwd: 'D:\\x' }), /instruction を指定/);
+});
+
+test('start_session: 呼び出し元ごとの回数制限', async () => {
+  resetStartLog();
+  const { deps, started } = projectDeps();
+  const ctx = { sessionId: null };
+  for (let i = 0; i < START_MAX; i++) await callTool('start_session', { cwd: 'D:\\AITEST\\a', instruction: 'x' }, deps, ctx);
+  await assert.rejects(callTool('start_session', { cwd: 'D:\\AITEST\\a', instruction: 'x' }, deps, ctx), /起動しすぎ/);
+  assert.equal(started.length, START_MAX);
+  // 別の呼び出し元は数えない
+  await callTool('start_session', { cwd: 'D:\\AITEST\\b', instruction: 'x' }, deps, ctx);
+  assert.equal(started.length, START_MAX + 1);
+  resetStartLog();
 });
 
 void Promise.all(pending).then(() => console.log(`\nmcp: ${passed} passed`));

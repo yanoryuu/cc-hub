@@ -134,12 +134,13 @@ function main(): void {
     shells: shells.list(),
   });
 
+  const folders = new FolderProjects(store);
   const server = createServer({
     auth,
     sessions,
     shells,
     drafts: new SessionDrafts(store),
-    folders: new FolderProjects(store),
+    folders,
     repos,
     github,
     prs,
@@ -163,6 +164,13 @@ function main(): void {
         remove: (sessionId, label) => sessions.removeLauncher(sessionId, label),
       },
       images: { queue: (sessionId, paths, cwd, caption) => notify.queueImages(sessionId, loadImages(paths, cwd), caption) },
+      projects: {
+        repos: () => Object.values(repos.all()),
+        folders: () => folders.list(),
+        addFolder: (p) => folders.add(p),
+        modes: () => sessions.modes.list(),
+        start: (req) => (req.repoId ? repos.startSession(req) : sessions.start(req)),
+      },
     },
     claudePath: config.claudePath,
     getState,
