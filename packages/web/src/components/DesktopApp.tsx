@@ -20,6 +20,7 @@ import { PrScreen, SidebarPrs } from './Prs';
 import { SessionGit } from './SessionGit';
 import { SkillsView } from './Skills';
 import { McpView } from './Mcp';
+import { MediaPanel } from './MediaViewer';
 import { PowerShellButton, TakeoverButton } from './Handoff';
 import { useScopeCwd } from '../ext';
 import { ProjectScreen } from './Project';
@@ -72,11 +73,12 @@ function ApprovalDrawer() {
 
 const RIGHT_TABS: { id: RightTab; label: string }[] = [
   { id: 'details', label: '詳細' },
+  { id: 'media', label: 'メディア' },
   { id: 'skills', label: 'スキル' },
   { id: 'mcp', label: 'MCP' },
 ];
 
-/** 右パネル: 詳細(エージェント / ブランチ / セッション)・スキル・MCP のタブ */
+/** 右パネル: 詳細(エージェント / ブランチ / セッション)・メディア(画像・動画・3D)・スキル・MCP のタブ */
 function RightPanel({ session }: { session: SessionInfo }) {
   const tab = useHub((s) => s.rightTab);
   const setTab = useHub((s) => s.setRightTab);
@@ -95,7 +97,9 @@ function RightPanel({ session }: { session: SessionInfo }) {
           </button>
         ))}
       </div>
-      {tab === 'skills' ? (
+      {tab === 'media' ? (
+        <MediaPanel key={session.id} session={session} />
+      ) : tab === 'skills' ? (
         <SkillsView cwd={session.cwd} compact />
       ) : tab === 'mcp' ? (
         <McpView cwd={session.cwd} compact />

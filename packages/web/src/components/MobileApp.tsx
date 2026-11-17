@@ -12,6 +12,8 @@ import { SessionDetails } from './SessionDetails';
 import { LauncherBar } from './Launchers';
 import { SkillsView } from './Skills';
 import { McpView } from './Mcp';
+import { MediaPanel } from './MediaViewer';
+import { createPortal } from 'react-dom';
 import { mcpCounts, useMcp, useScopeCwd } from '../ext';
 import { ConnDot, UsageMeters } from './TopBar';
 import { STATUS_ICON, STATUS_LABEL } from '../util';
@@ -179,6 +181,7 @@ function SessionDetailView() {
   const session = useHub((s) => (s.selectedId ? s.sessions[s.selectedId] : undefined));
   const setDetail = useHub((s) => s.setMobileDetail);
   const [info, setInfo] = useState(false);
+  const [media, setMedia] = useState(false);
   if (!session) {
     return (
       <div className="m-screen">
@@ -225,8 +228,41 @@ function SessionDetailView() {
               <LauncherBar session={session} />
             </div>
           )}
+          {media &&
+            createPortal(
+              <div className="m-screen m-media-sheet" role="dialog" aria-modal="true" aria-label="メディア">
+                <div className="m-head">
+                  <button className="icon-btn back" onClick={() => setMedia(false)} aria-label="セッションへ戻る">
+                    ‹
+                  </button>
+                  <span className="m-title">
+                    メディア
+                    <span className="m-sub muted">{session.name}</span>
+                  </span>
+                </div>
+                <div className="m-scroll">
+                  <MediaPanel key={session.id} session={session} mobile />
+                </div>
+              </div>,
+              document.querySelector('.mobile') ?? document.body,
+            )}
           {info && (
             <div className="m-info">
+              {/* ナビゲーションバーを詰め込まないよう、メディアは詳細パネルの行から開く(HIG: 開閉の矢印付きの行) */}
+              <button className="m-nav-row" onClick={() => setMedia(true)}>
+                <svg className="m-nav-ico" width="22" height="22" viewBox="0 0 24 24" aria-hidden="true">
+                  <rect x="3.5" y="5" width="17" height="14" rx="2.5" fill="none" stroke="currentColor" strokeWidth="1.6" />
+                  <circle cx="9" cy="10" r="1.6" fill="currentColor" />
+                  <path d="m4 17 5-4.5 3.5 3 3-2.5 4.5 4" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinejoin="round" />
+                </svg>
+                <span className="m-nav-text">
+                  メディア
+                  <span className="m-nav-sub">フォルダの画像・動画・3D モデルを見る</span>
+                </span>
+                <span className="m-nav-chev" aria-hidden="true">
+                  ›
+                </span>
+              </button>
               <AgentTree session={session} />
               <SessionGit session={session} />
               <SessionDetails session={session} />

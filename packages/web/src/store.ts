@@ -25,7 +25,7 @@ export function topOf(v: DeskView): TopView | null {
   return null;
 }
 /** デスクトップ右パネルのタブ */
-export type RightTab = 'details' | 'skills' | 'mcp';
+export type RightTab = 'details' | 'media' | 'skills' | 'mcp';
 /** セッション一覧の並び順 */
 export type SortMode = 'attention' | 'recent' | 'created' | 'name';
 export interface SortOptions {
@@ -495,7 +495,7 @@ useHub.subscribe((s, p) => {
 
 function readRightTab(): RightTab {
   const v = readLocal('cchub_right_tab', 'details');
-  return v === 'skills' || v === 'mcp' ? v : 'details';
+  return v === 'skills' || v === 'mcp' || v === 'media' ? v : 'details';
 }
 
 export interface SessionGroup {

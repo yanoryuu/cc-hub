@@ -29,6 +29,7 @@ import { listMcp } from '../mcp';
 import { ATTACH_MAX_BYTES, saveAttachment } from '../session/attach';
 import { HttpError, json, readBody } from '../util';
 import { buildOverview } from '../mod/overview';
+import { listMedia, resolveMediaPath, sendMediaFile } from '../media';
 
 // packages/web/dist。バンドルの出力先(dist / dist-test など)に依らないよう、daemon パッケージのルートを探してから辿る
 // 検証時は環境変数 CC_HUB_WEB_DIST で別のビルド(dist-test など)を配信できる
@@ -576,6 +577,22 @@ async function handle(d: ServerDeps, req: http.IncomingMessage, res: http.Server
     const refresh = /^(1|true)$/i.test(url.searchParams.get('refresh') || '');
     const r = await listMcp(d.claudePath, path.resolve(cwd), refresh);
     return json(res, r.ok ? 200 : 502, r);
+  }
+
+  // ------------------------------------------------ メディアビューア(セッションのフォルダの画像・動画・3D モデル)
+  const media = /^\/api\/sessions\/([^/]+)\/(media|raw\/(.+))$/.exec(p);
+  if (media && (method === 'GET' || method === 'HEAD')) {
+    const info = d.sessions.info(decodeURIComponent(media[1]));
+    if (!info) throw new HttpError(404, 'セッションが見つかりません');
+    if (media[2] === 'media') return json(res, 200, { ok: true, cwd: info.cwd, ...(await listMedia(info.cwd)) });
+    // raw/<相対パス>: パス形式にして、glTF が参照する .bin / テクスチャを相対 URL で解決できるようにする
+    let rel: string;
+    try {
+      rel = media[3].split('/').map(decodeURIComponent).join('/');
+    } catch {
+      throw new HttpError(400, '不正なパスです');
+    }
+    return sendMediaFile(req, res, await resolveMediaPath(info.cwd, rel));
   }
 
   const sx = /^\/api\/sessions\/([^/]+)\/(open-terminal|takeover|attach)$/.exec(p);

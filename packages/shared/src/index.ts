@@ -1137,3 +1137,16 @@ export interface ProjectInstructions {
 //   POST /api/worktrees/:id/rebase   使用中でなければ、最新の origin/<default> に rebase → {ok, rebase: RebaseResult}
 //                                     衝突したら rebase --abort で元に戻し、conflict と衝突ファイルを返す。使用中は 409
 //   DELETE /api/worktrees/:id        使用中でなければ削除(割り当て済みでも、セッションが止まっていれば可。ブランチは残す)。使用中は 409
+
+// ---------------------------------------------------------------- メディアビューア
+
+/** ビューアで開けるファイルの種類 */
+export type MediaKind = 'image' | 'video' | 'model';
+
+/** GET /api/sessions/:id/media の 1 件(セッションのフォルダからの相対パス) */
+export interface MediaItem {
+  path: string;
+  kind: MediaKind;
+  size: number;
+  mtime: number;
+}

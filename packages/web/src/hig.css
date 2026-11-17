@@ -649,3 +649,475 @@ body,
   border-top-left-radius: var(--radius-lg);
   border-top-right-radius: var(--radius-lg);
 }
+
+/* ---------- メディアビューア(画像・動画・3D) ---------- */
+.mv {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+.mv-prev {
+  position: sticky;
+  top: 45px;
+  z-index: 1;
+  background: var(--panel);
+  border-bottom: 0.5px solid var(--sep);
+}
+.mv-prev-head {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 6px 6px 10px;
+}
+.mv-prev-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 600;
+  font-size: 13px;
+}
+.mv-kind {
+  flex: none;
+  font-size: 10.5px;
+  font-weight: 700;
+  padding: 1px 6px;
+  border-radius: 5px;
+  background: var(--panel-3);
+  color: var(--muted);
+}
+.mv-kind.k-model {
+  color: #c9a0ff;
+}
+.mv-kind.k-video {
+  color: #ff9f6b;
+}
+.mv-prev-body {
+  height: min(300px, 38vh);
+  display: flex;
+  background: var(--bg);
+}
+.mv-img {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  /* 透過画像が分かるように市松模様 */
+  background: repeating-conic-gradient(#2a2a2e 0 25%, #222226 0 50%) 0 0 / 16px 16px;
+}
+.mv-img img {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+}
+.mv-video {
+  flex: 1;
+  min-width: 0;
+  width: 100%;
+  height: 100%;
+  background: #000;
+}
+.mv-msg {
+  margin: auto;
+  padding: 16px;
+  text-align: center;
+}
+.mv-tools {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 10px 6px;
+}
+.mv-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.mv-search {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+}
+.mv-search input {
+  flex: 1;
+  min-width: 0;
+}
+.mv-list {
+  list-style: none;
+  margin: 0;
+  padding: 0 6px 8px;
+}
+.mv-row {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 6px;
+  border: none;
+  border-radius: 8px;
+  background: none;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.mv-row:hover {
+  background: var(--hover);
+}
+.mv-row.on {
+  background: var(--accent-bg);
+}
+.mv-thumb {
+  flex: none;
+  width: 40px;
+  height: 40px;
+  border-radius: 6px;
+  object-fit: cover;
+  background: var(--panel-3);
+}
+.mv-thumb-ico {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--muted);
+}
+.mv-thumb-ico.k-model {
+  color: #c9a0ff;
+  background: rgba(150, 100, 255, 0.14);
+}
+.mv-thumb-ico.k-video {
+  color: #ff9f6b;
+  background: rgba(255, 140, 80, 0.14);
+  font-size: 15px;
+}
+.mv-row-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+.mv-row-name,
+.mv-row-dir {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.mv-row-name {
+  font-size: 13px;
+}
+.mv-row-dir {
+  font-size: 11px;
+  color: var(--muted);
+}
+.mv-row-meta {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+}
+.mv-note {
+  padding: 4px 12px 12px;
+}
+
+/* 3D */
+.m3d {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+.m3d-stage {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  background: radial-gradient(circle at 50% 40%, #2c2c34, #141418);
+  touch-action: none;
+}
+.m3d-canvas {
+  position: absolute;
+  inset: 0;
+  width: 100% !important;
+  height: 100% !important;
+  display: block;
+  cursor: grab;
+}
+.m3d-canvas:active {
+  cursor: grabbing;
+}
+.m3d-overlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 16px;
+  text-align: center;
+  color: var(--muted);
+  font-size: 13px;
+}
+.m3d-bar {
+  flex: none;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 6px;
+  background: var(--panel);
+  border-top: 0.5px solid var(--sep);
+}
+.m3d-bar .btn.on {
+  background: var(--accent-bg);
+  color: var(--accent);
+}
+.m3d-clip {
+  max-width: 160px;
+  font-size: 12px;
+}
+.m3d-stats {
+  margin-left: auto;
+  white-space: nowrap;
+}
+
+/* 全画面 */
+.mv-lightbox {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg);
+  padding-top: env(safe-area-inset-top, 0px);
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+}
+.mv-lb-head {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 8px 6px 14px;
+  border-bottom: 0.5px solid var(--sep);
+}
+.mv-lb-name {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  overflow: hidden;
+  white-space: nowrap;
+}
+.mv-lb-file {
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.mv-lb-dir {
+  font-size: 11.5px;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.mv-lb-count {
+  margin: 0 4px;
+  white-space: nowrap;
+}
+.mv-lightbox a.icon-btn {
+  text-decoration: none;
+  color: inherit;
+}
+.mv-lb-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+}
+.mv-lb-body .mv-img {
+  background: none;
+}
+
+/* スマホ: 全画面のシートにサムネイルの格子 */
+.m-media-sheet {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  background: var(--bg);
+  padding-top: var(--safe-t);
+  padding-bottom: var(--safe-b);
+}
+.mv-mobile .mv-tools {
+  padding: 10px 16px 8px;
+}
+.mv-mobile .chip {
+  min-height: 32px;
+}
+.mv-mobile .mv-search input {
+  min-height: 38px;
+  font-size: 16px;
+}
+.mv-grid {
+  list-style: none;
+  margin: 0;
+  padding: 4px 12px 16px;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(104px, 1fr));
+  gap: 8px;
+}
+.mv-tile {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 0;
+  border: none;
+  background: none;
+  color: inherit;
+  text-align: left;
+}
+.mv-tile .mv-thumb {
+  width: 100%;
+  height: auto;
+  aspect-ratio: 1;
+  border-radius: 10px;
+}
+.mv-tile .mv-thumb-ico {
+  font-size: 15px;
+}
+.mv-tile .mv-thumb-ico.k-video {
+  font-size: 26px;
+}
+.mv-tile-name {
+  font-size: 11.5px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.mobile .m3d-bar,
+.mv-lightbox .m3d-bar {
+  padding: 6px 8px;
+}
+@media (max-width: 899px) {
+  .mv-lb-dir {
+    display: none;
+  }
+  .mv-lb-head .icon-btn {
+    min-width: 40px;
+    height: 40px;
+  }
+  .m3d-stats {
+    width: 100%;
+    margin-left: 0;
+  }
+}
+.m3d-warn {
+  color: #ffb340;
+  white-space: nowrap;
+}
+
+/* ---------- メディアビューア: HIG に合わせた調整 ---------- */
+.mv-icon {
+  display: block;
+}
+.mv-seg {
+  display: flex;
+  align-self: stretch;
+}
+.mv-seg button {
+  flex: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  padding: 4px 6px;
+  font-size: 12.5px;
+}
+.mv-seg-n {
+  font-size: 11px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+.mv-kind {
+  font-size: 11px;
+}
+.mv-lightbox {
+  padding-left: env(safe-area-inset-left, 0px);
+  padding-right: env(safe-area-inset-right, 0px);
+}
+.m-media-sheet {
+  padding-left: env(safe-area-inset-left, 0px);
+  padding-right: env(safe-area-inset-right, 0px);
+}
+/* 詳細パネルの「メディア ›」行(iOS のリストの行) */
+.m-nav-row {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 56px;
+  padding: 8px 16px;
+  border: none;
+  border-bottom: 0.5px solid var(--sep);
+  background: none;
+  color: inherit;
+  text-align: left;
+}
+.m-nav-row:active {
+  background: var(--hover);
+}
+.m-nav-ico {
+  flex: none;
+  color: var(--accent);
+}
+.m-nav-text {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  font-size: 16px;
+}
+.m-nav-sub {
+  font-size: 12px;
+  color: var(--muted);
+}
+.m-nav-chev {
+  flex: none;
+  font-size: 22px;
+  color: var(--muted);
+}
+/* スマホ: タップ領域は 44pt 以上 */
+.mv-mobile .mv-seg button {
+  min-height: 36px;
+  font-size: 14px;
+}
+.mv-mobile .mv-seg {
+  padding: 2px;
+}
+.mv-mobile .mv-search input {
+  min-height: 44px;
+}
+.mv-mobile .mv-search .icon-btn,
+.mv-lightbox .mv-lb-head .icon-btn {
+  min-width: 44px;
+  height: 44px;
+}
+.mobile .m3d-bar .btn,
+.mv-lightbox .m3d-bar .btn {
+  min-height: 44px;
+  padding: 0 12px;
+  font-size: 14px;
+}
+.mv-lightbox .m3d-clip {
+  min-height: 44px;
+}
+.mv-tile-name {
+  font-size: 12px;
+}
+.mv-tile:active .mv-thumb {
+  opacity: 0.6;
+}
+.mv-lb-body {
+  touch-action: pan-y pinch-zoom;
+}
