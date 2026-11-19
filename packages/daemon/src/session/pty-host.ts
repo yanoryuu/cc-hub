@@ -76,9 +76,16 @@ export class PtyHost {
     }
   }
 
+  /** kill 済みの PTY。node-pty(Windows ConPTY)は同じ PTY を 2 回 kill すると解放済みのハンドルを
+   *  触ってデーモンごと落ちる(JS の例外にならない)ので、1 つの PTY につき 1 回だけ kill する */
+  private killedProc: pty.IPty | null = null;
+
   kill(): void {
+    const p = this.proc;
+    if (!p || this.killedProc === p) return;
+    this.killedProc = p;
     try {
-      this.proc?.kill();
+      p.kill();
     } catch {
       /* 既に終了 */
     }
