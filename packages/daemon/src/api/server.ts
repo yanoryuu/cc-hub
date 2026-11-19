@@ -30,6 +30,7 @@ import { ATTACH_MAX_BYTES, saveAttachment } from '../session/attach';
 import { HttpError, json, readBody } from '../util';
 import { buildOverview } from '../mod/overview';
 import { listMedia, resolveMediaPath, sendMediaFile } from '../media';
+import { type IntegrationDeps, handleIntegration } from '../integration/api';
 
 // packages/web/dist。バンドルの出力先(dist / dist-test など)に依らないよう、daemon パッケージのルートを探してから辿る
 // 検証時は環境変数 CC_HUB_WEB_DIST で別のビルド(dist-test など)を配信できる
@@ -76,6 +77,8 @@ const PLACEHOLDER = `<!doctype html><html lang="ja"><head><meta charset="utf-8">
 
 export interface ServerDeps {
   auth: Auth;
+  /** 外部連携(連携トークン・状態変化の通知) */
+  integration: IntegrationDeps;
   sessions: SessionManager;
   shells: ShellManager;
   drafts: SessionDrafts;
@@ -195,6 +198,9 @@ async function handle(d: ServerDeps, req: http.IncomingMessage, res: http.Server
   // ------------------------------------------------ MCP(mcp トークンで認証。PIN / ローカルトークンは使わない)
   if (p === '/mcp') return handleMcp(d.mcp, req, res);
 
+  // ------------------------------------------------ 外部連携(連携トークンで認証。PIN / ローカルトークンは使わない)
+  if (await handleIntegration(d.integration, req, res, url)) return;
+
   // ------------------------------------------------ 認証不要
   if (p === '/auth' && method === 'POST') {
     const body = await readBody(req);
@@ -220,6 +226,19 @@ async function handle(d: ServerDeps, req: http.IncomingMessage, res: http.Server
   }
 
   if (p === '/api/state' && method === 'GET') return json(res, 200, { ok: true, ...d.getState() });
+
+  // ------------------------------------------------ 外部連携のトークンの発行・無効化(設定画面から)
+  if (p === '/api/integrations/tokens' && method === 'GET') return json(res, 200, { ok: true, tokens: d.integration.tokens.list(), subscribers: d.integration.events.subscribers });
+  if (p === '/api/integrations/tokens' && method === 'POST') return json(res, 200, { ok: true, ...d.integration.tokens.create(await readBody(req)) });
+  const itm = /^\/api\/integrations\/tokens\/([^/]+)$/.exec(p);
+  if (itm && method === 'DELETE') {
+    d.integration.tokens.revoke(decodeURIComponent(itm[1]));
+    return json(res, 200, { ok: true });
+  }
+  if (itm && method === 'PUT') {
+    const body = await readBody(req);
+    return json(res, 200, { ok: true, ...d.integration.tokens.setWebhook(decodeURIComponent(itm[1]), body.webhookUrl) });
+  }
 
   // ------------------------------------------------ Claude Code の mod「cc-hub」(integrations/mod/cc-hub)
   if (p === '/api/mod/overview' && method === 'GET') {

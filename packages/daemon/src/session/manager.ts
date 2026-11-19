@@ -12,6 +12,7 @@ import type {
   SessionMode,
   SessionStatus,
   StartSessionRequest,
+  HistoryMessage,
 } from '@cc-hub/shared';
 import { DEFAULT_SESSION_MODEL } from '@cc-hub/shared';
 import { sessionModel } from './model';
@@ -46,7 +47,7 @@ function loadScreen(id: string): string | null {
 import type { Store, SessionRow } from '../store/db';
 import type { AgentTree } from '../agents/tree';
 import type { UsageTracker } from '../usage';
-import { findTranscript } from '../history';
+import { findTranscript, readMessages } from '../history';
 import { HttpError, activeBackgroundTasks, clampInt, taskText, toolTarget } from '../util';
 import { TranscriptTail, combineTokens } from './tokens';
 import { PtyHost } from './pty-host';
@@ -220,6 +221,12 @@ export class SessionManager {
 
   get(id: string): Entry | undefined {
     return this.sessions.get(id);
+  }
+
+  /** そのセッションの transcript の直近のメッセージ(外部連携の「最後の発言」用) */
+  messages(id: string, limit = 60): HistoryMessage[] {
+    const e = this.sessions.get(id);
+    return e ? readMessages(this.resumeId(e), limit) : [];
   }
 
   info(id: string): SessionInfo | undefined {

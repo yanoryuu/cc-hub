@@ -35,11 +35,13 @@ import { FolderInput } from './FolderPicker';
 import { DeployHistory, ServerCard } from './Deploy';
 import { FirebaseMcpSection } from './Firebase';
 import { ModesSection } from './ModeSettings';
+import { IntegrationsSection } from './Integrations';
 
 const SECTIONS: { id: SettingsTab; label: string }[] = [
   { id: 'notify', label: '通知' },
   { id: 'servers', label: 'アップロード先のサーバー' },
   { id: 'mcp', label: 'Claude との連携(MCP)' },
+  { id: 'integrations', label: '外部連携' },
   { id: 'modes', label: 'モード' },
   { id: 'hub', label: 'CC Hub' },
 ];
@@ -62,7 +64,7 @@ export function SettingsScreen({ mobile = false }: { mobile?: boolean }) {
         ))}
       </div>
       <div role="tabpanel">
-        {tab === 'notify' ? <NotifySection mobile={mobile} /> : tab === 'servers' ? <ServersSection /> : tab === 'hub' ? <HubSection /> : tab === 'modes' ? <ModesSection /> : <McpSection />}
+        {tab === 'notify' ? <NotifySection mobile={mobile} /> : tab === 'servers' ? <ServersSection /> : tab === 'hub' ? <HubSection /> : tab === 'modes' ? <ModesSection /> : tab === 'integrations' ? <IntegrationsSection /> : <McpSection />}
       </div>
     </div>
   );

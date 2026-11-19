@@ -33,6 +33,8 @@ import { startAutoRelease } from './repo/autorelease';
 import { IDLE_CHECK_MS } from './session/idlestop';
 import { createRunner } from './firebase/cli';
 import { FirebaseInfoService } from './firebase/info';
+import { IntegrationTokens } from './integration/tokens';
+import { IntegrationEvents } from './integration/events';
 
 const VERSION = '0.2.0';
 
@@ -135,8 +137,21 @@ function main(): void {
   });
 
   const folders = new FolderProjects(store);
+  const integrationTokens = new IntegrationTokens(dir);
+  const integrationEvents = new IntegrationEvents(integrationTokens, Object.values(sessions.all()));
   const server = createServer({
     auth,
+    integration: {
+      tokens: integrationTokens,
+      events: integrationEvents,
+      sessions: () => Object.values(sessions.all()),
+      session: (id) => sessions.info(id),
+      repos: () => Object.values(repos.all()),
+      folders: () => folders.list(),
+      modes: () => sessions.modes.list(),
+      start: (req) => (req.repoId ? repos.startSession(req) : sessions.start(req)),
+      messages: (id) => sessions.messages(id),
+    },
     sessions,
     shells,
     drafts: new SessionDrafts(store),
