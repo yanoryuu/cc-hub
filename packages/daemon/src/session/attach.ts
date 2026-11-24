@@ -15,16 +15,55 @@ const EXT_BY_MIME: Record<string, string> = {
   'image/bmp': '.bmp',
   'image/svg+xml': '.svg',
   'application/pdf': '.pdf',
+  'application/zip': '.zip',
   'text/plain': '.txt',
   'text/markdown': '.md',
   'text/csv': '.csv',
   'text/html': '.html',
 };
 
-/** 受け付ける MIME(image/* と text/* と application/pdf) */
+/** 拡張子 → MIME。Windows のブラウザは .md などの MIME を空で渡す(→ application/octet-stream)ので、そのときは拡張子で決める */
+const MIME_BY_EXT: Record<string, string> = {
+  '.md': 'text/markdown',
+  '.markdown': 'text/markdown',
+  '.mdx': 'text/markdown',
+  '.txt': 'text/plain',
+  '.log': 'text/plain',
+  '.csv': 'text/csv',
+  '.tsv': 'text/tab-separated-values',
+  '.json': 'text/plain',
+  '.yaml': 'text/plain',
+  '.yml': 'text/plain',
+  '.toml': 'text/plain',
+  '.xml': 'text/xml',
+  '.html': 'text/html',
+  '.htm': 'text/html',
+  '.pdf': 'application/pdf',
+  '.zip': 'application/zip',
+  '.png': 'image/png',
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.gif': 'image/gif',
+  '.webp': 'image/webp',
+  '.bmp': 'image/bmp',
+  '.svg': 'image/svg+xml',
+};
+
+/** MIME が空・不明(application/octet-stream)なら、ファイル名の拡張子から決める */
+export function resolveMime(name: string, mime: string): string {
+  const m = String(mime || '').toLowerCase().split(';')[0].trim();
+  if (m && m !== 'application/octet-stream') return m;
+  const ext = path.extname(String(name ?? '').split(/[\\/]/).pop() ?? '').toLowerCase();
+  return MIME_BY_EXT[ext] ?? m;
+}
+
+/** zip の MIME(Windows の Chrome / Edge は application/x-zip-compressed で渡す) */
+const ZIP_MIMES = new Set(['application/zip', 'application/x-zip-compressed', 'application/x-zip']);
+
+/** 受け付ける MIME(image/* と text/* と application/pdf と zip) */
 export function isAllowedMime(mime: string): boolean {
   const m = String(mime || '').toLowerCase().split(';')[0].trim();
-  return /^image\/[a-z0-9.+-]+$/.test(m) || /^text\/[a-z0-9.+-]+$/.test(m) || m === 'application/pdf';
+  return /^image\/[a-z0-9.+-]+$/.test(m) || /^text\/[a-z0-9.+-]+$/.test(m) || m === 'application/pdf' || ZIP_MIMES.has(m);
 }
 
 const RESERVED = /^(con|prn|aux|nul|com[0-9]|lpt[0-9])(\..*)?$/i;
@@ -93,8 +132,9 @@ export interface AttachRequest {
 
 /** 添付を保存して cwd からの相対パス(/ 区切り)を返す */
 export async function saveAttachment(cwd: string, body: AttachRequest): Promise<string> {
-  const mime = String(body?.mime ?? '');
-  if (!isAllowedMime(mime)) throw new HttpError(415, `この種類のファイルは添付できません: ${mime || '(不明)'}(画像・テキスト・PDF のみ)`);
+  const mime = resolveMime(String(body?.name ?? ''), String(body?.mime ?? ''));
+  if (!isAllowedMime(mime))
+    throw new HttpError(415, `この種類のファイルは添付できません: ${mime || '(不明)'}(画像・テキスト(.md など)・PDF・zip のみ)`);
   const b64 = String(body?.dataBase64 ?? '').replace(/^data:[^,]*,/, '');
   if (!b64) throw new HttpError(400, 'dataBase64 が空です');
   if (b64.length > Math.ceil((ATTACH_MAX_BYTES * 4) / 3) + 8) throw new HttpError(413, '10 MB を超えるファイルは添付できません');

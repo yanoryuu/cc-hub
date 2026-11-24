@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import { parseMcpLine, parseMcpList } from '../src/mcp';
 import { firstTextLine, parseFrontmatter } from '../src/skills';
 import { buildPsCommand, buildTerminalArgv, launcherCommand, psArg, psQuote, terminalEnv, windowTitle } from '../src/session/terminal';
-import { isAllowedMime, sanitizeAttachmentName } from '../src/session/attach';
+import { isAllowedMime, resolveMime, sanitizeAttachmentName } from '../src/session/attach';
 import { activeBackgroundTasks } from '../src/util';
 import { overlaps } from '../src/repo/exec';
 import { findUnityProject, parseEditorVersion, projectPathArg } from '../src/unity/launcher';
@@ -180,8 +180,21 @@ test('添付: MIME の許可', () => {
   assert.ok(isAllowedMime('text/plain; charset=utf-8'));
   assert.ok(isAllowedMime('application/pdf'));
   assert.ok(!isAllowedMime('application/x-msdownload'));
-  assert.ok(!isAllowedMime('application/zip'));
+  assert.ok(isAllowedMime('application/zip'));
+  assert.ok(isAllowedMime('application/x-zip-compressed'));
+  assert.ok(!isAllowedMime('application/x-7z-compressed'));
   assert.ok(!isAllowedMime(''));
+});
+
+test('resolveMime: MIME が空・octet-stream なら拡張子で決める(Windows のブラウザは .md を空で渡す)', () => {
+  assert.equal(resolveMime('メモ.md', ''), 'text/markdown');
+  assert.equal(resolveMime('README.MD', 'application/octet-stream'), 'text/markdown');
+  assert.equal(resolveMime('a.json', ''), 'text/plain');
+  assert.equal(resolveMime('a.png', 'image/png'), 'image/png');
+  assert.equal(resolveMime('a.exe', 'application/octet-stream'), 'application/octet-stream');
+  assert.ok(isAllowedMime(resolveMime('notes.md', 'application/octet-stream')));
+  assert.ok(isAllowedMime(resolveMime('a.zip', '')));
+  assert.ok(!isAllowedMime(resolveMime('a.rar', '')));
 });
 
 test('activeBackgroundTasks: 終わった状態のタスクは数えない', () => {
