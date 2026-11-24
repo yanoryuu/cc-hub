@@ -1,5 +1,5 @@
 // REST ヘルパー。401 を受けたら PIN 画面を出し、ログイン成功後に同じリクエストを再試行する。
-import type { AppLauncher, BranchInfo, HubState, RebaseResult, SessionInfo, McpServerInfo, MergeMethod, PrDetail, PrReviewEvent, RegisterRepoRequest, RescanResult, ReleaseMode, RepoInfo, SessionDraft, SessionMode, ShellInfo, SkillInfo, WorktreeLocker } from '@cc-hub/shared';
+import type { AppLauncher, BranchInfo, CreateRepoRequest, HubState, NewRepoInspect, RebaseResult, SessionInfo, McpServerInfo, MergeMethod, PrDetail, PrReviewEvent, RegisterRepoRequest, RescanResult, ReleaseMode, RepoInfo, SessionDraft, SessionMode, ShellInfo, SkillInfo, WorktreeLocker } from '@cc-hub/shared';
 
 export class AuthError extends Error {
   constructor() {
@@ -188,6 +188,12 @@ export type RepoPatch = Partial<
 
 export const repoApi = {
   register: (req: RegisterRepoRequest) => api('/api/repos', req),
+  /** 新しく作る: GitHub にリポジトリを作れる場所(先頭が自分) */
+  owners: async (): Promise<string[]> => pick<string[]>(await api('/api/repos/new/owners'), 'owners') ?? [],
+  /** 新しく作る: フォルダの中身を調べる(フォルダには書き込まない) */
+  inspectNew: async (path: string): Promise<NewRepoInspect | null> =>
+    pick<NewRepoInspect>(await api('/api/repos/new/inspect', { path }), 'inspect') ?? null,
+  create: (req: CreateRepoRequest) => api('/api/repos/new', req),
   patch: (id: string, patch: RepoPatch) => api(`/api/repos/${enc(id)}`, patch, { method: 'PATCH' }),
   remove: (id: string, purge: boolean) =>
     api(`/api/repos/${enc(id)}${purge ? '?purge=1' : ''}`, undefined, { method: 'DELETE' }),

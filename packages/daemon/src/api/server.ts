@@ -2,7 +2,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import http from 'node:http';
-import type { HubState, RegisterRepoRequest, ReleaseMode, StartSessionRequest } from '@cc-hub/shared';
+import type { CreateRepoRequest, HubState, RegisterRepoRequest, ReleaseMode, StartSessionRequest } from '@cc-hub/shared';
 import type { Auth } from './auth';
 import type { SessionManager } from '../session/manager';
 import type { ShellManager } from '../shell/manager';
@@ -31,6 +31,8 @@ import { HttpError, json, readBody } from '../util';
 import { buildOverview } from '../mod/overview';
 import { listMedia, resolveMediaPath, sendMediaFile } from '../media';
 import { type IntegrationDeps, handleIntegration } from '../integration/api';
+import { createRepo, inspectNewRepoFolder, listOwners } from '../repo/create';
+import { ghMutate, ghRun } from '../github/gh';
 
 // packages/web/dist。バンドルの出力先(dist / dist-test など)に依らないよう、daemon パッケージのルートを探してから辿る
 // 検証時は環境変数 CC_HUB_WEB_DIST で別のビルド(dist-test など)を配信できる
@@ -329,6 +331,24 @@ async function handle(d: ServerDeps, req: http.IncomingMessage, res: http.Server
   }
 
   if (p === '/api/repos' && method === 'GET') return json(res, 200, { ok: true, ...d.repos.list() });
+
+  // 「新しく作る」: GitHub にリポジトリを作って(フォルダの中身をプッシュして)登録する
+  if (p === '/api/repos/new/owners' && method === 'GET') return json(res, 200, { ok: true, owners: await listOwners((a) => ghRun(a)) });
+  if (p === '/api/repos/new/inspect' && method === 'POST') {
+    const body = await readBody(req);
+    return json(res, 200, { ok: true, inspect: await inspectNewRepoFolder(String(body?.path ?? '')) });
+  }
+  if (p === '/api/repos/new' && method === 'POST') {
+    const body = (await readBody(req)) as CreateRepoRequest;
+    const repo = await createRepo(body, {
+      ghMutate: (a) => ghMutate(a),
+      ghRead: (a) => ghRun(a),
+      remoteUrl: (id) => `https://github.com/${id}.git`,
+      register: (r) => d.repos.register(r),
+      isRegistered: (id) => Object.keys(d.repos.all()).some((x) => x.toLowerCase() === id.toLowerCase()),
+    });
+    return json(res, 200, { ok: true, repo });
+  }
 
   if (p === '/api/repos' && method === 'POST') {
     const body = (await readBody(req)) as RegisterRepoRequest;

@@ -572,6 +572,47 @@ export interface ProjectOverview {
   updatedAt: number;
 }
 
+/** 「新しく作る」: フォルダを調べた結果(POST /api/repos/new/inspect) */
+export interface NewRepoInspect {
+  /** 整えた絶対パス */
+  dir: string;
+  exists: boolean;
+  /** 既に Git のリポジトリか */
+  isGit: boolean;
+  /** origin が既にあればその URL(この場合は「クローン済みのフォルダ」で登録する) */
+  origin: string | null;
+  /** このフォルダを含む親フォルダが Git のリポジトリなら、そのパス(この場合は作れない) */
+  parentRepo: string | null;
+  /** プッシュの対象になるファイル数(.gitignore で除かれるものは数えない) */
+  fileCount: number;
+  totalBytes: number;
+  /** 10 MB 以上のファイル(大きい順、最大 50 件) */
+  large: { path: string; bytes: number }[];
+  /** ファイルが多すぎて途中で数えるのをやめた */
+  truncated: boolean;
+  /** .gitignore されていない、ふつうはコミットしないフォルダ(node_modules / Library など) */
+  heavyDirs: string[];
+  /** リポジトリ名の候補(フォルダ名から) */
+  suggestedName: string;
+}
+
+/** POST /api/repos/new: GitHub にリポジトリを作って CC Hub に登録する */
+export interface CreateRepoRequest {
+  /** リポジトリ名(owner は含めない) */
+  name: string;
+  /** 作る場所(自分のアカウントか組織)。省略時は自分 */
+  owner?: string;
+  visibility: 'private' | 'public';
+  description?: string;
+  /** 中身をプッシュするフォルダ。省略 / push=false なら README だけの新しいリポジトリを作る */
+  localPath?: string;
+  push: boolean;
+  /** 10 MB 以上のファイルをプッシュしない(そのフォルダの .git/info/exclude に入れる) */
+  excludeLarge: boolean;
+  trusted: boolean;
+  poolMin?: number;
+}
+
 export interface RegisterRepoRequest {
   /** https / git@ / "owner/name" のいずれか(localPath を指定した場合は空でよい) */
   url: string;
@@ -1030,6 +1071,9 @@ export type ServerMessage =
 //   GET  /api/repos                                     → {ok, repos: RepoInfo[], worktrees: WorktreeInfo[]}
 //   POST /api/repos                RegisterRepoRequest  → {ok, repo}   (クローンは非同期。進捗は repo.upsert で届く)
 //                                  localPath 指定時はそのフォルダから複製(Unity なら seedLibraryFrom にそのフォルダの Library を入れる)
+//   GET  /api/repos/new/owners                          → {ok, owners: string[]}  (先頭が自分。あとは所属する組織)
+//   POST /api/repos/new/inspect    {path}               → {ok, inspect: NewRepoInspect}
+//   POST /api/repos/new            CreateRepoRequest    → {ok, repo}   (gh repo create → フォルダを git init・コミット・プッシュ → 登録)
 //   PATCH /api/repos/:id           Partial<Pick<RepoInfo,'poolMin'|'poolMax'|'installCmd'|'keepDirs'|'seedLibraryFrom'|'trusted'>>
 //   DELETE /api/repos/:id?purge=1  登録解除。待機 worktree を削除。purge=1 で .base も削除(使用中の worktree があれば 409)
 //   POST /api/repos/:id/refill     補充を即時実行

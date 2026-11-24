@@ -1,11 +1,11 @@
 // リポジトリ画面: 一覧 / 登録フォーム / リポジトリ詳細(設定・worktree プール)。デスクトップとモバイルで共用
-import { useEffect, useMemo, useState } from 'react';
-import type { RegisterRepoRequest, RepoInfo, WorktreeInfo } from '@cc-hub/shared';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import type { CreateRepoRequest, NewRepoInspect, RegisterRepoRequest, RepoInfo, WorktreeInfo } from '@cc-hub/shared';
 import { errText, isConflict, pick, repoApi, type RepoPatch } from '../api';
 import { useHub } from '../store';
 import { KIND_INSTALL_HINT, KIND_LABEL, needsRelease, useRepoList, useWorktreesByRepo } from '../repo';
 import { baseName, fmtDate } from '../util';
-import { normPath } from '../project';
+import { fmtSize, normPath } from '../project';
 import { folderApi, useFolderProjects } from '../folders';
 import { ConfirmModal, PoolChips, RepoStatusBadge, Spinner, WtBadge } from './RepoCommon';
 import { StatusDot } from './common';
@@ -184,6 +184,254 @@ function RepoCard({ repo, worktrees, onOpen }: { repo: RepoInfo; worktrees: Work
   );
 }
 
+// ---------------------------------------------------------------- 新しく作る(GitHub にリポジトリを作る)
+
+const LARGE_BYTES = 10 * 1024 * 1024;
+const GITHUB_MAX_BYTES = 100 * 1024 * 1024;
+const validRepoName = (s: string) => /^[A-Za-z0-9._-]{1,100}$/.test(s) && s !== '.' && s !== '..' && !/\.git$/i.test(s);
+
+/** 「新しく作る」の入力とフォルダの調査結果 */
+function useNewRepo(active: boolean) {
+  const repos = useHub((s) => s.repos);
+  const [path, setPath] = useState('');
+  const [name, setNameRaw] = useState('');
+  const nameEdited = useRef(false);
+  const [owners, setOwners] = useState<string[] | null>(null);
+  const [ownersErr, setOwnersErr] = useState<string | null>(null);
+  const [owner, setOwner] = useState('');
+  const [visibility, setVisibility] = useState<'private' | 'public'>('private');
+  const [description, setDescription] = useState('');
+  const [push, setPush] = useState(true);
+  const [excludeLarge, setExcludeLarge] = useState(true);
+  const [info, setInfo] = useState<NewRepoInspect | null>(null);
+  const [inspecting, setInspecting] = useState(false);
+  const [inspectErr, setInspectErr] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!active || owners) return;
+    repoApi
+      .owners()
+      .then((o) => {
+        setOwners(o);
+        setOwner((cur) => cur || o[0] || '');
+      })
+      .catch((e) => setOwnersErr(errText(e, 'GitHub のアカウントを取得できませんでした')));
+  }, [active, owners]);
+
+  // フォルダが決まったら(入力が止まってから)中身を調べる
+  useEffect(() => {
+    setInfo(null);
+    setInspectErr(null);
+    const p = path.trim();
+    if (!active || !p) {
+      setInspecting(false);
+      return;
+    }
+    let stale = false;
+    setInspecting(true);
+    const t = setTimeout(() => {
+      repoApi
+        .inspectNew(p)
+        .then((r) => {
+          if (stale) return;
+          setInfo(r);
+          if (r && !nameEdited.current) setNameRaw(r.suggestedName);
+        })
+        .catch((e) => !stale && setInspectErr(errText(e, 'フォルダを調べられませんでした')))
+        .finally(() => !stale && setInspecting(false));
+    }, 400);
+    return () => {
+      stale = true;
+      clearTimeout(t);
+    };
+  }, [active, path]);
+
+  const hasFiles = !!info?.exists && info.fileCount > 0;
+  const willPush = push && hasFiles;
+  const tooBig = info?.large.filter((f) => f.bytes >= GITHUB_MAX_BYTES) ?? [];
+  const id = owner && name ? `${owner}/${name}` : '';
+  const dup = id ? Object.values(repos).find((r) => r.id.toLowerCase() === id.toLowerCase()) : undefined;
+  /** 作れない理由(無ければ null) */
+  const blocker: string | null = inspecting
+    ? 'フォルダを調べています'
+    : inspectErr
+      ? inspectErr
+      : path.trim() && info && !info.exists
+        ? 'フォルダが見つかりません'
+        : info?.parentRepo
+          ? `親フォルダが Git のリポジトリです(${info.parentRepo})`
+          : info?.origin
+            ? 'このフォルダには既に GitHub のリモート(origin)があります'
+            : willPush && !excludeLarge && tooBig.length
+              ? '100 MB 以上のファイルは GitHub にプッシュできません'
+              : willPush && excludeLarge && info && info.large.length >= info.fileCount
+                ? 'プッシュするファイルがありません(すべて 10 MB 以上)'
+                : !validRepoName(name)
+                  ? 'リポジトリ名は英数字と . _ - で入力してください'
+                  : dup
+                    ? `${dup.id} は登録済みです`
+                    : null;
+
+  return {
+    path,
+    setPath,
+    name,
+    setName: (s: string) => {
+      nameEdited.current = true;
+      setNameRaw(s);
+    },
+    owners,
+    ownersErr,
+    owner,
+    setOwner,
+    visibility,
+    setVisibility,
+    description,
+    setDescription,
+    push,
+    setPush,
+    excludeLarge,
+    setExcludeLarge,
+    info,
+    inspecting,
+    hasFiles,
+    willPush,
+    tooBig,
+    blocker,
+    ready: !blocker,
+    request: (): Omit<CreateRepoRequest, 'trusted'> => ({
+      name: name.trim(),
+      owner: owner || undefined,
+      visibility,
+      description: description.trim() || undefined,
+      localPath: willPush ? info!.dir : undefined,
+      push: willPush,
+      excludeLarge,
+    }),
+  };
+}
+
+type NewRepoState = ReturnType<typeof useNewRepo>;
+
+function NewRepoFields({ nr, autoFocus, onUseLocal }: { nr: NewRepoState; autoFocus: boolean; onUseLocal: (path: string) => void }) {
+  const info = nr.info;
+  const largeShown = info?.large.slice(0, 8) ?? [];
+  return (
+    <>
+      <div className="field">
+        <span>フォルダ(任意)</span>
+        <FolderInput value={nr.path} onChange={nr.setPath} label="フォルダ" placeholder="D:\Projects\my-app(空なら README だけのリポジトリ)" autoFocus={autoFocus} />
+        <span className="hint">
+          {!nr.path.trim() ? (
+            'フォルダを選ぶと、中のファイルを新しいリポジトリにプッシュできます(.gitignore に従います)'
+          ) : nr.inspecting ? (
+            'フォルダを調べています…'
+          ) : !info ? null : !info.exists ? (
+            <span className="warn-text">フォルダが見つかりません</span>
+          ) : info.parentRepo ? (
+            <span className="warn-text">親フォルダ {info.parentRepo} が Git のリポジトリです。そちらを登録してください</span>
+          ) : info.origin ? (
+            <span className="warn-text">
+              既に origin({info.origin})があります。{' '}
+              <button type="button" className="btn sm" onClick={() => onUseLocal(info.dir)}>
+                「クローン済みのフォルダ」で登録する
+              </button>
+            </span>
+          ) : info.fileCount === 0 ? (
+            'フォルダは空です。README だけのリポジトリを作ります'
+          ) : (
+            <>
+              ファイル {info.fileCount.toLocaleString()} 個 / {fmtSize(info.totalBytes)}
+              {info.truncated && '(多すぎるので途中まで数えました)'}
+              {info.isGit ? '(既存の Git リポジトリ。履歴ごとプッシュします)' : ''}
+            </>
+          )}
+        </span>
+      </div>
+      {nr.hasFiles && !info?.origin && !info?.parentRepo && (
+        <>
+          <label className={`check-field ${nr.push ? 'on' : ''}`}>
+            <input type="checkbox" checked={nr.push} onChange={(e) => nr.setPush(e.target.checked)} />
+            <span>
+              フォルダの中身をプッシュする
+              <span className="hint">
+                {nr.push
+                  ? 'このフォルダで git init(まだなら)→ コミット → プッシュし、このフォルダを CC Hub のプロジェクトに紐付けます'
+                  : 'README だけの新しいリポジトリを作ります(このフォルダは変更しません)'}
+              </span>
+            </span>
+          </label>
+          {nr.push && info && info.heavyDirs.length > 0 && (
+            <div className="hint">
+              <span className="warn-text">
+                ⚠ ふつうはコミットしないフォルダが含まれています: {info.heavyDirs.join(', ')}。.gitignore に入れることをおすすめします
+              </span>
+            </div>
+          )}
+          {nr.push && info && info.large.length > 0 && (
+            <div className={nr.tooBig.length && !nr.excludeLarge ? 'warn-box' : 'hint'}>
+              <span className="warn-text">⚠ 10 MB 以上のファイルが {info.large.length} 個あります</span>
+              <ul style={{ margin: '4px 0', paddingLeft: 20 }}>
+                {largeShown.map((f) => (
+                  <li key={f.path} className="mono">
+                    {f.path}({fmtSize(f.bytes)}){f.bytes >= GITHUB_MAX_BYTES && ' ← GitHub に送れません'}
+                  </li>
+                ))}
+                {info.large.length > largeShown.length && <li>ほか {info.large.length - largeShown.length} 個</li>}
+              </ul>
+              <label className="check-field">
+                <input type="checkbox" checked={nr.excludeLarge} onChange={(e) => nr.setExcludeLarge(e.target.checked)} />
+                <span>
+                  10 MB 以上のファイルはプッシュしない
+                  <span className="hint">.git/info/exclude に入れて除きます(ファイル自体と .gitignore はそのまま)</span>
+                </span>
+              </label>
+            </div>
+          )}
+        </>
+      )}
+      <label className="field">
+        <span>リポジトリ名</span>
+        <input value={nr.name} onChange={(e) => nr.setName(e.target.value)} className="mono" spellCheck={false} autoCapitalize="off" autoCorrect="off" placeholder="my-app" />
+        <span className="hint">
+          {nr.name && !validRepoName(nr.name) ? <span className="warn-text">英数字と . _ - だけ使えます</span> : nr.owner && nr.name ? <>→ <span className="mono">{nr.owner}/{nr.name}</span> を作ります</> : null}
+        </span>
+      </label>
+      <div className="field">
+        <span>作る場所・公開範囲</span>
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+          {nr.owners && nr.owners.length > 1 ? (
+            <select value={nr.owner} onChange={(e) => nr.setOwner(e.target.value)} aria-label="作る場所">
+              {nr.owners.map((o, i) => (
+                <option key={o} value={o}>
+                  {o}
+                  {i === 0 ? '(自分)' : ''}
+                </option>
+              ))}
+            </select>
+          ) : (
+            <span className="mono">{nr.owner || (nr.ownersErr ? '—' : '…')}</span>
+          )}
+          <div className="seg small" role="group" aria-label="公開範囲">
+            <button type="button" className={nr.visibility === 'private' ? 'on' : ''} aria-pressed={nr.visibility === 'private'} onClick={() => nr.setVisibility('private')}>
+              非公開
+            </button>
+            <button type="button" className={nr.visibility === 'public' ? 'on' : ''} aria-pressed={nr.visibility === 'public'} onClick={() => nr.setVisibility('public')}>
+              公開
+            </button>
+          </div>
+        </div>
+        {nr.ownersErr && <span className="hint warn-text">{nr.ownersErr}</span>}
+        {nr.visibility === 'public' && <span className="hint warn-text">公開にすると、誰でも中身を見られます</span>}
+      </div>
+      <label className="field">
+        <span>説明(任意)</span>
+        <input value={nr.description} onChange={(e) => nr.setDescription(e.target.value)} maxLength={350} />
+      </label>
+    </>
+  );
+}
+
 // ---------------------------------------------------------------- 登録フォーム
 
 /** inModal = 「GitHub のリポジトリを追加」ダイアログの中身として使う(閉じるのは onClose) */
@@ -192,20 +440,22 @@ export function RegisterRepoForm({ mobile = false, inModal = false, onClose }: {
   const setTopView = useHub((s) => s.setTopView);
   const upsertRepo = useHub((s) => s.upsertRepo);
   const repos = useHub((s) => s.repos);
-  const [source, setSource] = useState<'url' | 'local'>('url');
+  const [source, setSource] = useState<'url' | 'local' | 'new'>('url');
   const [url, setUrl] = useState('');
   const [localPath, setLocalPath] = useState('');
   const [trusted, setTrusted] = useState(false);
   const [poolMin, setPoolMin] = useState('2');
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  const nr = useNewRepo(source === 'new');
 
   const local = source === 'local';
-  const parsed = local ? null : parseRepoUrl(url);
+  const isNew = source === 'new';
+  const parsed = local || isNew ? null : parseRepoUrl(url);
   const dup = parsed ? Object.values(repos).find((r) => r.id.toLowerCase() === parsed.toLowerCase()) : undefined;
   const n = parseInt(poolMin, 10);
   const poolOk = Number.isFinite(n) && n >= 0 && n <= 10;
-  const filled = local ? !!localPath.trim() : !!url.trim();
+  const filled = isNew ? nr.ready : local ? !!localPath.trim() : !!url.trim();
   const canSubmit = filled && trusted && poolOk && !busy && !dup;
 
   const submit = async (e: React.FormEvent) => {
@@ -217,7 +467,7 @@ export function RegisterRepoForm({ mobile = false, inModal = false, onClose }: {
       const req: RegisterRepoRequest = local
         ? { url: '', localPath: localPath.trim(), trusted, poolMin: n }
         : { url: url.trim(), trusted, poolMin: n };
-      const r = await repoApi.register(req);
+      const r = isNew ? await repoApi.create({ ...nr.request(), trusted, poolMin: n }) : await repoApi.register(req);
       const repo = pick<RepoInfo>(r, 'repo');
       if (repo && repo.id) upsertRepo(repo);
       if (inModal) {
@@ -247,15 +497,27 @@ export function RegisterRepoForm({ mobile = false, inModal = false, onClose }: {
         <div className="field">
           <span>登録のしかた</span>
           <div className="seg small" role="group" aria-label="登録のしかた">
-            <button type="button" className={!local ? 'on' : ''} aria-pressed={!local} onClick={() => setSource('url')}>
+            <button type="button" className={source === 'url' ? 'on' : ''} aria-pressed={source === 'url'} onClick={() => setSource('url')}>
               GitHub からクローン
             </button>
             <button type="button" className={local ? 'on' : ''} aria-pressed={local} onClick={() => setSource('local')}>
               クローン済みのフォルダ
             </button>
+            <button type="button" className={isNew ? 'on' : ''} aria-pressed={isNew} onClick={() => setSource('new')}>
+              新しく作る
+            </button>
           </div>
         </div>
-        {local ? (
+        {isNew ? (
+          <NewRepoFields
+            nr={nr}
+            autoFocus={!mobile || inModal}
+            onUseLocal={(p) => {
+              setLocalPath(p);
+              setSource('local');
+            }}
+          />
+        ) : local ? (
           <div className="field">
             <span>クローン済みのフォルダ</span>
             <FolderInput value={localPath} onChange={setLocalPath} label="クローン済みのフォルダ" placeholder="D:\Unity\MyGame" autoFocus={!mobile || inModal} />
@@ -321,10 +583,23 @@ export function RegisterRepoForm({ mobile = false, inModal = false, onClose }: {
             キャンセル
           </button>
           <button type="submit" className="btn primary" disabled={!canSubmit}>
-            {busy ? '登録中…' : local ? '登録して複製' : '登録してクローン'}
+            {busy
+              ? isNew
+                ? nr.willPush
+                  ? '作成してプッシュ中…'
+                  : '作成中…'
+                : '登録中…'
+              : isNew
+                ? nr.willPush
+                  ? 'GitHub に作ってプッシュ'
+                  : 'GitHub に作って登録'
+                : local
+                  ? '登録して複製'
+                  : '登録してクローン'}
           </button>
         </div>
         {!trusted && filled && <div className="hint right">登録するには「信頼する」にチェックしてください</div>}
+        {isNew && nr.blocker && !nr.inspecting && (nr.path.trim() || nr.name) && <div className="hint right warn-text">{nr.blocker}</div>}
       </form>
   );
   if (inModal) return form;
