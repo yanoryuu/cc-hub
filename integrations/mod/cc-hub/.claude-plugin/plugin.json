@@ -1,7 +1,9 @@
 {
   "name": "cc-hub",
-  "version": "0.1.0",
-  "author": { "name": "yanoryuu" },
+  "version": "0.1.1",
+  "author": {
+    "name": "yanoryuu"
+  },
   "description": "CC Hub とつなぐ: イベントの送信、ほかのセッションの状況(帯・パネル・ステータス・通知)、/hub コマンド、作業ツリーとデプロイの見張り、共通の指示",
   "types": "./types/index.d.ts",
   "userConfig": {
@@ -16,6 +18,12 @@
       "title": "デプロイを承認制にする",
       "description": "firebase deploy や scp などの直接のアップロードを止めて、CC Hub の承認(request_deploy / request_firebase_deploy)に回す",
       "default": true
+    },
+    "deployAllowHosts": {
+      "type": "string",
+      "title": "承認なしで送ってよい送り先",
+      "description": "自分のサーバーなど、scp・sftp・rsync で承認なしに送ってよいホスト名・IP(カンマ区切り)。user@host: や host: のホストが完全に一致するときだけ通す。Firebase と、ここに無い送り先は今までどおり承認制",
+      "default": "pair,100.95.192.6"
     },
     "toasts": {
       "type": "boolean",

@@ -176,14 +176,59 @@ export function crossWorktreeWrite(cwd: string, filePath: string): Guard {
   return { deny: `CC Hub: ${other} はほかのセッションの作業ツリーです。自分の作業ツリー(${m[2]})の中のファイルを編集してください` }
 }
 
-/** 直接のデプロイ(CC Hub の承認に回すもの) */
-export function deployGuard(command: string): Guard {
+/** 設定の「承認なしで送ってよい送り先」(カンマ・空白区切り)→ 小文字のホスト名の一覧 */
+export function parseAllowHosts(v: unknown): string[] {
+  if (typeof v !== 'string') return []
+  return v
+    .split(/[\s,]+/)
+    .map((h) => h.trim().toLowerCase())
+    .filter((h) => /^[\w.-]+$/.test(h))
+}
+
+/** scp / sftp / rsync の 1 つのコマンドの送り先のホスト(user@host:path や sftp の user@host)。ローカルのパス(C:\ など)は除く */
+function remoteHosts(tool: string, args: string[]): string[] {
+  const operands = args.map((a) => a.replace(/^["']|["']$/g, '')).filter((a) => a && !a.startsWith('-'))
+  if (tool === 'sftp') {
+    // sftp [オプション] [user@]host[:path] — 送り先は最後の引数
+    const m = /^(?:[^@\s:/]+@)?([\w.-]+)(?::.*)?$/.exec(operands[operands.length - 1] ?? '')
+    return m ? [m[1]!.toLowerCase()] : []
+  }
+  const hosts: string[] = []
+  for (const a of operands) {
+    if (/^[A-Za-z]:[\\/]/.test(a)) continue // Windows のドライブ
+    const m = /^(?:[^@\s:/]+@)?([\w.-]+):/.exec(a)
+    if (m) hosts.push(m[1]!.toLowerCase())
+  }
+  return hosts
+}
+
+/** 直接のデプロイ(CC Hub の承認に回すもの)。allowHosts の送り先だけへの scp / sftp / rsync は通す */
+export function deployGuard(command: string, allowHosts: readonly string[] = []): Guard {
   const c = command.replace(/\s+/g, ' ')
   if (/\bfirebase(?:\.cmd)? deploy\b/.test(c) || /\bfirebase(?:\.cmd)? hosting:channel:deploy\b/.test(c)) {
     return { deny: 'CC Hub: Firebase へのデプロイは承認制です。MCP の firebase_status で確かめてから request_firebase_deploy で申請してください' }
   }
-  if (/(?:^|[;&|] ?)(?:scp|sftp|lftp|ftp|winscp(?:\.com)?)\b/.test(c) || /\brsync\b[^;&|]* [^ ]+@?[\w.-]+:[^ ]*/.test(c)) {
-    return { deny: 'CC Hub: サーバーへのアップロードは承認制です。MCP の request_deploy で申請してください' }
+  const deny: Guard = { deny: 'CC Hub: サーバーへのアップロードは承認制です。MCP の request_deploy で申請してください' }
+  for (const seg of c.split(/&&|\|\||[;&|]/)) {
+    const words = seg.trim().split(' ').filter(Boolean)
+    // scp などはコマンドの先頭(今までと同じ)、rsync はどこにあっても
+    const name = (w: string) => w.replace(/^.*[\\/]/, '').replace(/\.exe$/i, '').toLowerCase()
+    let i = words[0] && /^(?:scp|sftp|lftp|ftp|winscp(?:\.com)?)$/.test(name(words[0])) ? 0 : -1
+    if (i < 0) i = words.findIndex((w) => name(w) === 'rsync')
+    if (i < 0) continue
+    const tool = words[i]!.replace(/^.*[\\/]/, '').replace(/\.exe$/i, '').toLowerCase()
+    const args = words.slice(i + 1)
+    if (tool === 'rsync') {
+      const hosts = remoteHosts(tool, args)
+      if (!hosts.length) continue // ローカルどうしのコピー
+      if (hosts.every((h) => allowHosts.includes(h))) continue
+      return deny
+    }
+    if (tool === 'scp' || tool === 'sftp') {
+      const hosts = remoteHosts(tool, args)
+      if (hosts.length && hosts.every((h) => allowHosts.includes(h))) continue
+    }
+    return deny
   }
   return null
 }

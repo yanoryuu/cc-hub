@@ -3,7 +3,7 @@
 import { expect, test } from 'claude-code/testing'
 
 import type { HubOverview } from '../types'
-import { crossWorktreeWrite, deployGuard, parseHubArgs, statusText, transitions, worktreeBashGuard } from '../hooks/hub'
+import { crossWorktreeWrite, deployGuard, parseAllowHosts, parseHubArgs, statusText, transitions, worktreeBashGuard } from '../hooks/hub'
 
 const OVERVIEW: HubOverview = {
   me: { id: 'me', name: 'ui-fix', repoId: 'o/r', branch: 'feat/ui', worktree: { name: 'wt-02', occupants: ['もう一つ'] } },
@@ -39,6 +39,32 @@ test('見張り: 直接のデプロイは承認に回す', () => {
   expect(deployGuard('rsync -av dist/ me@example.com:/srv/')).not.toBeNull()
   expect(deployGuard('npm run build && git push')).toBeNull()
   expect(deployGuard('firebase emulators:start')).toBeNull()
+})
+
+test('見張り: 設定した自分のサーバー(pair)への送信だけは通す', () => {
+  const allow = parseAllowHosts('pair, 100.95.192.6')
+  expect(allow).toEqual(['pair', '100.95.192.6'])
+  // 通す
+  expect(deployGuard('scp package-lock.json yano@pair:~/jarvis/', allow)).toBeNull()
+  expect(deployGuard('scp -P 22 data/jarvis.db yano@100.95.192.6:/srv/jarvis/data/', allow)).toBeNull()
+  expect(deployGuard('scp config/jarvis.local.json pair:jarvis/config/', allow)).toBeNull()
+  expect(deployGuard('scp C:\\work\\a.txt pair:~/', allow)).toBeNull()
+  expect(deployGuard('rsync -av data/ yano@pair:/srv/jarvis/data/', allow)).toBeNull()
+  expect(deployGuard('sftp -P 22 yano@pair', allow)).toBeNull()
+  expect(deployGuard('npm ci && scp a yano@pair:~/', allow)).toBeNull()
+  // 止める
+  expect(deployGuard('scp dist/* user@conoha.example.jp:/var/www', allow)).not.toBeNull()
+  expect(deployGuard('scp dist/index.html u123@www.example-univ.ac.jp:public_html/', allow)).not.toBeNull()
+  expect(deployGuard('npx firebase deploy --only hosting', allow)).not.toBeNull()
+  expect(deployGuard('firebase hosting:channel:deploy preview', allow)).not.toBeNull()
+  expect(deployGuard('scp a yano@pair:~/ && scp b me@conoha:/var/www', allow)).not.toBeNull() // 片方でも別の送り先なら止める
+  expect(deployGuard('scp a yano@pair.evil.com:~/', allow)).not.toBeNull() // 完全一致だけ
+  expect(deployGuard('scp a yano@pair:~/', [])).not.toBeNull() // 設定が空なら今までどおり
+  expect(deployGuard('lftp -u u,p ftp.example.com', allow)).not.toBeNull()
+  expect(deployGuard('sftp me@conoha', allow)).not.toBeNull()
+  // 今までどおり関係ないもの
+  expect(deployGuard('rsync -av src/ backup/', allow)).toBeNull()
+  expect(deployGuard('git commit -m "scp の例外"', allow)).toBeNull()
 })
 
 test('トースト: 状態が変わったときだけ、初めて見たセッションは知らせない', () => {

@@ -20,6 +20,7 @@ import {
   crossWorktreeWrite,
   deployGuard,
   ingest,
+  parseAllowHosts,
   loadHub,
   parseHubArgs,
   statusText,
@@ -30,11 +31,13 @@ import {
 
 const PANE = 'cc-hub'
 const POLL_MS = 4000
+/** plugin.json の deployAllowHosts の既定値と同じ(設定が読めないときに使う) */
+const DEFAULT_ALLOW_HOSTS = 'pair,100.95.192.6'
 const overview = atom({ plugin: 'cc-hub', key: 'overview' } as const, null)
 const isOnline = atom({ plugin: 'cc-hub', key: 'isOnline' } as const, false)
 const bandHidden = atom({ plugin: 'cc-hub', key: 'bandHidden' } as const, null)
 
-type Options = { guardWorktree?: boolean; guardDeploy?: boolean; toasts?: boolean }
+type Options = { guardWorktree?: boolean; guardDeploy?: boolean; deployAllowHosts?: string; toasts?: boolean }
 
 /** 帯に出す文(無ければ null) */
 function bandLines(o: HubOverview | null): string[] {
@@ -264,7 +267,7 @@ export const register: Register = (on, options) => {
       if (g) return g
     }
     if (opt.guardDeploy !== false && online) {
-      const g = deployGuard(e.command)
+      const g = deployGuard(e.command, parseAllowHosts(opt.deployAllowHosts ?? DEFAULT_ALLOW_HOSTS))
       if (g) return g
     }
     return next(e)
