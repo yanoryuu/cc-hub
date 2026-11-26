@@ -8571,6 +8571,28 @@ th[aria-sort='descending'] .th-arrow {
   right: auto;
   left: 0;
 }
+/* ボタンが多くても画面の幅を超えない: ボタンの列だけを横にスクロールする(ページ全体が横に広がらないように)。
+   メニュー(launch-dd)はスクロールの外に置くので、開いた一覧が切れない */
+.m-launchers .launch-bar {
+  flex: 1 1 auto;
+  min-width: 0;
+  max-width: 100%;
+}
+.m-launchers .launch-inline {
+  flex: 0 1 auto;
+  min-width: 0;
+  gap: 4px;
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  scrollbar-width: none;
+}
+.m-launchers .launch-inline::-webkit-scrollbar {
+  display: none;
+}
+.m-launchers .launch-inline .launch-btn {
+  flex: none;
+  max-width: 60vw;
+}
 
 /* 管理欄(セッション詳細) */
 .launch-sec .hint {
